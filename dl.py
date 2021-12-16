@@ -71,27 +71,24 @@ class Locator:
             res.append(m.group(1))
         return res
 
-    def format(self, val, default):
+    def apply_format(self, val, values, keys, default=None):
         if self.format is None or val is None: return default
         return self.format.format(
-            res, 
+            val, 
             [val] + values,
             **dict(
-                [
-                    (self.name, val)] + [(keys[i], values[i]) 
-                        for i in range(len(values))
-                ]
+                [(self.name, val)] + [(keys[i], values[i]) for i in range(len(values))]
             )
         )
     def is_unset(self):
-        return max([v is not None for v in [self.xpath, self.regex, self.format]])
+        return min([v is None for v in [self.xpath, self.regex, self.format]])
 
     def apply(self, doc, doc_xml, path, default=None, values=[], keys=[]):
         if self.is_unset(): return default
         res = []
         for x in self.match_xpath(doc_xml, path, [doc]):
             for r in self.match_regex(x, path, [x]):
-                res.append(self.format(r, r))
+                res.append(self.apply_format(r, values, keys, r))
         if self.multimatch:
             return res
         else:
