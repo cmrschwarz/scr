@@ -9,6 +9,11 @@ import os
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from collections import deque
+from enum import Enum
+class DocumentType(Enum):
+    URL = 1
+    FILE = 2
+    RFILE = 3
 
 class Locator:
     def __init__(self, name):
@@ -92,7 +97,7 @@ class Locator:
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
-    def apply(self, doc, doc_xml, path, default=None, values=[], keys=[]):
+    def apply(self, doc, doc_xml, path, default=[], values=[], keys=[]):
         if self.is_unset(): return default
         res = []
         for x in self.match_xpath(doc_xml, path, [doc]):
@@ -140,49 +145,50 @@ def get_xpath(doc, xpath):
 
 
 def help(err=False):
-    text = f"""{sys.argv[0]} [OPTIONS]  [url=|file=]<url>
-                Content:
-                    cx=<xpath>
-                    cr=<regex>
-                    cf=<python format string, #1=content>
-                    cm=<bool>
-                    cimin=<number>
-                    cimax=<number>
-                    cicontinuous=<bool>
-                    cprint=<bool>
-                    cin=<bool>
+    text = f"""{sys.argv[0]} [OPTIONS]
+    Content:
+        cx=<xpath>
+        cr=<regex>
+        cf=<python format string, #1=content>
+        cm=<bool>
+        cimin=<number>
+        cimax=<number>
+        cicontinuous=<bool>
+        cprint=<bool>
+        cin=<bool>
 
-                Label:
-                    lx=<xpath>
-                    lr=<regex>
-                    lf=<python format string, #1=label, #2=di, #3=ci>
-                    lfd=<python format string, #1=di, #2=ci>
-                    lic=<bool>
-                    lm=<bool>
-                    lin=<bool>
+    Label:
+        lx=<xpath>
+        lr=<regex>
+        lf=<python format string, #1=label, #2=di, #3=ci>
+        lfd=<python format string, #1=di, #2=ci>
+        lic=<bool>
+        lm=<bool>
+        lin=<bool>
 
-                (Next) Document:
-                    dx=<xpath>
-                    dr=<regex>
-                    df=<python format string, #1=document>
-                    dimin=<number>
-                    dimax=<number>
-                    dm=<bool>
-                    dbfs=<bool>
-                    dfiles=<bool>
-                    din=<bool>
+    (Next) Document:
+        dx=<xpath>
+        dr=<regex>
+        df=<python format string, #1=document>
+        dimin=<number>
+        dimax=<number>
+        dm=<bool>
+        dbfs=<bool>
+        dfiles=<bool>
+        din=<bool>
 
-                Start:
-                    url=<url>
-                    file=<path>
+    Entry Points:
+        url=<url>
+        file=<path>
+        rfile=<path>
 
-                Options:
-                    ow=<bool>
-                    owin=<bool>
-                    ua=<user agent string>
-                    uarandom=<bool>
-                    tor=<bool>
-                    cookiefile=<path>
+    Options:
+        ow=<bool>
+        owin=<bool>
+        ua=<user agent string>
+        uarandom=<bool>
+        tor=<bool>
+        cookiefile=<path>
         """.strip()
     if err:
         error(text)
@@ -191,7 +197,7 @@ def help(err=False):
 
 def setup(ctx):
     if len(ctx.pathes) == 0:
-        error("must specify at leas one url or file")
+        error("must specify at least one url or file")
 
     [l.setup() for l in ctx.locators]
 
@@ -240,14 +246,15 @@ def dl(ctx):
     docs = deque(ctx.pathes)
 
     while di <= ctx.dimax and docs:
-        path, is_file = docs.popleft()
-        if is_file:
+        path, document_type = docs.popleft()
+        if document_type in [DocumentType.FILE, DocumentType.RFILE]:
             try:
                 with open(path, "r") as f:
                     doc = f.read()
             except:
                 error(f"aborting! failed to read {path}")
         else:
+            assert document_type == DocumentType.URL
             with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
                 doc = response.text
             if not doc:
@@ -268,6 +275,7 @@ def dl(ctx):
         if not ctx.ci_continuous:
             ci = ctx.cimin
         i = 0
+        progress=False
         for c in contents:
             if ci > ctx.cimax:
                 # stopping doc handling since cimax was reached
@@ -292,10 +300,11 @@ def dl(ctx):
                     elif ctx.label_default_format is not None:
                         label = ctx.label_default_format.format(di, ci, di=di, ci=ci)
                     else:
-                        sys.stderr.write(f"no more labels! skipping remaining {len(contents) - i} contents! in document:\n    {path}\n")
+                        sys.stderr.write(f"no labels! skipping remaining {len(contents) - i} content element(s) in document:\n    {path}\n")
                 else:
                     label = ctx.label.format.format(di, ci, di=di, ci=ci)
             if label is not None:
+                progress = True
                 if ctx.cprint:
                     print(f"aquired '{label}' [{path}]:\n" + c)
                 else:
@@ -311,10 +320,14 @@ def dl(ctx):
                     print(f"wrote content into {label} for {path}")
             i += 1
             ci += 1
+        if progress == False:
+            sys.stderr.write(f"no content matches for document: {path}\n")
         di += 1
         if di <= ctx.dimax:
             new_paths = ctx.document.apply(doc, doc_xml, path)
-            entries = zip(new_paths, [ctx.documents_are_files] * len(new_paths))
+            if document_type == DocumentType.RFILE:
+                document_type = DocumentType.URL
+            entries = zip(new_paths, [document_type] * len(new_paths))
             if ctx.documents_bfs:
                 docs.extend(entries)
             else:
@@ -345,16 +358,21 @@ def get_bool_arg(arg, argname):
 def main():
     ctx = DlContext()
     # testing, TODO: remove this
-    if True:
-        sys.argv.append("file=./dl_001.txt")
-        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
-        sys.argv.append('dimax=3')
+    if len(sys.argv) < 2:
+        #sys.argv.append("rfile=./dl_001.txt")
+        #sys.argv.append('dx=//span[@class="next-button"]/a/@href')
+        #sys.argv.append('dimax=3')
+        sys.argv.append('cx=adsf')
+        sys.argv.append('file=./dl_001.txt')
 
     if len(sys.argv) < 2:
-        error(f"missing command line options. Consider using {sys.argv[0]} --help")
+        error(f"missing command line options. Consider {sys.argv[0]} --help")
 
 
     for arg in sys.argv[1:]:
+        if arg == "--help" or arg=="-h":
+            help()
+            return 0
         if begins(arg, "cx="):
             ctx.content.xpath = get_arg(arg)
         elif begins(arg, "cr="):
@@ -410,9 +428,11 @@ def main():
             ctx.document.interactive = get_bool_arg(arg, "din")
 
         elif begins(arg, "url"):
-            ctx.path.append((get_arg(arg), False))
+            ctx.path.append((get_arg(arg), DocumentType.URL))
         elif begins(arg, "file"):
-            ctx.pathes.append((get_arg(arg), True))
+            ctx.pathes.append((get_arg(arg), DocumentType.FILE))
+        elif begins(arg, "rfile"):
+            ctx.pathes.append((get_arg(arg), DocumentType.RFILE))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "tor="):
@@ -424,7 +444,7 @@ def main():
         elif begins(arg, "uarandom="):
             ctx.user_agent_random = get_bool_arg(arg, "uarandom")
         else:
-            error(f"unrecognized option: {arg}\nConsider using {sys.argv[0]} --help")
+            error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
     dl(ctx)
     return 0
