@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import lxml # pip3 install lxml
-import lxml.html  
+import lxml.html
 import requests
 from requests.models import Response
 import sys
@@ -8,6 +8,7 @@ import re
 import os
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
+from collections import deque
 
 class Locator:
     def __init__(self, name):
@@ -23,10 +24,10 @@ class Locator:
         try:
             self.regex = re.compile(self.regex)
         except re.error as err:
-            error(f"<{self.name} regex> is not a valid regex: {err.msg}")
+            error(f"{self.name[0]}r is not a valid regex: {err.msg}")
 
         if self.regex.groups != 1:
-            error(f"<{self.name} regex> must have exactly one capture group")
+            error(f"{self.name[0]}r  must have exactly one capture group")
 
     def setup(self):
         self.compile_regex()
@@ -35,29 +36,37 @@ class Locator:
                 self.format = "{}"
         else:
             if self.xpath is None and self.regex is None:
-                error(f"cannot have <{self.name} format> without <{self.name} xpath> or <{self.name} regex>")
+                error(f"cannot specify {self.name[0]}f without {self.name[0]}x or {self.name[0]}r")
 
-    def match_xpath(self, doc_xml, path, default=[]):
+    def match_xpath(self, doc_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None: return default
         try:
             res_xpath = doc_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(
-                f"aborting! invalid <{self.name} xpath>: {ex.msg}: {path}"
-            )
+            error(f"aborting! invalid {self.name[0]}x: {ex.msg}: {path}")
         except Exception as ex:
             error(
-                f"aborting! failed to apply <{match_kind} xpath>: " 
+                f"aborting! failed to apply {self.name[0]}x: "
                 + f"{ex.__class__.__name__}: {str(ex)}: {path}"
             )
         if len(res_xpath) > 1 and not self.multimatch:
             res_xpath = res_xpath[:1]
         res = []
+        res_xml = []
         for r in res_xpath:
             if type(r) == lxml.etree._ElementUnicodeResult:
                 res.append(str(r))
+                if return_xml_tuple:
+                    try:
+                        r = lxml.html.fromstring(res[-1])
+                    except:
+                        pass
             else:
                 res.append(lxml.html.tostring(r, encoding="utf-8"))
+            if return_xml_tuple:
+                res_xml.append(r)
+        if return_xml_tuple:
+            return res, res_xml
         return res
 
     def match_regex(self, val, path, default=[]):
@@ -74,7 +83,7 @@ class Locator:
     def apply_format(self, val, values, keys, default=None):
         if self.format is None or val is None: return default
         return self.format.format(
-            val, 
+            val,
             [val] + values,
             **dict(
                 [(self.name, val)] + [(keys[i], values[i]) for i in range(len(values))]
@@ -89,32 +98,37 @@ class Locator:
         for x in self.match_xpath(doc_xml, path, [doc]):
             for r in self.match_regex(x, path, [x]):
                 res.append(self.apply_format(r, values, keys, r))
-        if self.multimatch:
-            return res
-        else:
-            if len(res) == 0: return None
-            assert len(res) == 1
-            return res[0]
-       
-       
-        
-
+        return res
 
 class DlContext:
     def __init__(self):
+        self.path = None
         self.is_file = False
-        self.next_is_file = False
+
         self.content = Locator("content")
+        self.cimin = 1
+        self.cimax = float("inf")
+        self.ci_continuous = False
+        self.cprint = False
+
         self.label = Locator("label")
-        self.next = Locator("next")
-        self.print_results = False
+        self.label_default_format = None
+        self.labels_inside_content = None
+
+        self.document = Locator("document")
+        self.documents_are_files = False
+        self.documents_bfs = False
+        self.dimin = 1
+        self.dimax = float("inf")
+
         self.cookie_file = None
         self.cookie_jar = None
         self.overwrite_files = False
-        self.count = None
-        user_agent_rotator = UserAgent()
-        self.user_agent = user_agent_rotator.get_random_user_agent()
+        self.tor = False
+        self.user_agent_random = False
+        self.user_agent = "dl.py/0.0.1"
 
+        self.locators = [self.content, self.label, self.document]
 
 def error(text):
     sys.stderr.write(text + "\n")
@@ -128,61 +142,102 @@ def get_xpath(doc, xpath):
 
 
 def help(err=False):
-    text = f"""
-            {sys.argv[0]} <url> [OPTIONS]
-                --content-xpath <xpath>
-                --content-regex <regex>
-                --content-format <python formatting string, #1=content>
-                
-                --label-xpath <xpath>
-                --label-regex <regex>
-                --label-format <python formatting string, #1=label, #2=index>
-                
-                --next-xpath <xpath>
-                --next-regex <regex>
-                --next-format <python formatting string, #1=next>
-                
-                --min-index <number>
-                --max-index <number>
+    text = f"""{sys.argv[0]} [OPTIONS]  [url=|file=]<url>
+                Content:
+                    cx=<xpath>
+                    cr=<regex>
+                    cf=<python format string, #1=content>
+                    cm=<bool>
+                    cimin=<number>
+                    cimax=<number>
+                    cicontinuous=<bool>
+                    cprint=<bool>
+                    cin=<bool>
 
-                --match-multiple
+                Label:
+                    lx=<xpath>
+                    lr=<regex>
+                    lf=<python format string, #1=label, #2=di, #3=ci>
+                    lfd=<python format string, #1=di, #2=ci>
+                    lic=<bool>
+                    lm=<bool>
+                    lin=<bool>
+
+                (Next) Document:
+                    dx=<xpath>
+                    dr=<regex>
+                    df=<python format string, #1=document>
+                    dimin=<number>
+                    dimax=<number>
+                    dm=<bool>
+                    dbfs=<bool>
+                    dfiles=<bool>
+                    din=<bool>
+
+                Start:
+                    url=<url>
+                    file=<path>
+
+                Options:
+                    ow=<bool>
+                    owin=<bool>
+                    ua=<user agent string>
+                    uarandom=<bool>
+                    tor=<bool>
+                    cookiefile=<path>
         """.strip()
     if err:
         error(text)
     else:
         print(text)
 
-
-def get_arg(i, type, arg):
-    if (arg[0] == "-"):
-        if i + 1 == len(sys.argv):
-            error(f"missing <{type}> for {arg}")
-        return (i+2, sys.argv[i+1])
-    return arg[arg.find("="):]
-
-
-def dl(ctx):
-    locators = [ctx.content, ctx.label, ctx.next]
-    [l.setup() for l in locators]
+def setup(ctx):
+    [l.setup() for l in ctx.locators]
 
     if ctx.label.format is None:
-        if ctx.label.xpath is None and ctx.label.regex is None:
-            ctx.label.format = 'dl_{index:03}.txt'
+        # if max was not set it is 'inf' which has length 3 which is a fine default
+        didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
+        cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
+        if ctx.ci_continuous:
+            form = f"{{ci:0{cidigits}}}"
+        elif ctx.document.multimatch:
+            form = f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
         else:
-            ctx.label.format = '{label}_{index:03}.txt'
-    have_xpath = max([l.xpath is not None for l in locators])
+            form = f"{{di:0{didigits}}}"
+        if ctx.label.xpath is None and ctx.label.regex is None:
+            ctx.label.format = f"dl_{form}.txt"
+        else:
+            ctx.label.format = f"{{label}}_{form}.txt"
 
-    path = ctx.path
-    is_file = ctx.is_file
-  
+
+    if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
+    if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
+
     if ctx.cookie_file is not None:
         try:
             ctx.cookie_jar = MozillaCookieJar(ctx.cookie_file)
         except Exception as ex:
-            error(
-                f"aborting! failed to read cookie file from {ctx.cookie_file}: {str(ex)}")
-    i = ctx.min_index
-    while (i <= ctx.max_index if ctx.max_index is not None else True):
+            error(f"failed to read cookie file from {ctx.cookie_file}: {str(ex)}")
+
+    if ctx.user_agent_random:
+        user_agent_rotator = UserAgent()
+        ctx.user_agent = user_agent_rotator.get_random_user_agent()
+
+    if ctx.documents_are_files and ctx.tor:
+        error(f"the modes dfiles and tor are incompatible")
+
+
+def dl(ctx):
+    have_xpath = max([l.xpath is not None for l in ctx.locators])
+    have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
+    need_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
+    is_file = ctx.is_file
+    di = ctx.dimin
+    ci = ctx.cimin
+    docs = deque([ctx.path])
+
+    while di <= ctx.dimax and docs:
+        path = docs.popleft()
         if is_file:
             try:
                 with open(path, "r") as f:
@@ -190,137 +245,196 @@ def dl(ctx):
             except:
                 error(f"aborting! failed to read {path}")
         else:
-            with requests.get(ctx.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
+            with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
                 doc = response.text
             if not doc:
                 error(f"aborting! failed to download {path}")
         if have_xpath:
             doc_xml = lxml.html.fromstring(doc)
 
-        label = ctx.label.apply(doc, doc_xml, path, None, [i], ["index"])
-
-        content = ctx.content.apply(doc, doc_xml, path, doc)
-
-        if ctx.print_results:
-            print(f"aquired '{label}' [{path}]:\n" + content)
+        if need_content_xpaths:
+            contents, contents_xml = ctx.content.match_xpath(doc_xml, path, ([doc], [doc_xml]), True)
         else:
-            if "/" in label:
-                error(
-                    f"aborting! matched label '{label}' would contain a slash: {path}")
-            try:
-                f = open(label, "x" if not ctx.overwrite_files else "w")
-            except FileExistsError as ex:
-                error(
-                    f"aborting! target file label '{label}' already exists: {path}")
-            except Exception as ex:
-                error(
-                    f"aborting! failed to write to file '{label}': {ex.msg}: {path}")
-            f.write(content)
-            f.close()
-            print(f"wrote content into {label} for {path}")
-        if i != ctx.max_index:
-            path = ctx.next.apply(doc, doc_xml, path)
-            if path is None:
-                print("aborting! no next page found")
+            contents = ctx.content.match_xpath(doc_xml, path, [doc])
+
+        if have_label_matching and not ctx.labels_inside_content_xpath:
+            labels = []
+            for lx in ctx.label.match_xpath(doc_xml, path, [doc]):
+                labels += ctx.label.match_regex(doc, path, [lx])
+
+        if not ctx.ci_continuous:
+            ci = ctx.cimin
+        i = 0
+        for c in contents:
+            if ci > ctx.cimax:
+                # stopping doc handling since cimax was reached
+                # if cicont=1 then this also ends the whole program so we should no longer load documents
+                if ctx.ci_continuous:
+                    return
                 break
-            is_file = ctx.next_is_file
+
+            if ctx.labels_inside_content:
+                cx = contents_xml[i] if need_content_xpaths else None
+                label = ctx.label.apply(c, cx, path, [di, ci], ["di", "ci"])
+                if len(label) != 1:
+                    # will skip the content
+                    label = None
+                else:
+                    label = label[0]
+            else:
+                if have_label_matching:
+                    if i in labels:
+                        label = labels[i]
+                        ctx.label.format.format(label, di, ci, label=label, di=di, ci=ci)
+                    elif ctx.label_default_format is not None:
+                        label = ctx.label_default_format.format(di, ci, di=di, ci=ci)
+                    else:
+                        sys.stderr.write(f"no more labels! skipping remaining {len(contents) - i} contents! in document:\n    {path}\n")
+                else:
+                    label = ctx.label.format.format(di, ci, di=di, ci=ci)
+            if label is not None:
+                if ctx.cprint:
+                    print(f"aquired '{label}' [{path}]:\n" + c)
+                else:
+                    if "/" in label:
+                        sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {path}")
+                    try:
+                        f = open(label, "x" if not ctx.overwrite_files else "w")
+                    except FileExistsError as ex:
+                        error(
+                            f"aborting! target file label '{label}' already exists: {path}")
+                    except Exception as ex:
+                        error(
+                            f"aborting! failed to write to file '{label}': {ex.msg}: {path}")
+                    f.write(c)
+                    f.close()
+                    print(f"wrote content into {label} for {path}")
             i += 1
-        else:
-            print("max index reached")        
-    else:
-        print("aborting! <max index> is not smaller than <min index>")
+            ci += 1
+        di += 1
+        if di <= ctx.dimax:
+            new_paths = ctx.document.apply(doc, doc_xml, path)
+            if ctx.documents_bfs:
+                docs.extend(new_paths)
+            else:
+                docs.extendleft(new_paths)
+            is_file = ctx.documents_are_files
+    if di <= ctx.dimax and ctx.dimax != float("inf") :
+        sys.stderr.write("exiting! all documents handled before dimax was reached\n")
+
 
 def begins(string, begin):
-    return len(string) >= len(begin) and string[len(begin)] == begin 
+    return len(string) >= len(begin) and string[len(begin)] == begin
+
+def get_arg(arg):
+    return arg[arg.find("="):]
+
+def get_int_arg(arg, argname):
+    try:
+        return int(get_arg(arg))
+    except ValueError:
+        error(f"value for {argname} must be an integer")
+
+def get_bool_arg(arg, argname):
+    try:
+        return bool(get_arg(arg))
+    except ValueError:
+        error(f"value for {argname} must be interpretable as a boolean")
+
 
 def main():
     ctx = DlContext()
     # testing!!!!!!!!!!!!!!!
     if True:
         ctx.path = "./dl_001.txt"
-        ctx.next.xpath = '//span[@class="next-button"]/a/@href'        
+        ctx.document.xpath = '//span[@class="next-button"]/a/@href'
         ctx.cookie_file = "cookies.txt"
-        ctx.min_index = 1
-        ctx.max_index = None
         ctx.is_file = True
+        ctx.dimax = 3
         # 1: label
         # 2: index
         ctx.overwrite_files = True
-    
+
     argc = len(sys.argv)
     # if argc < 2:
     #    help(err=True)
     #path = sys.argv[1]
 
-    
     i = 2
     while i < argc:
         arg = sys.argv[i]
-        if arg == "--content-xpath" or begins(arg, "cx="):
-            i, ctx.content.xpath = get_arg(i, "xpath", arg)
-            continue
-        if arg == "--content-regex" or begins(arg, "cr="):
-            i, ctx.content.regex = get_arg(i, "regex", arg)
-            continue
-        if arg == "--content-format" or begins(arg, "cf="):
-            i, ctx.content.regex = get_arg(i, "regex", arg)
-            continue
+        i += 1
+        if begins(arg, "cx="):
+            ctx.content.xpath = get_arg(arg)
+        elif begins(arg, "cr="):
+            ctx.content.regex = get_arg(arg)
+        elif begins(arg, "cf="):
+            ctx.content.format = get_arg(arg)
+        elif begins(arg, "cm="):
+            ctx.content.multimatch = get_bool_arg(arg, "cm")
+        elif begins(arg, "cimin="):
+            ctx.cimin = get_int_arg(arg, "cimin")
+        elif begins(arg, "cimax="):
+            ctx.cimax = get_int_arg(arg, "cimax")
+        elif begins(arg, "cicont="):
+            ctx.ci_continuous = get_bool_arg(arg, "cicont")
+        elif begins(arg, "cprint"):
+            ctx.print_ctx = get_bool_arg(arg, "cprint")
+        elif begins(arg, "cin"):
+            ctx.content.interactive = get_bool_arg(arg, "cin")
 
-        if arg == "--label-xpath" or begins(arg, "lx="):
-            i, ctx.label.xpath = get_arg(i, "xpath", arg)
-            continue
-        if arg == "--label-regex" or begins(arg, "lr="):
-            i, ctx.label.regex = get_arg(i, "regex", arg)
-            continue
-        if arg == "--label-format" or begins(arg, "lf="):
-            i, ctx.label.format = get_arg(i, "format", arg)
-            continue
+        elif begins(arg, "lx="):
+            ctx.label.xpath = get_arg(arg)
+        elif begins(arg, "lr="):
+            ctx.label.regex = get_arg(arg)
+        elif begins(arg, "lf="):
+            ctx.label.format = get_arg(arg)
+        elif begins(arg, "ldf="):
+            ctx.label_default_format = get_arg(arg)
+        elif begins(arg, "licx="):
+            ctx.labels_inside_content_xpath = get_bool_arg(arg, "licx")
+        elif begins(arg, "lm="):
+            ctx.label.multimatch = get_bool_arg(arg, "lm")
+        elif begins(arg, "lin="):
+            ctx.label.interactive = get_bool_arg(arg, "lin")
 
-        if arg == "--next-xpath" or begins(arg, "nx="):
-            i, ctx.next.xpath = get_arg(i, "xpath", arg)
-            continue
-        if arg == "--next-regex" or begins(arg, "nr="):
-            i, ctx.next.regex = get_arg(i, "regex", arg)
-            continue
-        if arg == "--next-format" or begins(arg, "nf="):
-            i, ctx.next.format = get_arg(i, "format", arg)
-            continue
 
-        if arg == "--min-index" or begins(arg, "imin="):
-            i, min_index = get_arg(i, "min-index", arg)
-            try:
-                ctx.min_index = int(count)
-            except ValueError as ve:
-                error(f"supplied <min-index> {ctx.min_index} is not a valid integer")
-            continue
+        elif begins(arg, "dx="):
+            ctx.document.xpath = get_arg(arg)
+        elif begins(arg, "dr="):
+            ctx.document.regex= get_arg(arg)
+        elif begins(arg, "df="):
+            ctx.document.format = get_arg(arg)
+        elif begins(arg, "dimin="):
+            ctx.dimin = get_int_arg(arg, "dimin")
+        elif begins(arg, "dimax="):
+            ctx.dimax = get_int_arg(arg, "dimax")
+        elif begins(arg, "dm="):
+            ctx.document.multimatch = get_bool_arg(arg, "dm")
+        elif begins(arg, "dbfs="):
+            ctx.document_dfs = get_bool_arg(arg, "dbfs")
+        elif begins(arg, "ddfs="):
+            ctx.document_files = get_bool_arg(arg, "dfiles")
+        elif begins(arg, "din="):
+            ctx.document.interactive = get_bool_arg(arg, "din")
 
-        if arg == "--max-index" or begins(arg, "imax="):
-            i, ctx.max_index = get_arg(i, "max-index", arg)
-            try:
-                ctx.max_index = int(ctx.max_index)
-            except ValueError as ve:
-                error(f"supplied <max-index> {ctx.max_index} is not a valid integer")
-            continue
-
-        if arg == "--cookie-file" or begins(arg, "cookiefile="):
-            i, ctx.cookie_file = get_arg(i, "cookie file path", arg)
-            continue
-
-        if arg == "--count" or arg == "-c" or begins(arg, "count="):    
-            try:
-                count = get_arg(i, "count", arg)
-                ctx.count = int(count)
-            except ValueError as ve:
-                error(f"supplied <count> {ctx.count} is not a valid integer")
-            continue
-
-        if arg == "--print":
-            ctx.print_results = True
-            continue
-
-        if arg == "--overwrite":
-            ctx.overwrite_files = True
-            continue
+        elif begins(arg, "url"):
+            ctx.path = get_arg(arg)
+            ctx.is_file = False
+        elif begins(arg, "file"):
+            ctx.path = get_arg(arg)
+            ctx.is_file = True
+        elif begins(arg, "cookiefile="):
+            ctx.cookie_file = get_arg(arg)
+        elif begins(arg, "tor="):
+            ctx.tor = get_bool_arg(arg, "tor")
+        elif begins(arg, "overwrite="):
+            ctx.overwrite_files = get_bool_arg(arg, "overwrite")
+        elif begins(arg, "ua="):
+            ctx.user_agent = get_arg(arg)
+        elif begins(arg, "uarandom="):
+            ctx.user_agent_random = get_bool_arg(arg, "uarandom")
+    setup(ctx)
     dl(ctx)
     return 0
 
