@@ -102,8 +102,7 @@ class Locator:
 
 class DlContext:
     def __init__(self):
-        self.path = None
-        self.is_file = False
+        self.pathes = []
 
         self.content = Locator("content")
         self.cimin = 1
@@ -123,7 +122,6 @@ class DlContext:
 
         self.cookie_file = None
         self.cookie_jar = None
-        self.overwrite_files = False
         self.tor = False
         self.user_agent_random = False
         self.user_agent = "dl.py/0.0.1"
@@ -192,23 +190,27 @@ def help(err=False):
         print(text)
 
 def setup(ctx):
+    if len(ctx.pathes) == 0:
+        error("must specify at leas one url or file")
+
     [l.setup() for l in ctx.locators]
 
     if ctx.label.format is None:
+        if ctx.label.xpath is None and ctx.label.regex is None:
+            form = "dl_"
+        else:
+            form = "{label}_"
         # if max was not set it is 'inf' which has length 3 which is a fine default
         didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
         cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
         if ctx.ci_continuous:
-            form = f"{{ci:0{cidigits}}}"
+            form += f"{{ci:0{cidigits}}}"
         elif ctx.document.multimatch:
-            form = f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
+            form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
         else:
-            form = f"{{di:0{didigits}}}"
-        if ctx.label.xpath is None and ctx.label.regex is None:
-            ctx.label.format = f"dl_{form}.txt"
-        else:
-            ctx.label.format = f"{{label}}_{form}.txt"
-
+            form += f"{{di:0{didigits}}}"
+        form += "" if ctx.cprint else ".txt"
+        ctx.label.format = form
 
     if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
     if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
@@ -216,8 +218,10 @@ def setup(ctx):
     if ctx.cookie_file is not None:
         try:
             ctx.cookie_jar = MozillaCookieJar(ctx.cookie_file)
+            ctx.cookie_jar.load()
         except Exception as ex:
-            error(f"failed to read cookie file from {ctx.cookie_file}: {str(ex)}")
+            error(f"failed to read cookie file: {str(ex)}")
+
 
     if ctx.user_agent_random:
         user_agent_rotator = UserAgent()
@@ -231,13 +235,12 @@ def dl(ctx):
     have_xpath = max([l.xpath is not None for l in ctx.locators])
     have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
     need_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
-    is_file = ctx.is_file
     di = ctx.dimin
     ci = ctx.cimin
-    docs = deque([ctx.path])
+    docs = deque(ctx.pathes)
 
     while di <= ctx.dimax and docs:
-        path = docs.popleft()
+        path, is_file = docs.popleft()
         if is_file:
             try:
                 with open(path, "r") as f:
@@ -299,10 +302,7 @@ def dl(ctx):
                     if "/" in label:
                         sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {path}")
                     try:
-                        f = open(label, "x" if not ctx.overwrite_files else "w")
-                    except FileExistsError as ex:
-                        error(
-                            f"aborting! target file label '{label}' already exists: {path}")
+                        f = open(label, "w")
                     except Exception as ex:
                         error(
                             f"aborting! failed to write to file '{label}': {ex.msg}: {path}")
@@ -314,20 +314,20 @@ def dl(ctx):
         di += 1
         if di <= ctx.dimax:
             new_paths = ctx.document.apply(doc, doc_xml, path)
+            entries = zip(new_paths, [ctx.documents_are_files] * len(new_paths))
             if ctx.documents_bfs:
-                docs.extend(new_paths)
+                docs.extend(entries)
             else:
-                docs.extendleft(new_paths)
-            is_file = ctx.documents_are_files
+                docs.extendleft(entries)
     if di <= ctx.dimax and ctx.dimax != float("inf") :
         sys.stderr.write("exiting! all documents handled before dimax was reached\n")
 
 
 def begins(string, begin):
-    return len(string) >= len(begin) and string[len(begin)] == begin
+    return len(string) >= len(begin) and string[0:len(begin)] == begin
 
 def get_arg(arg):
-    return arg[arg.find("="):]
+    return arg[arg.find("=")+1:]
 
 def get_int_arg(arg, argname):
     try:
@@ -344,26 +344,17 @@ def get_bool_arg(arg, argname):
 
 def main():
     ctx = DlContext()
-    # testing!!!!!!!!!!!!!!!
+    # testing, TODO: remove this
     if True:
-        ctx.path = "./dl_001.txt"
-        ctx.document.xpath = '//span[@class="next-button"]/a/@href'
-        ctx.cookie_file = "cookies.txt"
-        ctx.is_file = True
-        ctx.dimax = 3
-        # 1: label
-        # 2: index
-        ctx.overwrite_files = True
+        sys.argv.append("file=./dl_001.txt")
+        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
+        sys.argv.append('dimax=3')
 
-    argc = len(sys.argv)
-    # if argc < 2:
-    #    help(err=True)
-    #path = sys.argv[1]
+    if len(sys.argv) < 2:
+        error(f"missing command line options. Consider using {sys.argv[0]} --help")
 
-    i = 2
-    while i < argc:
-        arg = sys.argv[i]
-        i += 1
+
+    for arg in sys.argv[1:]:
         if begins(arg, "cx="):
             ctx.content.xpath = get_arg(arg)
         elif begins(arg, "cr="):
@@ -419,11 +410,9 @@ def main():
             ctx.document.interactive = get_bool_arg(arg, "din")
 
         elif begins(arg, "url"):
-            ctx.path = get_arg(arg)
-            ctx.is_file = False
+            ctx.path.append((get_arg(arg), False))
         elif begins(arg, "file"):
-            ctx.path = get_arg(arg)
-            ctx.is_file = True
+            ctx.pathes.append((get_arg(arg), True))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "tor="):
@@ -434,6 +423,8 @@ def main():
             ctx.user_agent = get_arg(arg)
         elif begins(arg, "uarandom="):
             ctx.user_agent_random = get_bool_arg(arg, "uarandom")
+        else:
+            error(f"unrecognized option: {arg}\nConsider using {sys.argv[0]} --help")
     setup(ctx)
     dl(ctx)
     return 0
