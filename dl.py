@@ -129,8 +129,7 @@ class DlContext:
         self.cookie_jar = None
         self.tor = False
         self.user_agent_random = False
-        self.user_agent = "dl.py/0.0.1"
-
+        self.user_agent = None
         self.locators = [self.content, self.label, self.document]
 
 def error(text):
@@ -232,10 +231,13 @@ def setup(ctx):
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
 
-
-    if ctx.user_agent_random:
+    if ctx.user_agent is None and ctx.user_agent_random:
+        error(f"the options ua and uar are incompatible")
+    elif ctx.user_agent_random:
         user_agent_rotator = UserAgent()
         ctx.user_agent = user_agent_rotator.get_random_user_agent()
+    elif ctx.user_agent is None:
+        ctx.user_agent = "dl.py/0.0.1"
 
     if ctx.documents_are_files and ctx.tor:
         error(f"the modes dfiles and tor are incompatible")
