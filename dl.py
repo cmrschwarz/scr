@@ -146,49 +146,53 @@ def get_xpath(doc, xpath):
 
 def help(err=False):
     text = f"""{sys.argv[0]} [OPTIONS]
-    Content:
-        cx=<xpath>
-        cr=<regex>
-        cf=<python format string, #1=content>
-        cm=<bool>
-        cimin=<number>
-        cimax=<number>
-        cicontinuous=<bool>
-        cprint=<bool>
-        cin=<bool>
+    Scan documents for content matches and write these out.
 
-    Label:
-        lx=<xpath>
-        lr=<regex>
-        lf=<python format string, #1=label, #2=di, #3=ci>
-        lfd=<python format string, #1=di, #2=ci>
-        lic=<bool>
-        lm=<bool>
-        lin=<bool>
+    Matching is a chain of applying an xpath, a regular expression and a python format expression.
+    Since xpath and regex can generate multiple results, multiple values may be generated at these steps.
+    If a step is not specified, it is skipped.
+    The arguments for the format strings are available in the specified order, or as named arguments.
 
-    (Next) Document:
-        dx=<xpath>
-        dr=<regex>
-        df=<python format string, #1=document>
-        dimin=<number>
-        dimax=<number>
-        dm=<bool>
-        dbfs=<bool>
-        dfiles=<bool>
-        din=<bool>
+    Content to Write out:
+        cx=<xpath>           xpath for content matching
+        cr=<regex>           regex for content matching
+        cf=<format string>   content format string (args: content, di, ci)
+        cm=<bool>            allow multiple content matches in one document instead of picking the first
+        cimin=<number>       initial content index, each successful match gets one index
+        cimax=<number>       max content index, matching stops here
+        cicont=<bool>        don't reset the content index for each document
+        cprint=<bool>        print found content to stdout
+        cin=<bool>           give a prompt to ignore a potential content match
 
-    Entry Points:
-        url=<url>
-        file=<path>
-        rfile=<path>
+    Labels to give each matched content (becomes the filename):
+        lx=<xpath>          xpath for label matching
+        lr=<regex>          regex for label matching
+        lf=<format string>  label format string (args: label, di, ci)
+        lic=<bool>          match for the label within the content instead of the hole document
+        lm=<bool>           allow multiple label matches in one document instead of picking the first
+        lfd=<format string> default label format string to use if there's no match (args: di, ci)
+        lin=<bool>          give a prompt to edit the generated label
 
-    Options:
-        ow=<bool>
-        owin=<bool>
-        ua=<user agent string>
-        uarandom=<bool>
-        tor=<bool>
-        cookiefile=<path>
+    Further documents to scan referenced in already found ones:
+        dx=<xpath>          xpath for document matching
+        dr=<regex>          regex for document matching
+        df=<format string>  document format string (args: document)
+        dimin=<number>      initial document index, each successful match gets one index
+        dimax=<number>      max document index, matching stops here
+        dm=<bool>           allow multiple document matches in one document instead of picking the first
+        dbfs=<bool>         traverse the matched documents in breadth first order instead of depth first
+        din=<bool>          give a prompt to ignore a potential document match
+
+    Initial Documents:
+        url=<url>           fetch a document from a url, derived document matches are (relative) urls
+        file=<path>         fetch a document from a file, derived documents matches are (relative) file pathes
+        rfile=<path>        fetch a document from a file, derived documents matches are urls
+
+    Further Options:
+        ua=<string>         user agent to pass in the html header for url GETs
+        uar=<bool>          use a rangom user agent
+        cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
+        tor=<bool>          show a tor instance and use that to load urls
         """.strip()
     if err:
         error(text)
@@ -294,7 +298,9 @@ def dl(ctx):
                     label = label[0]
             else:
                 if have_label_matching:
-                    if i in labels:
+                    if not ctx.label.multimatch and len(labels) > 0:
+                        label = labels[0]
+                    elif i in labels:
                         label = labels[i]
                         ctx.label.format.format(label, di, ci, label=label, di=di, ci=ci)
                     elif ctx.label_default_format is not None:
@@ -359,11 +365,9 @@ def main():
     ctx = DlContext()
     # testing, TODO: remove this
     if len(sys.argv) < 2:
-        #sys.argv.append("rfile=./dl_001.txt")
-        #sys.argv.append('dx=//span[@class="next-button"]/a/@href')
-        #sys.argv.append('dimax=3')
-        sys.argv.append('cx=adsf')
-        sys.argv.append('file=./dl_001.txt')
+        sys.argv.append("rfile=./dl_001.txt")
+        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
+        sys.argv.append('dimax=3')
 
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
