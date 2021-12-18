@@ -296,7 +296,7 @@ def setup(ctx):
 
     [l.setup() for l in ctx.locators]
 
-    if ctx.label.format is None:
+    if ctx.label.format is None or ctx.default_label_format is None:
         if ctx.label.xpath is None and ctx.label.regex is None:
             form = "dl_"
         else:
@@ -311,7 +311,8 @@ def setup(ctx):
         else:
             form += f"{{di:0{didigits}}}"
         form += "" if ctx.cprint else ".txt"
-        ctx.label.format = form
+        if ctx.label.format is None: ctx.label.format = form
+        if ctx.default_label_format is None: ctx.default_label_format = form
 
     if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
     if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
@@ -490,7 +491,7 @@ def main():
     # testing, TODO: remove this
     if len(sys.argv) < 2:
         #sys.argv.append('lin=1')
-        sys.argv.append("url=https://duckduckgo.com/?q=what+is+my+user+agent&ia=answer")
+        sys.argv.append("rfile=./dl_001.txt")
         sys.argv.append('dx=//span[@class="next-button"]/a/@href')
         sys.argv.append('dimax=3')
         sys.argv.append('ua=ua/0.0.0')
@@ -565,7 +566,7 @@ def main():
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "selenium="):
-            variant = get_arg(arg).lower()
+            variant = get_arg(arg).strip().lower()
             variants_dict = {
                 "disabled": SeleniumVariant.DISABLED,
                 "tor": SeleniumVariant.TORBROWSER,
