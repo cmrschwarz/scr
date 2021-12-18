@@ -2,12 +2,12 @@
 import lxml # pip3 install lxml
 import lxml.html
 import requests
-from requests.models import Response
 import sys
 import re
 import os
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
+from tbselenium.tbdriver import TorBrowserDriver
 from collections import deque
 from enum import Enum
 class DocumentType(Enum):
@@ -18,10 +18,11 @@ class DocumentType(Enum):
 class Locator:
     def __init__(self, name):
         self.name = name
-        self.format = None
         self.xpath = None
         self.regex = None
+        self.format = None
         self.multimatch = False
+        self.interactive = False
 
     def compile_regex(self):
         if self.regex is None:
@@ -94,6 +95,7 @@ class Locator:
                 [(self.name, val)] + [(keys[i], values[i]) for i in range(len(values))]
             )
         )
+
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
@@ -128,6 +130,9 @@ class DlContext:
         self.cookie_file = None
         self.cookie_jar = None
         self.tor = False
+        self.tor_browser_dir = None
+        self.tor_driver = None
+        self.load_timeout_secs = 10
         self.user_agent_random = False
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
@@ -192,11 +197,44 @@ def help(err=False):
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
         tor=<bool>          show a tor instance and use that to load urls
+        tordir=<path>       path to the root directory of the tor browser installation. implies tor=true
         """.strip()
     if err:
         error(text)
     else:
         print(text)
+
+def setup_tor(ctx):
+    # use bundled gecko driver from same directory if available
+    cwd = os.path.dirname(os.path.abspath(__file__))
+    os.environ["PATH"] += ":" + cwd
+    if ctx.tor_browser_dir is None:
+        tb_env_var = "TOR_BROWSER_DIR"
+        if tb_env_var in os.environ:
+            ctx.tor_browser_dir = os.environ[tb_env_var]
+        else:
+            ctx.tor_browser_dir = "start-tor-browser"
+    try:
+        ctx.tor_driver = TorBrowserDriver(ctx.tor_browser_dir, tbb_logfile_path=os.devnull)
+        if ctx.cookie_jar:
+            for cookie in ctx.cookie_jar:
+                cookie_dict = {
+                    'domain': cookie.domain,
+                    'name': cookie.name,
+                    'value': cookie.value,
+                    'secure': cookie.secure
+                }
+                if cookie.expires:
+                    cookie_dict['expiry'] = cookie.expires
+                if cookie.path_specified:
+                    cookie_dict['path'] = cookie.path
+
+                ctx.tor_driver.add_cookie(cookie_dict)
+    except Exception as ex:
+        error(f"failed to start tor browser: {str(ex)}")
+    os.chdir(cwd) #restore cwd that is changed by tor for some reason
+
+
 
 def setup(ctx):
     if len(ctx.pathes) == 0:
@@ -226,8 +264,8 @@ def setup(ctx):
 
     if ctx.cookie_file is not None:
         try:
-            ctx.cookie_jar = MozillaCookieJar(ctx.cookie_file)
-            ctx.cookie_jar.load()
+            ctx.cookie_jar = MozillaCookieJar()
+            ctx.cookie_jar.load(ctx.cookie_file, ignore_discard=True,ignore_expires=True)
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
 
@@ -242,6 +280,20 @@ def setup(ctx):
     if ctx.documents_are_files and ctx.tor:
         error(f"the modes dfiles and tor are incompatible")
 
+    if ctx.tor:
+        setup_tor(ctx)
+
+def prompt_yes_no(prompt_text, default=None):
+    while True:
+        res = input(prompt_text).lower().strip()
+        if res in ["y", "t", "1", "yes", "true"]:
+            return True
+        elif res in ["n", "f", "0", "no", "false"]:
+            return False
+        elif res == "" and default is not None:
+            return default
+        else:
+            print("please answer 'yes' or 'no'")
 
 def dl(ctx):
     have_xpath = max([l.xpath is not None for l in ctx.locators])
@@ -257,14 +309,19 @@ def dl(ctx):
             try:
                 with open(path, "r") as f:
                     doc = f.read()
-            except:
-                error(f"aborting! failed to read {path}")
+            except Exception as ex:
+                error(f"aborting! failed to read: {str(ex)}")
         else:
             assert document_type == DocumentType.URL
-            with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
-                doc = response.text
-            if not doc:
-                error(f"aborting! failed to download {path}")
+            if ctx.tor:
+                ctx.tor_driver.get(path)
+                doc = ctx.tor_driver.page_source
+                #todo: timeout/looping
+            else:
+                with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
+                    doc = response.text
+                if not doc:
+                    error(f"aborting! failed to download {path}")
         if have_xpath:
             doc_xml = lxml.html.fromstring(doc)
 
@@ -312,6 +369,13 @@ def dl(ctx):
                 else:
                     label = ctx.label.format.format(di, ci, di=di, ci=ci)
             if label is not None:
+                if ctx.label.interactive:
+                    while True:
+                        res = prompt_yes_no(f"edit (y/N) label '{label}' for '{path}' ?: ", default=False)
+                        if not res: break
+                        label = input("enter new label: ")
+
+
                 progress = True
                 if ctx.cprint:
                     print(f"aquired '{label}' [{path}]:\n" + c)
@@ -367,9 +431,11 @@ def main():
     ctx = DlContext()
     # testing, TODO: remove this
     if len(sys.argv) < 2:
+        #sys.argv.append('lin=1')
         sys.argv.append("rfile=./dl_001.txt")
         sys.argv.append('dx=//span[@class="next-button"]/a/@href')
         sys.argv.append('dimax=3')
+        sys.argv.append("tordir=/opt/tor")
 
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
@@ -412,8 +478,6 @@ def main():
             ctx.label.multimatch = get_bool_arg(arg, "lm")
         elif begins(arg, "lin="):
             ctx.label.interactive = get_bool_arg(arg, "lin")
-
-
         elif begins(arg, "dx="):
             ctx.document.xpath = get_arg(arg)
         elif begins(arg, "dr="):
@@ -443,6 +507,9 @@ def main():
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "tor="):
             ctx.tor = get_bool_arg(arg, "tor")
+        elif begins(arg, "tordir="):
+            ctx.tor = True
+            ctx.tor_browser_dir = get_arg(arg)
         elif begins(arg, "overwrite="):
             ctx.overwrite_files = get_bool_arg(arg, "overwrite")
         elif begins(arg, "ua="):
