@@ -8,12 +8,20 @@ import os
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
+from selenium import webdriver
+from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
 from enum import Enum
 class DocumentType(Enum):
     URL = 1
     FILE = 2
     RFILE = 3
+
+class SeleniumVariant(Enum):
+    DISABLED = 0
+    CHROME = 1
+    FIREFOX = 2
+    TORBROWSER = 3
 
 class Locator:
     def __init__(self, name):
@@ -129,10 +137,10 @@ class DlContext:
 
         self.cookie_file = None
         self.cookie_jar = None
-        self.tor = False
+        self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
-        self.tor_driver = None
-        self.load_timeout_secs = 10
+        self.selenium_driver = None
+        self.selenium_timeout_secs = 10
         self.user_agent_random = False
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
@@ -196,18 +204,22 @@ def help(err=False):
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
-        tor=<bool>          show a tor instance and use that to load urls
-        tordir=<path>       path to the root directory of the tor browser installation. implies tor=true
+        selenium=<browser>  use selenium to load urls into an interactive browser session (values: tor,chrome,firefox,disabled)
+        tbdir=<path>        root directory of the tor browser installation, implies selenium=tor (default: environment variable TOR_BROWSER_DIR)
         """.strip()
     if err:
         error(text)
     else:
         print(text)
 
-def setup_tor(ctx):
-    # use bundled gecko driver from same directory if available
+def add_cwd_to_path():
     cwd = os.path.dirname(os.path.abspath(__file__))
     os.environ["PATH"] += ":" + cwd
+    return cwd
+
+def setup_selenium_tor(ctx):
+    # use bundled geckodriver if available
+    cwd = add_cwd_to_path()
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
         if tb_env_var in os.environ:
@@ -215,26 +227,68 @@ def setup_tor(ctx):
         else:
             ctx.tor_browser_dir = "start-tor-browser"
     try:
-        ctx.tor_driver = TorBrowserDriver(ctx.tor_browser_dir, tbb_logfile_path=os.devnull)
-        if ctx.cookie_jar:
-            for cookie in ctx.cookie_jar:
-                cookie_dict = {
-                    'domain': cookie.domain,
-                    'name': cookie.name,
-                    'value': cookie.value,
-                    'secure': cookie.secure
-                }
-                if cookie.expires:
-                    cookie_dict['expiry'] = cookie.expires
-                if cookie.path_specified:
-                    cookie_dict['path'] = cookie.path
-
-                ctx.tor_driver.add_cookie(cookie_dict)
+        options = webdriver.firefox.options.Options()
+        if ctx.user_agent != None:
+            options.set_preference("general.useragent.override", ctx.user_agent)
+            # otherwise the user agent is not applied
+            options.set_preference("privacy.resistFingerprinting", False)
+        ctx.selenium_driver = TorBrowserDriver(ctx.tor_browser_dir, tbb_logfile_path=os.devnull, options=options)
     except Exception as ex:
         error(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd) #restore cwd that is changed by tor for some reason
 
+def setup_selenium_firefox(ctx):
+    # use bundled geckodriver if available
+    add_cwd_to_path()
+    options = webdriver.FirefoxOptions()
+    if ctx.user_agent != None:
+        options.set_preference("general.useragent.override", ctx.user_agent)
+    try:
+        ctx.selenium_driver = webdriver.Firefox(options=options)
+    except Exception as ex:
+        error(f"failed to start geckodriver: {str(ex)}")
+    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
+def setup_selenium_chrome(ctx):
+    # allow usage of bundled chromedriver
+    add_cwd_to_path()
+    options = webdriver.ChromeOptions()
+    options.add_argument("--incognito")
+    if ctx.user_agent != None:
+        options.add_argument(f"user-agent={ctx.user_agent}")
+    try:
+        ctx.selenium_driver = webdriver.Chrome(options=options)
+    except Exception as ex:
+        error(f"failed to start chromedriver: {str(ex)}")
+    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
+
+
+
+def setup_selenium(ctx):
+    if ctx.selenium_variant == SeleniumVariant.DISABLED:
+        return
+    elif ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+        setup_selenium_tor(ctx)
+    elif ctx.selenium_variant == SeleniumVariant.CHROME:
+        setup_selenium_chrome(ctx)
+    elif ctx.selenium_variant == SeleniumVariant.FIREFOX:
+        setup_selenium_firefox(ctx)
+    else:
+        assert False
+
+    if ctx.cookie_jar:
+        for cookie in ctx.cookie_jar:
+            cookie_dict = {
+                'domain': cookie.domain,
+                'name': cookie.name,
+                'value': cookie.value,
+                'secure': cookie.secure
+            }
+            if cookie.expires:
+                cookie_dict['expiry'] = cookie.expires
+            if cookie.path_specified:
+                cookie_dict['path'] = cookie.path
+            ctx.selenium_driver.add_cookie(cookie_dict)
 
 def setup(ctx):
     if len(ctx.pathes) == 0:
@@ -274,14 +328,13 @@ def setup(ctx):
     elif ctx.user_agent_random:
         user_agent_rotator = UserAgent()
         ctx.user_agent = user_agent_rotator.get_random_user_agent()
-    elif ctx.user_agent is None:
+    elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
         ctx.user_agent = "dl.py/0.0.1"
 
     if ctx.documents_are_files and ctx.tor:
         error(f"the modes dfiles and tor are incompatible")
 
-    if ctx.tor:
-        setup_tor(ctx)
+    setup_selenium(ctx)
 
 def prompt_yes_no(prompt_text, default=None):
     while True:
@@ -313,9 +366,9 @@ def dl(ctx):
                 error(f"aborting! failed to read: {str(ex)}")
         else:
             assert document_type == DocumentType.URL
-            if ctx.tor:
-                ctx.tor_driver.get(path)
-                doc = ctx.tor_driver.page_source
+            if ctx.selenium_variant != SeleniumVariant.DISABLED:
+                ctx.selenium_driver.get(path)
+                doc = ctx.selenium_driver.page_source
                 #todo: timeout/looping
             else:
                 with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
@@ -432,11 +485,12 @@ def main():
     # testing, TODO: remove this
     if len(sys.argv) < 2:
         #sys.argv.append('lin=1')
-        sys.argv.append("rfile=./dl_001.txt")
+        sys.argv.append("url=https://duckduckgo.com/?q=what+is+my+user+agent&ia=answer")
         sys.argv.append('dx=//span[@class="next-button"]/a/@href')
         sys.argv.append('dimax=3')
-        sys.argv.append("tordir=/opt/tor")
-
+        sys.argv.append('ua=ua/0.0.0')
+        #sys.argv.append("tbdir=/opt/tor")
+        sys.argv.append("selenium=firefox")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
@@ -498,17 +552,26 @@ def main():
             ctx.document.interactive = get_bool_arg(arg, "din")
 
         elif begins(arg, "url"):
-            ctx.path.append((get_arg(arg), DocumentType.URL))
+            ctx.pathes.append((get_arg(arg), DocumentType.URL))
         elif begins(arg, "file"):
             ctx.pathes.append((get_arg(arg), DocumentType.FILE))
         elif begins(arg, "rfile"):
             ctx.pathes.append((get_arg(arg), DocumentType.RFILE))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
-        elif begins(arg, "tor="):
-            ctx.tor = get_bool_arg(arg, "tor")
-        elif begins(arg, "tordir="):
-            ctx.tor = True
+        elif begins(arg, "selenium="):
+            variant = get_arg(arg).lower()
+            variants_dict = {
+                "disabled": SeleniumVariant.DISABLED,
+                "tor": SeleniumVariant.TORBROWSER,
+                "firefox": SeleniumVariant.FIREFOX,
+                "chrome": SeleniumVariant.CHROME
+            }
+            if variant not in variants_dict:
+                error("unknown selenium variant '{variant}'")
+            ctx.selenium_variant = variants_dict[variant]
+        elif begins(arg, "tbdir="):
+            ctx.selenium_variant = SeleniumVariant.TORBROWSER
             ctx.tor_browser_dir = get_arg(arg)
         elif begins(arg, "overwrite="):
             ctx.overwrite_files = get_bool_arg(arg, "overwrite")
