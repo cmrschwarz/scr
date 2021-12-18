@@ -336,16 +336,21 @@ def setup(ctx):
 
     setup_selenium(ctx)
 
+def parse_bool_string(val, default=None, unparsable_val=None):
+    val = val.strip().lower()
+    if val in ["y", "t", "1", "yes", "true"]:
+        return True
+    elif val in ["n", "f", "0", "no", "false"]:
+        return False
+    elif val == "":
+        return default
+    else:
+        return unparsable_val
+
 def prompt_yes_no(prompt_text, default=None):
     while True:
-        res = input(prompt_text).lower().strip()
-        if res in ["y", "t", "1", "yes", "true"]:
-            return True
-        elif res in ["n", "f", "0", "no", "false"]:
-            return False
-        elif res == "" and default is not None:
-            return default
-        else:
+        res = parse_bool_string(input(prompt_text), False)
+        if res is None:
             print("please answer 'yes' or 'no'")
 
 def dl(ctx):
@@ -474,10 +479,10 @@ def get_int_arg(arg, argname):
         error(f"value for {argname} must be an integer")
 
 def get_bool_arg(arg, argname):
-    try:
-        return bool(get_arg(arg))
-    except ValueError:
+    res = parse_bool_string(get_arg(arg))
+    if res is None:
         error(f"value for {argname} must be interpretable as a boolean")
+    return res
 
 
 def main():
