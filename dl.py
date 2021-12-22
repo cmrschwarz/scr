@@ -12,6 +12,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
 from enum import Enum
+
 class DocumentType(Enum):
     URL = 1
     FILE = 2
@@ -22,6 +23,12 @@ class SeleniumVariant(Enum):
     CHROME = 1
     FIREFOX = 2
     TORBROWSER = 3
+
+class SeleniumStrategy(Enum):
+    FIRST_MATCH = 0
+    NEW_MATCHES = 1
+    INTERACTIVE = 2
+
 
 class Locator:
     def __init__(self, name):
@@ -115,6 +122,11 @@ class Locator:
                 res.append(self.apply_format(r, values, keys, r))
         return res
 
+class Document:
+    def __init__(self, document_type, path):
+        self.document_type = document_type
+        self.path = path
+
 class DlContext:
     def __init__(self):
         self.pathes = []
@@ -141,9 +153,16 @@ class DlContext:
         self.tor_browser_dir = None
         self.selenium_driver = None
         self.selenium_timeout_secs = 10
+        self.selenium_strategy = SeleniumStrategy.FIRST_MATCH
         self.user_agent_random = False
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
+        self.allow_slashes_in_labels = False
+
+    def is_valid_label(self, label):
+        if self.allow_slashes_in_labels: return True
+        if "/" in label or "\\" in label: return False
+        return True
 
 def error(text):
     sys.stderr.write(text + "\n")
@@ -181,6 +200,7 @@ def help(err=False):
         lr=<regex>          regex for label matching
         lf=<format string>  label format string (args: label, di, ci)
         lic=<bool>          match for the label within the content instead of the hole document
+        las=<bool>          allow slashes in labels
         lm=<bool>           allow multiple label matches in one document instead of picking the first
         lfd=<format string> default label format string to use if there's no match (args: di, ci)
         lin=<bool>          give a prompt to edit the generated label
@@ -296,7 +316,7 @@ def setup(ctx):
 
     [l.setup() for l in ctx.locators]
 
-    if ctx.label.format is None or ctx.default_label_format is None:
+    if ctx.label.format is None or ctx.label_default_format is None:
         if ctx.label.xpath is None and ctx.label.regex is None:
             form = "dl_"
         else:
@@ -312,7 +332,7 @@ def setup(ctx):
             form += f"{{di:0{didigits}}}"
         form += "" if ctx.cprint else ".txt"
         if ctx.label.format is None: ctx.label.format = form
-        if ctx.default_label_format is None: ctx.default_label_format = form
+        if ctx.label_default_format is None: ctx.label_default_format = form
 
     if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
     if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
@@ -363,36 +383,37 @@ def dl(ctx):
     docs = deque(ctx.pathes)
 
     while di <= ctx.dimax and docs:
-        path, document_type = docs.popleft()
-        if document_type in [DocumentType.FILE, DocumentType.RFILE]:
+        doc = docs.popleft()
+        if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
             try:
-                with open(path, "r") as f:
+                with open(doc.path, "r") as f:
                     doc = f.read()
             except Exception as ex:
                 error(f"aborting! failed to read: {str(ex)}")
         else:
             assert document_type == DocumentType.URL
             if ctx.selenium_variant != SeleniumVariant.DISABLED:
-                ctx.selenium_driver.get(path)
+                ctx.selenium_driver.get(doc.path)
                 doc = ctx.selenium_driver.page_source
-                #todo: timeout/looping
+
             else:
-                with requests.get(path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
+                with requests.get(doc.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
                     doc = response.text
                 if not doc:
-                    error(f"aborting! failed to download {path}")
+                    error(f"aborting! failed to download {doc.path}")
         if have_xpath:
             doc_xml = lxml.html.fromstring(doc)
 
         if need_content_xpaths:
-            contents, contents_xml = ctx.content.match_xpath(doc_xml, path, ([doc], [doc_xml]), True)
+            contents, contents_xml = ctx.content.match_xpath(doc_xml, doc.path, ([doc], [doc_xml]), True)
         else:
-            contents = ctx.content.match_xpath(doc_xml, path, [doc])
+            contents = ctx.content.match_xpath(doc_xml, doc.path, [doc])
 
         if have_label_matching and not ctx.labels_inside_content_xpath:
             labels = []
-            for lx in ctx.label.match_xpath(doc_xml, path, [doc]):
-                labels += ctx.label.match_regex(doc, path, [lx])
+            for lx in ctx.label.match_xpath(doc_xml, doc.path, [doc]):
+                ctx.label.match_regex(doc, doc.path, [lx])
+
 
         if not ctx.ci_continuous:
             ci = ctx.cimin
@@ -408,7 +429,7 @@ def dl(ctx):
 
             if ctx.labels_inside_content:
                 cx = contents_xml[i] if need_content_xpaths else None
-                label = ctx.label.apply(c, cx, path, [di, ci], ["di", "ci"])
+                label = ctx.label.apply(c, cx, doc.path, [di, ci], ["di", "ci"])
                 if len(label) != 1:
                     # will skip the content
                     label = None
@@ -424,41 +445,45 @@ def dl(ctx):
                     elif ctx.label_default_format is not None:
                         label = ctx.label_default_format.format(di, ci, di=di, ci=ci)
                     else:
-                        sys.stderr.write(f"no labels! skipping remaining {len(contents) - i} content element(s) in document:\n    {path}\n")
+                        sys.stderr.write(f"no labels! skipping remaining {len(contents) - i} content element(s) in document:\n    {doc.path}\n")
                 else:
                     label = ctx.label.format.format(di, ci, di=di, ci=ci)
             if label is not None:
                 if ctx.label.interactive:
                     while True:
-                        res = prompt_yes_no(f"edit (y/N) label '{label}' for '{path}' ?: ", default=False)
-                        if not res: break
+                        if not ctx.is_valid_label(label):
+                            sys.stderr.write(f"labels '{label}' cannot contain a slash")
+                        else:
+                            res = prompt_yes_no(f"edit (y/N) label '{label}' for '{doc.path}' ?: ", default=False)
+                            if not res:
+                                break
                         label = input("enter new label: ")
 
 
                 progress = True
                 if ctx.cprint:
-                    print(f"aquired '{label}' [{path}]:\n" + c)
+                    print(f"aquired '{label}' [{doc.path}]:\n" + c)
                 else:
-                    if "/" in label:
-                        sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {path}")
+                    if not ctx.is_valid_label(label):
+                        sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
                     try:
                         f = open(label, "w")
                     except Exception as ex:
                         error(
-                            f"aborting! failed to write to file '{label}': {ex.msg}: {path}")
+                            f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
                     f.write(c)
                     f.close()
-                    print(f"wrote content into {label} for {path}")
+                    print(f"wrote content into {label} for {doc.path}")
             i += 1
             ci += 1
         if progress == False:
-            sys.stderr.write(f"no content matches for document: {path}\n")
+            sys.stderr.write(f"no content matches for document: {doc.path}\n")
         di += 1
         if di <= ctx.dimax:
-            new_paths = ctx.document.apply(doc, doc_xml, path)
+            new_paths = ctx.document.apply(doc, doc_xml, doc.path)
             if document_type == DocumentType.RFILE:
                 document_type = DocumentType.URL
-            entries = zip(new_paths, [document_type] * len(new_paths))
+            entries = [ Document(document_type, path) for path in new_paths ]
             if ctx.documents_bfs:
                 docs.extend(entries)
             else:
@@ -491,8 +516,8 @@ def main():
     # testing, TODO: remove this
     if len(sys.argv) < 2:
         #sys.argv.append('lin=1')
-        sys.argv.append("rfile=./dl_001.txt")
-        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
+        sys.argv.append("url=https://twitter.com/number")
+        sys.argv.append('dx=//*[@id="id__410q4epfh7g"]')
         sys.argv.append('dimax=3')
         sys.argv.append('ua=ua/0.0.0')
         #sys.argv.append("tbdir=/opt/tor")
@@ -530,6 +555,8 @@ def main():
             ctx.label.regex = get_arg(arg)
         elif begins(arg, "lf="):
             ctx.label.format = get_arg(arg)
+        elif begins("arg", "las="):
+            ctx.allow_slashes_in_labels = get_bool_arg(arg, "las")
         elif begins(arg, "ldf="):
             ctx.label_default_format = get_arg(arg)
         elif begins(arg, "licx="):
