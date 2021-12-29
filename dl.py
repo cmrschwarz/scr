@@ -16,6 +16,15 @@ from enum import Enum
 import time
 import datetime
 
+def prefixes(str):
+    return [str[:i] for i in range(len(str), 0, -1)]
+
+yes_indicating_strings = prefixes("yes") + prefixes("true") + ["1", "+"]
+no_indicating_strings = prefixes("no") + prefixes("false") + ["0", "-"]
+skip_indicating_strings = prefixes("skip")
+edit_indicating_strings = prefixes("edit")
+inspect_indicating_strings = prefixes("inspect")
+
 class DocumentType(Enum):
     URL = 1
     FILE = 2
@@ -144,10 +153,14 @@ class Document:
         self.document_type = document_type
         self.path = path
 
-    def setup_dicts(self):
-        self.contents = {}
-        self.labels = {}
-        self.docs = {}
+    def __key(self):
+        return (self.document_type, self.path)
+
+    def __eq__(x, y):
+        return isinstance(y, x.__class__) and x.__key() == y.__key()
+
+    def __hash__(self):
+        return hash(self.__key())
 
 class DlContext:
     def __init__(self):
@@ -176,8 +189,8 @@ class DlContext:
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
         self.selenium_driver = None
-        self.selenium_timeout_ms = 10000
-        self.selenium_poll_frequency_ms = 300
+        self.selenium_timeout_secs = 10
+        self.selenium_poll_frequency_secs = 0.3
         self.selenium_strategy = SeleniumStrategy.FIRST
         self.user_agent_random = False
         self.user_agent = None
@@ -291,7 +304,7 @@ def setup_selenium_firefox(ctx):
         ctx.selenium_driver = webdriver.Firefox(options=options)
     except Exception as ex:
         error(f"failed to start geckodriver: {str(ex)}")
-    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_ms / 1000.0)
+    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
 def setup_selenium_chrome(ctx):
     # allow usage of bundled chromedriver
@@ -386,28 +399,39 @@ def setup(ctx):
     ctx.have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
     ctx.have_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
     ctx.have_multidocs = ctx.document.xpath is not None or ctx.document.regex is not None or ctx.document.format is not None
+    ctx.have_interactive_matching = ctx.label.interactive or ctx.content.interactive
 
     if not ctx.have_multidocs:
         ctx.dimax = ctx.dimin
     ctx.di = ctx.dimin
     ctx.ci = ctx.cimin
 
-def parse_bool_string(val, default=None, unparsable_val=None):
+def parse_prompt_option(val, options, default=None, unparsable_val=None):
     val = val.strip().lower()
-    if val in ["y", "t", "1", "yes", "true"]:
-        return True
-    elif val in ["n", "f", "0", "no", "false"]:
-        return False
-    elif val == "":
+    if val == "":
         return default
-    else:
-        return unparsable_val
+    for opt, matchings in options:
+        if val in matchings:
+            return opt
+    return unparsable_val
+
+
+def parse_bool_string(val, default=None, unparsable_val=None):
+    return parse_prompt_option(val, [(True, yes_indicating_strings), (False, no_indicating_strings)], default, None)
+
+def prompt(prompt_text, options, default=None):
+    assert len(options) > 1
+    while True:
+        res = parse_prompt_option(input(prompt_text), options, default)
+        if res is None:
+            option_names = [o[1][0] for o in options]
+            print("please answer with " + ", ".join(option_names[:-1]) + " or " + option_names[-1])
+            continue
+        return res
 
 def prompt_yes_no(prompt_text, default=None):
-    while True:
-        res = parse_bool_string(input(prompt_text), False)
-        if res is None:
-            print("please answer 'yes' or 'no'")
+    return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
+
 
 def fetch_doc_source(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
@@ -428,19 +452,33 @@ def fetch_doc_source(ctx, doc):
                 error(f"aborting! failed to download {doc.path}")
     return src
 
-def write_out_match(ctx, doc, content, label):
+def handle_content_match(ctx, doc, content, label, di, ci):
+    if label is None:
+        label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
+    else:
+        label = ctx.label.format.format([label, di, ci], label=label, di=di, ci=ci)
     if ctx.label.interactive:
         while True:
             if not ctx.is_valid_label(label):
-                sys.stderr.write(f"labels '{label}' cannot contain a slash")
+                sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
-                res = prompt_yes_no(f"edit (y/N) label '{label}' for '{doc.path}' ?: ", default=False)
-                if not res:
+                res = prompt(
+                    f'"{doc.path}": accept label "{label}" (Yes/no/inspect/skip)? ',
+                    [(1, yes_indicating_strings), (2, no_indicating_strings), (3, inspect_indicating_strings), (4, skip_indicating_strings)],
+                    1
+                )
+                if res == 1: break
+                if res == 3:
+                    print(f'"{doc.path}": content for "{label}":\n' + content)
+                    continue
+                if res == 4:
+                    print("skipping...")
                     return False
+                assert res == 2
             label = input("enter new label: ")
 
     if ctx.cprint:
-        print(f"aquired '{label}' [{doc.path}]:\n" + content)
+        print(f'"{doc.path}": aquired "{label}":\n' + content)
     else:
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
@@ -455,8 +493,18 @@ def write_out_match(ctx, doc, content, label):
     return True
 
 def handle_document_match(ctx, doc, matched_path):
-    # TODO
-    return True
+    if not ctx.document.interactive: return True
+    res = prompt(
+        f'"{doc.path}": accept matched document "{matched_path}" (Yes/no/edit)? ',
+        [(1, yes_indicating_strings), (2, no_indicating_strings), (3, edit_indicating_strings)],
+        1
+    )
+    if res == 1:
+        return matched_path
+    if res == 2:
+        return None
+    if res == 3:
+        return input("enter new document: ")
 
 def gen_content_matches(ctx, doc, src, src_xml):
     content_matches = []
@@ -466,25 +514,18 @@ def gen_content_matches(ctx, doc, src, src_xml):
     else:
         contents = ctx.content.match_xpath(src_xml, doc.path, [src])
 
+    labels = []
     if ctx.have_label_matching and not ctx.labels_inside_content_xpath:
-        labels = []
         for lx in ctx.label.match_xpath(src_xml, doc.path, [src]):
-            ctx.label.match_regex(src, doc.path, [lx])
-
-    ci = ctx.ci if ctx.ci_continuous else ctx.cimin
+            labels.extend(ctx.label.match_regex(src, doc.path, [lx]))
     match_index = 0
     labels_none_for_n = 0
     for content in contents:
-        if ctx.ci > ctx.cimax:
-            # stopping doc handling since cimax was reached
-            # if cicont=1 then this also ends the whole program so we should no longer load documents
-            if ctx.ci_continuous:
-                return
-            break
-
         if ctx.labels_inside_content:
-            cx = contents_xml[match_index] if ctx.have_content_xpaths else None
-            label = ctx.label.apply(content, cx, doc.path, [ctx.di, ci], ["di", "ci"])
+            content_xml = contents_xml[match_index] if ctx.have_content_xpaths else None
+            labels = []
+            for lx in ctx.label.match_xpath(content_xml, doc.path, [src]):
+                labels.extend(ctx.label.match_regex(src, doc.path, [lx]))
             if len(label) == 0:
                 # will skip the content if there is no label match for it
                 # TODO: make this configurable
@@ -492,21 +533,16 @@ def gen_content_matches(ctx, doc, src, src_xml):
             else:
                 label = label[0]
         else:
-            if ctx.have_label_matching:
-                if not ctx.label.multimatch and len(labels) > 0:
-                    label = labels[0]
-                elif match_index in labels:
-                    label = labels[match_index]
-                    ctx.label.format.format(label, ctx.di, ci, label=label, di=ctx.di, ci=ci)
-                elif ctx.label_default_format is not None:
-                    label = ctx.label_default_format.format(ctx.di, ci, di=ctx.di, ci=ci)
-                else:
-                    labels_none_for_n += 1
-                    label = None
+            if not ctx.label.multimatch and len(labels) > 0:
+                label = labels[0]
+            elif match_index in labels:
+                label = labels[match_index]
+            elif ctx.label_default_format is not None:
+                label = None
             else:
-                label = ctx.label.format.format(ctx.di, ci, di=ctx.di, ci=ci)
+                labels_none_for_n += 1
+                label = None
         content_matches.append(ContentMatch(label, content))
-        ctx.ci += 1
         match_index += 1
     return content_matches, labels_none_for_n
 
@@ -520,6 +556,7 @@ def gen_document_matches(ctx, doc, src, src_xml):
 def dl(ctx):
     docs = deque(ctx.pathes)
     di = ctx.dimin
+    ci = ctx.cimin
     handled_content_matches = {}
     handled_document_matches = {}
     while di <= ctx.dimax and docs:
@@ -531,13 +568,16 @@ def dl(ctx):
         final_document_matches = []
         final_content_matches = []
         src = fetch_doc_source(ctx, doc)
+        static_content = (doc.document_type != DocumentType.URL)
+        input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
         while True:
             try_number += 1
-            same_content = False
-            if try_number > 1:
+            same_content = static_content and try_number > 1
+            if try_number > 1 and not static_content:
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
                 src_new = ctx.selenium_driver.page_source
                 same_content = (src_new == src)
+                src = src_new
 
             if not same_content:
                 src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
@@ -548,7 +588,7 @@ def dl(ctx):
 
                 if ctx.selenium_strategy == SeleniumStrategy.FIRST:
                     if not content_matches or (not document_matches and di < ctx.dimax):
-                        time.sleep(ctx.selenium_poll_frequency_ms)
+                        time.sleep(ctx.selenium_poll_frequency_secs)
                         continue
                 if ctx.selenium_strategy == SeleniumStrategy.DEDUP:
                     for cm in content_matches:
@@ -561,7 +601,7 @@ def dl(ctx):
                         if dm in handled_document_matches:
                             continue
                         handled_document_matches[dm] = None
-                        final_content_matches.append(dm)
+                        final_document_matches.append(dm)
                 else:
                     final_content_matches = content_matches
                     final_document_matches = document_matches
@@ -572,7 +612,7 @@ def dl(ctx):
                 msg = ""
                 if try_number > 1:
                     msg += "\r"
-                msg += f"accept {content_count} content"
+                msg += f'"{doc.path}": accept {content_count} content'
                 if content_count != 1:
                     msg += "s"
 
@@ -582,15 +622,15 @@ def dl(ctx):
                     msg += f" and {docs_count} document"
                     if docs_count != 1:
                         msg += "s"
-                msg += " [Y,n]? "
+                msg += " (Yes/no)? "
                 rlist = []
                 if try_number > 1:
-                    rlist, _, _ = select.select([sys.stdin], [], [], 0)
+                    rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
                 if not rlist:
                     sys.stdout.write(msg)
                 while True:
                     if not rlist:
-                        rlist, _, _ = select.select([sys.stdin], [], [], 0)
+                        rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
                     if rlist:
                         accept = parse_bool_string(sys.stdin.readline(), True, None)
                         if accept is None:
@@ -600,14 +640,16 @@ def dl(ctx):
                         break
                     accept = None
                     break
-                if accept is None:
-                    time.sleep(ctx.selenium_poll_frequency_ms / 1000.0)
-                    continue
-                break
-
+                if accept:
+                    break
+        if ctx.ci_continuous:
+            ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
-            if cm.label is not None:
-                content_matches_in_doc = content_matches_in_doc or write_out_match(ctx, doc, cm.content, cm.label)
+            if not ctx.have_label_matching or cm.label is not None:
+                accept = handle_content_match(ctx, doc, cm.content, cm.label, di, ci)
+                if accept:
+                    content_matches_in_doc = True
+                    ci += 1
             else:
                 sys.stderr.write(f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}\n")
                 break
@@ -615,6 +657,7 @@ def dl(ctx):
             sys.stderr.write(f"no content matches for document: {doc.path}\n")
         if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc:
             sys.stderr.write(f"no content matches for document: {doc.path}\n")
+        final_document_matches = [d for d in final_document_matches if handle_document_match(ctx, doc, d.path)]
         if ctx.documents_bfs:
             docs.extend(final_document_matches)
         else:
@@ -666,7 +709,10 @@ def main():
         sys.argv.append('ua=ua/0.0.0')
         #sys.argv.append("tbdir=/opt/tor")
         sys.argv.append("sel=f")
-        sys.argv.append("strat=ask")
+        sys.argv.append("strat=dedup")
+        sys.argv.append("cin=1")
+        sys.argv.append("lin=1")
+        sys.argv.append("din=1")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
