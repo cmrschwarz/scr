@@ -25,8 +25,8 @@ class SeleniumVariant(Enum):
     TORBROWSER = 3
 
 class SeleniumStrategy(Enum):
-    FIRST_MATCH = 0
-    NEW_MATCHES = 1
+    FIRST = 0
+    NEW = 1
     INTERACTIVE = 2
 
 
@@ -59,10 +59,10 @@ class Locator:
             if self.xpath is None and self.regex is None:
                 error(f"cannot specify {self.name[0]}f without {self.name[0]}x or {self.name[0]}r")
 
-    def match_xpath(self, doc_xml, path, default=[], return_xml_tuple=False):
+    def match_xpath(self, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None: return default
         try:
-            res_xpath = doc_xml.xpath(self.xpath)
+            res_xpath = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
             error(f"aborting! invalid {self.name[0]}x: {ex.msg}: {path}")
         except Exception as ex:
@@ -114,10 +114,10 @@ class Locator:
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
-    def apply(self, doc, doc_xml, path, default=[], values=[], keys=[]):
+    def apply(self, src, src_xml, path, default=[], values=[], keys=[]):
         if self.is_unset(): return default
         res = []
-        for x in self.match_xpath(doc_xml, path, [doc]):
+        for x in self.match_xpath(src_xml, path, [src]):
             for r in self.match_regex(x, path, [x]):
                 res.append(self.apply_format(r, values, keys, r))
         return res
@@ -126,6 +126,11 @@ class Document:
     def __init__(self, document_type, path):
         self.document_type = document_type
         self.path = path
+
+    def setup_dicts(self):
+        self.contents = {}
+        self.labels = {}
+        self.docs = {}
 
 class DlContext:
     def __init__(self):
@@ -153,7 +158,7 @@ class DlContext:
         self.tor_browser_dir = None
         self.selenium_driver = None
         self.selenium_timeout_secs = 10
-        self.selenium_strategy = SeleniumStrategy.FIRST_MATCH
+        self.selenium_strategy = SeleniumStrategy.FIRST
         self.user_agent_random = False
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
@@ -167,13 +172,6 @@ class DlContext:
 def error(text):
     sys.stderr.write(text + "\n")
     exit(1)
-
-
-def get_xpath(doc, xpath):
-    doc = lxml.html.fromstring(doc)
-    element = doc.find("." + xpath)
-    return lxml.html.tostring(element)
-
 
 def help(err=False):
     text = f"""{sys.argv[0]} [OPTIONS]
@@ -224,7 +222,8 @@ def help(err=False):
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
-        selenium=<browser>  use selenium to load urls into an interactive browser session (values: tor,chrome,firefox,disabled)
+        sel=<browser>       use selenium to load urls into an interactive browser session (values: tor,chrome,firefox,disabled)
+        strat=<browser>     matching strategy for selenium (values: first, new, interactive)
         tbdir=<path>        root directory of the tor browser installation, implies selenium=tor (default: environment variable TOR_BROWSER_DIR)
         """.strip()
     if err:
@@ -374,6 +373,52 @@ def prompt_yes_no(prompt_text, default=None):
         if res is None:
             print("please answer 'yes' or 'no'")
 
+def get_doc_source(ctx, doc):
+    if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
+        try:
+            with open(doc.path, "r") as f:
+                doc = f.read()
+        except Exception as ex:
+            error(f"aborting! failed to read: {str(ex)}")
+    else:
+        assert doc.document_type == DocumentType.URL
+        if ctx.selenium_variant != SeleniumVariant.DISABLED:
+            ctx.selenium_driver.get(doc.path)
+            src = ctx.selenium_driver.page_source
+
+        else:
+            with requests.get(doc.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
+                src = response.text
+            if not src:
+                error(f"aborting! failed to download {doc.path}")
+    return src
+
+def write_out_match(ctx, doc, content, label):
+    if ctx.label.interactive:
+        while True:
+            if not ctx.is_valid_label(label):
+                sys.stderr.write(f"labels '{label}' cannot contain a slash")
+            else:
+                res = prompt_yes_no(f"edit (y/N) label '{label}' for '{doc.path}' ?: ", default=False)
+                if not res:
+                    return False
+            label = input("enter new label: ")
+
+    if ctx.cprint:
+        print(f"aquired '{label}' [{doc.path}]:\n" + content)
+    else:
+        if not ctx.is_valid_label(label):
+            sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
+        try:
+            f = open(label, "w")
+        except Exception as ex:
+            error(
+                f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
+        f.write(content)
+        f.close()
+        print(f"wrote content into {label} for {doc.path}")
+    return True
+
 def dl(ctx):
     have_xpath = max([l.xpath is not None for l in ctx.locators])
     have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
@@ -384,42 +429,26 @@ def dl(ctx):
 
     while di <= ctx.dimax and docs:
         doc = docs.popleft()
-        if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-            try:
-                with open(doc.path, "r") as f:
-                    doc = f.read()
-            except Exception as ex:
-                error(f"aborting! failed to read: {str(ex)}")
-        else:
-            assert document_type == DocumentType.URL
-            if ctx.selenium_variant != SeleniumVariant.DISABLED:
-                ctx.selenium_driver.get(doc.path)
-                doc = ctx.selenium_driver.page_source
+        src = get_doc_source(ctx, src)
 
-            else:
-                with requests.get(doc.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
-                    doc = response.text
-                if not doc:
-                    error(f"aborting! failed to download {doc.path}")
         if have_xpath:
-            doc_xml = lxml.html.fromstring(doc)
+            src_xml = lxml.html.fromstring(src)
 
         if need_content_xpaths:
-            contents, contents_xml = ctx.content.match_xpath(doc_xml, doc.path, ([doc], [doc_xml]), True)
+            contents, contents_xml = ctx.content.match_xpath(src_xml, doc.path, ([src], [src_xml]), True)
         else:
-            contents = ctx.content.match_xpath(doc_xml, doc.path, [doc])
+            contents = ctx.content.match_xpath(src_xml, doc.path, [src])
 
         if have_label_matching and not ctx.labels_inside_content_xpath:
             labels = []
-            for lx in ctx.label.match_xpath(doc_xml, doc.path, [doc]):
-                ctx.label.match_regex(doc, doc.path, [lx])
-
+            for lx in ctx.label.match_xpath(src_xml, doc.path, [src]):
+                ctx.label.match_regex(src, doc.path, [lx])
 
         if not ctx.ci_continuous:
             ci = ctx.cimin
         i = 0
         progress=False
-        for c in contents:
+        for content in contents:
             if ci > ctx.cimax:
                 # stopping doc handling since cimax was reached
                 # if cicont=1 then this also ends the whole program so we should no longer load documents
@@ -429,7 +458,7 @@ def dl(ctx):
 
             if ctx.labels_inside_content:
                 cx = contents_xml[i] if need_content_xpaths else None
-                label = ctx.label.apply(c, cx, doc.path, [di, ci], ["di", "ci"])
+                label = ctx.label.apply(content, cx, doc.path, [di, ci], ["di", "ci"])
                 if len(label) != 1:
                     # will skip the content
                     label = None
@@ -446,41 +475,19 @@ def dl(ctx):
                         label = ctx.label_default_format.format(di, ci, di=di, ci=ci)
                     else:
                         sys.stderr.write(f"no labels! skipping remaining {len(contents) - i} content element(s) in document:\n    {doc.path}\n")
+                        break
                 else:
                     label = ctx.label.format.format(di, ci, di=di, ci=ci)
             if label is not None:
-                if ctx.label.interactive:
-                    while True:
-                        if not ctx.is_valid_label(label):
-                            sys.stderr.write(f"labels '{label}' cannot contain a slash")
-                        else:
-                            res = prompt_yes_no(f"edit (y/N) label '{label}' for '{doc.path}' ?: ", default=False)
-                            if not res:
-                                break
-                        label = input("enter new label: ")
-
-
-                progress = True
-                if ctx.cprint:
-                    print(f"aquired '{label}' [{doc.path}]:\n" + c)
-                else:
-                    if not ctx.is_valid_label(label):
-                        sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
-                    try:
-                        f = open(label, "w")
-                    except Exception as ex:
-                        error(
-                            f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
-                    f.write(c)
-                    f.close()
-                    print(f"wrote content into {label} for {doc.path}")
+                if write_out_match(ctx, content, label):
+                    progress = True
             i += 1
             ci += 1
         if progress == False:
             sys.stderr.write(f"no content matches for document: {doc.path}\n")
         di += 1
         if di <= ctx.dimax:
-            new_paths = ctx.document.apply(doc, doc_xml, doc.path)
+            new_paths = ctx.document.apply(src, src_xml, doc.path)
             if document_type == DocumentType.RFILE:
                 document_type = DocumentType.URL
             entries = [ Document(document_type, path) for path in new_paths ]
@@ -510,6 +517,17 @@ def get_bool_arg(arg, argname):
         error(f"value for {argname} must be interpretable as a boolean")
     return res
 
+def select_variant(val, variants_dict):
+    val = val.strip().lower()
+    if val == "": return None
+    if val in variants_dict: return variants_dict[val]
+    match = None
+    for k, v in variants_dict.items():
+        if begins(k, val):
+            if match is not None: return None
+            match = v
+    return match
+
 
 def main():
     ctx = DlContext()
@@ -521,7 +539,8 @@ def main():
         sys.argv.append('dimax=3')
         sys.argv.append('ua=ua/0.0.0')
         #sys.argv.append("tbdir=/opt/tor")
-        sys.argv.append("selenium=firefox")
+        sys.argv.append("sel=f")
+        sys.argv.append("strat=int")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
@@ -592,17 +611,27 @@ def main():
             ctx.pathes.append((get_arg(arg), DocumentType.RFILE))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
-        elif begins(arg, "selenium="):
-            variant = get_arg(arg).strip().lower()
+        elif begins(arg, "sel="):
             variants_dict = {
                 "disabled": SeleniumVariant.DISABLED,
                 "tor": SeleniumVariant.TORBROWSER,
                 "firefox": SeleniumVariant.FIREFOX,
                 "chrome": SeleniumVariant.CHROME
             }
-            if variant not in variants_dict:
-                error("unknown selenium variant '{variant}'")
-            ctx.selenium_variant = variants_dict[variant]
+            res = select_variant(get_arg(arg), variants_dict)
+            if res is None:
+                error("no matching selenium variant for '{arg}'")
+            ctx.selenium_variant = res
+        elif begins(arg, "strat="):
+            strats_dict = {
+                "first": SeleniumStrategy.FIRST,
+                "new": SeleniumStrategy.NEW,
+                "interactive": SeleniumStrategy.INTERACTIVE,
+            }
+            res = select_variant(get_arg(arg), strats_dict)
+            if res is None:
+                error("no matching selenium strategy for '{arg}'")
+            ctx.selenium_strategy = res
         elif begins(arg, "tbdir="):
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
             ctx.tor_browser_dir = get_arg(arg)
