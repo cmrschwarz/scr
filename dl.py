@@ -3,6 +3,7 @@ import lxml # pip3 install lxml
 import lxml.html
 import requests
 import sys
+import select
 import re
 import os
 from http.cookiejar import MozillaCookieJar
@@ -12,6 +13,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
 from enum import Enum
+import time
+import datetime
 
 class DocumentType(Enum):
     URL = 1
@@ -25,10 +28,24 @@ class SeleniumVariant(Enum):
     TORBROWSER = 3
 
 class SeleniumStrategy(Enum):
-    FIRST = 0
-    NEW = 1
-    INTERACTIVE = 2
+    DISABLED = 0
+    FIRST = 1
+    ASK = 2
+    DEDUP = 3
 
+class ContentMatch:
+    def __init__(self, label, content):
+        self.label = label
+        self.content = content
+
+    def __key(self):
+        return (self.label, self.content)
+
+    def __eq__(x, y):
+        return isinstance(y, x.__class__) and x.__key() == y.__key()
+
+    def __hash__(self):
+        return hash(self.__key())
 
 class Locator:
     def __init__(self, name):
@@ -138,6 +155,7 @@ class DlContext:
 
         self.content = Locator("content")
         self.cimin = 1
+        self.ci = self.cimin
         self.cimax = float("inf")
         self.ci_continuous = False
         self.cprint = False
@@ -150,6 +168,7 @@ class DlContext:
         self.documents_are_files = False
         self.documents_bfs = False
         self.dimin = 1
+        self.di = self.dimin
         self.dimax = float("inf")
 
         self.cookie_file = None
@@ -157,12 +176,18 @@ class DlContext:
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
         self.selenium_driver = None
-        self.selenium_timeout_secs = 10
+        self.selenium_timeout_ms = 10000
+        self.selenium_poll_frequency_ms = 300
         self.selenium_strategy = SeleniumStrategy.FIRST
         self.user_agent_random = False
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
+
+        self.have_xpath_matching = False
+        self.have_label_matching = False
+        self.have_content_xpaths = False
+        self.have_interactive_matching = False
 
     def is_valid_label(self, label):
         if self.allow_slashes_in_labels: return True
@@ -266,7 +291,7 @@ def setup_selenium_firefox(ctx):
         ctx.selenium_driver = webdriver.Firefox(options=options)
     except Exception as ex:
         error(f"failed to start geckodriver: {str(ex)}")
-    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
+    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_ms / 1000.0)
 
 def setup_selenium_chrome(ctx):
     # allow usage of bundled chromedriver
@@ -285,6 +310,7 @@ def setup_selenium_chrome(ctx):
 
 def setup_selenium(ctx):
     if ctx.selenium_variant == SeleniumVariant.DISABLED:
+        ctx.selenium_strategy = SeleniumStrategy.DISABLED
         return
     elif ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
@@ -356,6 +382,16 @@ def setup(ctx):
 
     setup_selenium(ctx)
 
+    ctx.have_xpath_matching = max([l.xpath is not None for l in ctx.locators])
+    ctx.have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
+    ctx.have_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
+    ctx.have_multidocs = ctx.document.xpath is not None or ctx.document.regex is not None or ctx.document.format is not None
+
+    if not ctx.have_multidocs:
+        ctx.dimax = ctx.dimin
+    ctx.di = ctx.dimin
+    ctx.ci = ctx.cimin
+
 def parse_bool_string(val, default=None, unparsable_val=None):
     val = val.strip().lower()
     if val in ["y", "t", "1", "yes", "true"]:
@@ -373,11 +409,11 @@ def prompt_yes_no(prompt_text, default=None):
         if res is None:
             print("please answer 'yes' or 'no'")
 
-def get_doc_source(ctx, doc):
+def fetch_doc_source(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "r") as f:
-                doc = f.read()
+                src = f.read()
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
@@ -385,7 +421,6 @@ def get_doc_source(ctx, doc):
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
             ctx.selenium_driver.get(doc.path)
             src = ctx.selenium_driver.page_source
-
         else:
             with requests.get(doc.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
                 src = response.text
@@ -419,82 +454,173 @@ def write_out_match(ctx, doc, content, label):
         print(f"wrote content into {label} for {doc.path}")
     return True
 
-def dl(ctx):
-    have_xpath = max([l.xpath is not None for l in ctx.locators])
-    have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
-    need_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
-    di = ctx.dimin
-    ci = ctx.cimin
-    docs = deque(ctx.pathes)
+def handle_document_match(ctx, doc, matched_path):
+    # TODO
+    return True
 
-    while di <= ctx.dimax and docs:
-        doc = docs.popleft()
-        src = get_doc_source(ctx, src)
+def gen_content_matches(ctx, doc, src, src_xml):
+    content_matches = []
 
-        if have_xpath:
-            src_xml = lxml.html.fromstring(src)
+    if ctx.have_content_xpaths:
+        contents, contents_xml = ctx.content.match_xpath(src_xml, doc.path, ([doc.src], [src_xml]), True)
+    else:
+        contents = ctx.content.match_xpath(src_xml, doc.path, [src])
 
-        if need_content_xpaths:
-            contents, contents_xml = ctx.content.match_xpath(src_xml, doc.path, ([src], [src_xml]), True)
+    if ctx.have_label_matching and not ctx.labels_inside_content_xpath:
+        labels = []
+        for lx in ctx.label.match_xpath(src_xml, doc.path, [src]):
+            ctx.label.match_regex(src, doc.path, [lx])
+
+    ci = ctx.ci if ctx.ci_continuous else ctx.cimin
+    match_index = 0
+    labels_none_for_n = 0
+    for content in contents:
+        if ctx.ci > ctx.cimax:
+            # stopping doc handling since cimax was reached
+            # if cicont=1 then this also ends the whole program so we should no longer load documents
+            if ctx.ci_continuous:
+                return
+            break
+
+        if ctx.labels_inside_content:
+            cx = contents_xml[match_index] if ctx.have_content_xpaths else None
+            label = ctx.label.apply(content, cx, doc.path, [ctx.di, ci], ["di", "ci"])
+            if len(label) == 0:
+                # will skip the content if there is no label match for it
+                # TODO: make this configurable
+                continue
+            else:
+                label = label[0]
         else:
-            contents = ctx.content.match_xpath(src_xml, doc.path, [src])
+            if ctx.have_label_matching:
+                if not ctx.label.multimatch and len(labels) > 0:
+                    label = labels[0]
+                elif match_index in labels:
+                    label = labels[match_index]
+                    ctx.label.format.format(label, ctx.di, ci, label=label, di=ctx.di, ci=ci)
+                elif ctx.label_default_format is not None:
+                    label = ctx.label_default_format.format(ctx.di, ci, di=ctx.di, ci=ci)
+                else:
+                    labels_none_for_n += 1
+                    label = None
+            else:
+                label = ctx.label.format.format(ctx.di, ci, di=ctx.di, ci=ci)
+        content_matches.append(ContentMatch(label, content))
+        ctx.ci += 1
+        match_index += 1
+    return content_matches, labels_none_for_n
 
-        if have_label_matching and not ctx.labels_inside_content_xpath:
-            labels = []
-            for lx in ctx.label.match_xpath(src_xml, doc.path, [src]):
-                ctx.label.match_regex(src, doc.path, [lx])
+def gen_document_matches(ctx, doc, src, src_xml):
+    new_paths = ctx.document.apply(src, src_xml, doc.path)
+    document_type = doc.document_type
+    if document_type == DocumentType.RFILE:
+        document_type = DocumentType.URL
+    return [ Document(document_type, path) for path in new_paths ]
 
-        if not ctx.ci_continuous:
-            ci = ctx.cimin
-        i = 0
-        progress=False
-        for content in contents:
-            if ci > ctx.cimax:
-                # stopping doc handling since cimax was reached
-                # if cicont=1 then this also ends the whole program so we should no longer load documents
-                if ctx.ci_continuous:
-                    return
+def dl(ctx):
+    docs = deque(ctx.pathes)
+    di = ctx.dimin
+    handled_content_matches = {}
+    handled_document_matches = {}
+    while di <= ctx.dimax and docs:
+        doc_time_begin = datetime.datetime.now()
+        content_matches_in_doc = False
+        document_matches_in_doc = False
+        doc = docs.popleft()
+        try_number = 0
+        final_document_matches = []
+        final_content_matches = []
+        src = fetch_doc_source(ctx, doc)
+        while True:
+            try_number += 1
+            same_content = False
+            if try_number > 1:
+                assert ctx.selenium_variant != SeleniumVariant.DISABLED
+                src_new = ctx.selenium_driver.page_source
+                same_content = (src_new == src)
+
+            if not same_content:
+                src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
+                content_matches, labels_none_for_n = gen_content_matches(ctx, doc, src, src_xml)
+                document_matches = []
+                if di <= ctx.dimax:
+                    document_matches = gen_document_matches(ctx, doc, src, src_xml)
+
+                if ctx.selenium_strategy == SeleniumStrategy.FIRST:
+                    if not content_matches or (not document_matches and di < ctx.dimax):
+                        time.sleep(ctx.selenium_poll_frequency_ms)
+                        continue
+                if ctx.selenium_strategy == SeleniumStrategy.DEDUP:
+                    for cm in content_matches:
+                        if cm in handled_content_matches:
+                            continue
+                        handled_content_matches[cm] = None
+                        final_content_matches.append(cm)
+
+                    for dm in document_matches:
+                        if dm in handled_document_matches:
+                            continue
+                        handled_document_matches[dm] = None
+                        final_content_matches.append(dm)
+                else:
+                    final_content_matches = content_matches
+                    final_document_matches = document_matches
+
+            if ctx.selenium_strategy in [ SeleniumStrategy.ASK, SeleniumStrategy.DEDUP]:
+                content_count = len(final_content_matches)
+                docs_count = len(final_document_matches)
+                msg = ""
+                if try_number > 1:
+                    msg += "\r"
+                msg += f"accept {content_count} content"
+                if content_count != 1:
+                    msg += "s"
+
+                if labels_none_for_n != 0:
+                    msg += f" (missing {labels_none_for_n} labels)"
+                if ctx.have_multidocs and di <= ctx.dimax:
+                    msg += f" and {docs_count} document"
+                    if docs_count != 1:
+                        msg += "s"
+                msg += " [Y,n]? "
+                rlist = []
+                if try_number > 1:
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0)
+                if not rlist:
+                    sys.stdout.write(msg)
+                while True:
+                    if not rlist:
+                        rlist, _, _ = select.select([sys.stdin], [], [], 0)
+                    if rlist:
+                        accept = parse_bool_string(sys.stdin.readline(), True, None)
+                        if accept is None:
+                            print("please answer with yes or no")
+                            sys.stdout.write(msg)
+                            continue
+                        break
+                    accept = None
+                    break
+                if accept is None:
+                    time.sleep(ctx.selenium_poll_frequency_ms / 1000.0)
+                    continue
                 break
 
-            if ctx.labels_inside_content:
-                cx = contents_xml[i] if need_content_xpaths else None
-                label = ctx.label.apply(content, cx, doc.path, [di, ci], ["di", "ci"])
-                if len(label) != 1:
-                    # will skip the content
-                    label = None
-                else:
-                    label = label[0]
+        for i, cm in enumerate(final_content_matches):
+            if cm.label is not None:
+                content_matches_in_doc = content_matches_in_doc or write_out_match(ctx, doc, cm.content, cm.label)
             else:
-                if have_label_matching:
-                    if not ctx.label.multimatch and len(labels) > 0:
-                        label = labels[0]
-                    elif i in labels:
-                        label = labels[i]
-                        ctx.label.format.format(label, di, ci, label=label, di=di, ci=ci)
-                    elif ctx.label_default_format is not None:
-                        label = ctx.label_default_format.format(di, ci, di=di, ci=ci)
-                    else:
-                        sys.stderr.write(f"no labels! skipping remaining {len(contents) - i} content element(s) in document:\n    {doc.path}\n")
-                        break
-                else:
-                    label = ctx.label.format.format(di, ci, di=di, ci=ci)
-            if label is not None:
-                if write_out_match(ctx, content, label):
-                    progress = True
-            i += 1
-            ci += 1
-        if progress == False:
+                sys.stderr.write(f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}\n")
+                break
+        if not ctx.have_interactive_matching and not content_matches_in_doc:
             sys.stderr.write(f"no content matches for document: {doc.path}\n")
+        if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc:
+            sys.stderr.write(f"no content matches for document: {doc.path}\n")
+        if ctx.documents_bfs:
+            docs.extend(final_document_matches)
+        else:
+            docs.extendleft(final_document_matches)
         di += 1
-        if di <= ctx.dimax:
-            new_paths = ctx.document.apply(src, src_xml, doc.path)
-            if document_type == DocumentType.RFILE:
-                document_type = DocumentType.URL
-            entries = [ Document(document_type, path) for path in new_paths ]
-            if ctx.documents_bfs:
-                docs.extend(entries)
-            else:
-                docs.extendleft(entries)
+
     if di <= ctx.dimax and ctx.dimax != float("inf") :
         sys.stderr.write("exiting! all documents handled before dimax was reached\n")
 
@@ -534,13 +660,13 @@ def main():
     # testing, TODO: remove this
     if len(sys.argv) < 2:
         #sys.argv.append('lin=1')
-        sys.argv.append("url=https://twitter.com/number")
-        sys.argv.append('dx=//*[@id="id__410q4epfh7g"]')
+        sys.argv.append("rfile=dl_001.txt")
+        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
         sys.argv.append('dimax=3')
         sys.argv.append('ua=ua/0.0.0')
         #sys.argv.append("tbdir=/opt/tor")
         sys.argv.append("sel=f")
-        sys.argv.append("strat=int")
+        sys.argv.append("strat=ask")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
@@ -603,12 +729,12 @@ def main():
         elif begins(arg, "din="):
             ctx.document.interactive = get_bool_arg(arg, "din")
 
-        elif begins(arg, "url"):
-            ctx.pathes.append((get_arg(arg), DocumentType.URL))
-        elif begins(arg, "file"):
-            ctx.pathes.append((get_arg(arg), DocumentType.FILE))
-        elif begins(arg, "rfile"):
-            ctx.pathes.append((get_arg(arg), DocumentType.RFILE))
+        elif begins(arg, "url="):
+            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg)))
+        elif begins(arg, "file="):
+            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg)))
+        elif begins(arg, "rfile="):
+            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg)))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "sel="):
@@ -620,17 +746,17 @@ def main():
             }
             res = select_variant(get_arg(arg), variants_dict)
             if res is None:
-                error("no matching selenium variant for '{arg}'")
+                error(f"no matching selenium variant for '{arg}'")
             ctx.selenium_variant = res
         elif begins(arg, "strat="):
             strats_dict = {
                 "first": SeleniumStrategy.FIRST,
-                "new": SeleniumStrategy.NEW,
-                "interactive": SeleniumStrategy.INTERACTIVE,
+                "ask": SeleniumStrategy.ASK,
+                "dedup": SeleniumStrategy.DEDUP,
             }
             res = select_variant(get_arg(arg), strats_dict)
             if res is None:
-                error("no matching selenium strategy for '{arg}'")
+                error(f"no matching selenium strategy for '{arg}'")
             ctx.selenium_strategy = res
         elif begins(arg, "tbdir="):
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
