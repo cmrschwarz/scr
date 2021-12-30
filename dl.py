@@ -15,7 +15,7 @@ from tbselenium.tbdriver import TorBrowserDriver
 from selenium import webdriver
 from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
-from enum import Enum
+from enum import Enum, IntEnum
 import time
 import datetime
 
@@ -44,6 +44,12 @@ class SeleniumStrategy(Enum):
     FIRST = 1
     ASK = 2
     DEDUP = 3
+
+class Verbosity(IntEnum):
+    SILENT = 0
+    ERROR = 1
+    WARN = 2
+    INFO = 3
 
 class ContentMatch:
     def __init__(self, label, content):
@@ -202,6 +208,7 @@ class DlContext:
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
+        self.verbosity = Verbosity.INFO
 
         self.have_xpath_matching = False
         self.have_label_matching = False
@@ -234,7 +241,7 @@ def help(err=False):
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
-        cprint=<bool>        print found content to stdout
+        cprint=<bool>        print found content to stdout instead of writing it to a file
         cin=<bool>           give a prompt to ignore a potential content match
         craw=<bool>          don't treat content as a link, but as raw text
         cesc=<string>        escape sequence to terminate content editing for craw=true cin=true
@@ -265,6 +272,7 @@ def help(err=False):
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
     Further Options:
+        sel=<browser>       output verbosity levels (default: info, values: info,warn,error,silent)
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
@@ -560,7 +568,8 @@ def handle_content_match(ctx, doc, content, label, di, ci):
                 f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
         f.write(content)
         f.close()
-        print(f"wrote content into {label} for {doc.path}")
+        if ctx.verbosity >= Verbosity.INFO:
+            print(f"wrote content into {label} for {doc.path}")
     return True
 
 def handle_document_match(ctx, doc, matched_path):
@@ -874,6 +883,17 @@ def main():
             ctx.user_agent = get_arg(arg)
         elif begins(arg, "uarandom="):
             ctx.user_agent_random = get_bool_arg(arg, "uarandom")
+        elif begins(arg, "v="):
+            strats_dict = {
+                "silent": Verbosity.SILENT,
+                "info": Verbosity.INFO,
+                "warn": Verbosity.WARN,
+                "error": Verbosity.ERROR,
+            }
+            res = select_variant(get_arg(arg), strats_dict)
+            if res is None:
+                error(f"no matching verbosity level for '{arg}'")
+            ctx.verbosity = res
         else:
             error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
