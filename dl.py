@@ -181,7 +181,7 @@ class DlContext:
         self.ci = self.cimin
         self.cimax = float("inf")
         self.ci_continuous = False
-        self.cprint = False
+        self.content_print = False
         self.content_raw = False
         self.content.multimatch = True
 
@@ -237,7 +237,7 @@ def help(err=False):
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
         cf=<format string>   content format string (args: content, di, ci)
-        cm=<bool>            allow multiple content matches in one document instead of picking the first
+        cm=<bool>            allow multiple content matches in one document instead of picking the first, defaults to true!
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
@@ -419,7 +419,7 @@ def setup(ctx):
             form += f"{{di:0{didigits}}}"
         else:
             form = "dl.txt"
-        form += "" if ctx.cprint else ".txt"
+        form += "" if ctx.content_print else ".txt"
         if ctx.label.format is None: ctx.label.format = form
         if ctx.label_default_format is None: ctx.label_default_format = form
 
@@ -552,11 +552,15 @@ def handle_content_match(ctx, doc, content, label, di, ci):
 
     if not ctx.content_raw:
         try:
-            content = requests.get(content).content
+            res = requests.get(content)
+            if ctx.content_print:
+                content = res.text
+            else:
+                content = res.content
         except Exception as ex:
             sys.stderr.write(f'{document_context}: failed to download content "{content}": {str(ex)}')
             return False
-    if ctx.cprint:
+    if ctx.content_print:
         print(f'"{doc.path}": aquired "{label}":\n' + content)
     else:
         if not ctx.is_valid_label(label):
@@ -801,13 +805,13 @@ def main():
             ctx.cimax = get_int_arg(arg, "cimax")
         elif begins(arg, "cicont="):
             ctx.ci_continuous = get_bool_arg(arg, "cicont")
-        elif begins(arg, "cprint"):
-            ctx.print_ctx = get_bool_arg(arg, "cprint")
-        elif begins(arg, "cin"):
+        elif begins(arg, "cprint="):
+            ctx.content_print = get_bool_arg(arg, "cprint")
+        elif begins(arg, "cin="):
             ctx.content.interactive = get_bool_arg(arg, "cin")
-        elif begins(arg, "craw"):
+        elif begins(arg, "craw="):
             ctx.content_raw = get_bool_arg(arg, "craw")
-        elif begins(arg, "cesc"):
+        elif begins(arg, "cesc="):
             ctx.content_escape_sequence = get_arg(arg)
 
         elif begins(arg, "lx="):
