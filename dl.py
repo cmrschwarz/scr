@@ -470,12 +470,18 @@ def handle_content_match(ctx, doc, content, label, di, ci):
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
     else:
         label = ctx.label.format.format([label, di, ci], label=label, di=di, ci=ci)
+    document_context = f'document "{doc.path}"'
+    if ctx.have_multidocs:
+        if ctx.content.multimatch:
+            document_context += f"(di={di}, ci={ci})"
+        else:
+            document_context += f"(di={di})"
+    else:
+        if ctx.content.multimatch:
+            document_context += f"(ci={di})"
 
-    if ctx.content_raw and (ctx.content.interactive or ctx.label.interactive):
-        context = f'document "{doc.path}" ('
-        if ctx.have_multidocs:
-            context += f"di={di}, "
-        context += f"ci={ci})"
+    if ctx.content_raw:
+        context = document_context
 
     while True:
         if not ctx.content_raw:
@@ -536,13 +542,19 @@ def handle_content_match(ctx, doc, content, label, di, ci):
                 assert res == 2
             label = input("enter new label: ")
 
+    if not ctx.content_raw:
+        try:
+            content = requests.get(content).content
+        except Exception as ex:
+            sys.stderr.write(f'{document_context}: failed to download content "{content}": {str(ex)}')
+            return False
     if ctx.cprint:
         print(f'"{doc.path}": aquired "{label}":\n' + content)
     else:
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         try:
-            f = open(label, "w")
+            f = open(label, "w" if ctx.content_raw else "wb")
         except Exception as ex:
             error(
                 f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
@@ -759,26 +771,8 @@ def select_variant(val, variants_dict):
 
 def main():
     ctx = DlContext()
-    # testing, TODO: remove this
-    if len(sys.argv) < 2:
-        #sys.argv.append('lin=1')
-        sys.argv.append("rfile=dl_1.txt")
-        #sys.argv.append("cx=//img/@src")
-        #sys.argv.append('dx=//span[@class="next-button"]/a/@href')
-        #sys.argv.append('dimax=3')
-        #sys.argv.append('ua=ua/0.0.0')
-        ##sys.argv.append("tbdir=/opt/tor")
-        #sys.argv.append("sel=f")
-        #sys.argv.append("strat=dedup")
-        #sys.argv.append("cin=1")
-        #sys.argv.append("lin=1")
-        #sys.argv.append("din=1")
-        #sys.argv.append("url=https://old.reddit.com/")
-        sys.argv.append("cx=//img/@src")
-        sys.argv.append("sel=f")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
-
 
     for arg in sys.argv[1:]:
         if arg == "--help" or arg=="-h":
