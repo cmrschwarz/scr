@@ -25,6 +25,7 @@ def prefixes(str):
 yes_indicating_strings = prefixes("yes") + prefixes("true") + ["1", "+"]
 no_indicating_strings = prefixes("no") + prefixes("false") + ["0", "-"]
 skip_indicating_strings = prefixes("skip")
+next_doc_indicating_strings = prefixes("nextdoc")
 edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
 
@@ -272,7 +273,7 @@ def help(err=False):
         csave=<bool>         save output to files, defaults to true
         cin=<bool>           give a prompt to ignore a potential content match
         craw=<bool>          don't treat content as a link, but as raw data
-        cesc=<string>        escape sequence to terminate content editing for craw=true cin=true
+        cesc=<string>        escape sequence to terminate content
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -515,12 +516,12 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
     document_context = f'document "{doc.path}"'
     if ctx.have_multidocs:
         if ctx.content.multimatch:
-            document_context += f"(di={di}, ci={ci})"
+            document_context += f" (di={di}, ci={ci})"
         else:
-            document_context += f"(di={di})"
+            document_context += f" (di={di})"
     else:
         if ctx.content.multimatch:
-            document_context += f"(ci={di})"
+            document_context += f" (ci={ci})"
 
     if ctx.content_raw:
         context = document_context
@@ -544,12 +545,13 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
 
         if ctx.content.interactive:
             res = prompt(
-                f'accept {context} (label "{label}") [Yes/edit/skip]? ',
-                [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, skip_indicating_strings)],
+                f'accept {context} (label "{label}") [Yes/edit/skip/nextdoc]? ',
+                [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, skip_indicating_strings), (4, next_doc_indicating_strings)],
                 1
             )
             if res == 1: break
-            if res == 3: return
+            if res == 3: return False
+            if res == 4: return None
             assert res == 2
             if not ctx.content_raw:
                 content = input("enter new content url:\n")
@@ -599,7 +601,7 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
             sys.stderr.write(f'{document_context}: failed to download content "{content}": {str(ex)}')
             return False
     else:
-        print_string = " " + content
+        print_string = "\n" + content + ctx.content_escape_sequence
 
     if ctx.content_print_mode != PrintMode.OFF:
         print(f'{label}:' + print_string)
@@ -773,6 +775,8 @@ def dl(ctx):
         for i, cm in enumerate(final_content_matches):
             if not ctx.have_label_matching or cm.label_match is not None:
                 accept = handle_content_match(ctx, doc, cm.content, cm.label_match, di, ci)
+                if accept is None:
+                    break
                 if accept:
                     content_matches_in_doc = True
                     ci += 1
