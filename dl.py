@@ -6,6 +6,9 @@ import sys
 import select
 import re
 import os
+import validators
+import readline
+import urllib.parse
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
@@ -168,10 +171,13 @@ class DlContext:
 
         self.content = Locator("content")
         self.cimin = 1
+        self.content_escape_sequence = "<END>"
         self.ci = self.cimin
         self.cimax = float("inf")
         self.ci_continuous = False
         self.cprint = False
+        self.content_raw = False
+        self.content.multimatch = True
 
         self.label = Locator("label")
         self.label_default_format = None
@@ -230,6 +236,8 @@ def help(err=False):
         cicont=<bool>        don't reset the content index for each document
         cprint=<bool>        print found content to stdout
         cin=<bool>           give a prompt to ignore a potential content match
+        craw=<bool>          don't treat content as a link, but as raw text
+        cesc=<string>        escape sequence to terminate content editing for craw=true cin=true
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -354,24 +362,6 @@ def setup(ctx):
 
     [l.setup() for l in ctx.locators]
 
-    if ctx.label.format is None or ctx.label_default_format is None:
-        if ctx.label.xpath is None and ctx.label.regex is None:
-            form = "dl_"
-        else:
-            form = "{label}_"
-        # if max was not set it is 'inf' which has length 3 which is a fine default
-        didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
-        cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
-        if ctx.ci_continuous:
-            form += f"{{ci:0{cidigits}}}"
-        elif ctx.document.multimatch:
-            form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
-        else:
-            form += f"{{di:0{didigits}}}"
-        form += "" if ctx.cprint else ".txt"
-        if ctx.label.format is None: ctx.label.format = form
-        if ctx.label_default_format is None: ctx.label_default_format = form
-
     if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
     if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
 
@@ -393,8 +383,6 @@ def setup(ctx):
     if ctx.documents_are_files and ctx.tor:
         error(f"the modes dfiles and tor are incompatible")
 
-    setup_selenium(ctx)
-
     ctx.have_xpath_matching = max([l.xpath is not None for l in ctx.locators])
     ctx.have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
     ctx.have_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
@@ -403,8 +391,33 @@ def setup(ctx):
 
     if not ctx.have_multidocs:
         ctx.dimax = ctx.dimin
-    ctx.di = ctx.dimin
-    ctx.ci = ctx.cimin
+
+    if ctx.label.format is None or ctx.label_default_format is None:
+        if ctx.label.xpath is None and ctx.label.regex is None:
+            form = "dl_"
+        else:
+            form = "{label}_"
+        # if max was not set it is 'inf' which has length 3 which is a fine default
+        didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
+        cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
+        if ctx.ci_continuous:
+            form += f"{{ci:0{cidigits}}}"
+        elif ctx.content.multimatch:
+            if ctx.have_multidocs:
+                form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
+            else:
+                form += f"{{ci:0{cidigits}}}"
+        elif ctx.have_multidocs:
+            form += f"{{di:0{didigits}}}"
+        else:
+            form = "dl.txt"
+        form += "" if ctx.cprint else ".txt"
+        if ctx.label.format is None: ctx.label.format = form
+        if ctx.label_default_format is None: ctx.label_default_format = form
+
+
+
+    setup_selenium(ctx)
 
 def parse_prompt_option(val, options, default=None, unparsable_val=None):
     val = val.strip().lower()
@@ -457,14 +470,60 @@ def handle_content_match(ctx, doc, content, label, di, ci):
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
     else:
         label = ctx.label.format.format([label, di, ci], label=label, di=di, ci=ci)
+
+    if ctx.content_raw and (ctx.content.interactive or ctx.label.interactive):
+        context = f'document "{doc.path}" ('
+        if ctx.have_multidocs:
+            context += f"di={di}, "
+        context += f"ci={ci})"
+
+    while True:
+        if not ctx.content_raw:
+            if doc.document_type == DocumentType.URL:
+                doc_url_parsed = urllib.parse.urlparse(doc.path)
+                content_url_parsed = urllib.parse.urlparse(content)
+                if content_url_parsed.netloc == "":
+                    content_url_parsed = content_url_parsed._replace(netloc=doc_url_parsed.netloc)
+                if content_url_parsed.scheme == "":
+                    content_url_parsed = content_url_parsed._replace(scheme=doc_url_parsed.scheme if (doc_url_parsed.scheme != "") else "http")
+                content = content_url_parsed.geturl()
+            elif doc.document_type == DocumentType.RFILE:
+                content_url_parsed = urllib.parse.urlparse(content)
+                if content_url_parsed.scheme == "":
+                    content_url_parsed = content_url_parsed._replace(scheme="http")
+                content = content_url_parsed.geturl()
+            context = f'content url "{content}"'
+
+        if ctx.content.interactive:
+            res = prompt(
+                f'accept {context} (label "{label}") [Yes/edit/skip]? ',
+                [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, skip_indicating_strings)],
+                1
+            )
+            if res == 1: break
+            if res == 3: return
+            assert res == 2
+            if not ctx.content_raw:
+                content = input("enter new content url:\n")
+            else:
+                sys.stdout.write(f'enter new content (terminate with the string "{ctx.content_escape_sequence}"):\n')
+                content = ""
+                while True:
+                    content += input() + "\n"
+                    i = content.find(ctx.content_escape_sequence)
+                    if i != -1:
+                        content = content[:i]
+                        break
+        break
+
     if ctx.label.interactive:
         while True:
             if not ctx.is_valid_label(label):
                 sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
                 res = prompt(
-                    f'"{doc.path}": accept label "{label}" (Yes/no/inspect/skip)? ',
-                    [(1, yes_indicating_strings), (2, no_indicating_strings), (3, inspect_indicating_strings), (4, skip_indicating_strings)],
+                    f'{context}: accept label "{label}" [Yes/edit/inspect/skip]? ',
+                    [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, inspect_indicating_strings), (4, skip_indicating_strings)],
                     1
                 )
                 if res == 1: break
@@ -495,7 +554,7 @@ def handle_content_match(ctx, doc, content, label, di, ci):
 def handle_document_match(ctx, doc, matched_path):
     if not ctx.document.interactive: return True
     res = prompt(
-        f'"{doc.path}": accept matched document "{matched_path}" (Yes/no/edit)? ',
+        f'"{doc.path}": accept matched document "{matched_path}" [Yes/no/edit]? ',
         [(1, yes_indicating_strings), (2, no_indicating_strings), (3, edit_indicating_strings)],
         1
     )
@@ -560,7 +619,6 @@ def dl(ctx):
     handled_content_matches = {}
     handled_document_matches = {}
     while di <= ctx.dimax and docs:
-        doc_time_begin = datetime.datetime.now()
         content_matches_in_doc = False
         document_matches_in_doc = False
         doc = docs.popleft()
@@ -606,7 +664,7 @@ def dl(ctx):
                     final_content_matches = content_matches
                     final_document_matches = document_matches
 
-            if ctx.selenium_strategy in [ SeleniumStrategy.ASK, SeleniumStrategy.DEDUP]:
+            if ctx.selenium_strategy in [SeleniumStrategy.ASK, SeleniumStrategy.DEDUP] and not static_content:
                 content_count = len(final_content_matches)
                 docs_count = len(final_document_matches)
                 msg = ""
@@ -622,7 +680,7 @@ def dl(ctx):
                     msg += f" and {docs_count} document"
                     if docs_count != 1:
                         msg += "s"
-                msg += " (Yes/no)? "
+                msg += " [Yes/skip]? "
                 rlist = []
                 if try_number > 1:
                     rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
@@ -632,9 +690,9 @@ def dl(ctx):
                     if not rlist:
                         rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
                     if rlist:
-                        accept = parse_bool_string(sys.stdin.readline(), True, None)
+                        accept = parse_prompt_option(sys.stdin.readline(), [(True, yes_indicating_strings), (False, skip_indicating_strings)], True)
                         if accept is None:
-                            print("please answer with yes or no")
+                            print("please answer with yes or skip")
                             sys.stdout.write(msg)
                             continue
                         break
@@ -642,6 +700,7 @@ def dl(ctx):
                     break
                 if accept:
                     break
+            break
         if ctx.ci_continuous:
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
@@ -703,16 +762,20 @@ def main():
     # testing, TODO: remove this
     if len(sys.argv) < 2:
         #sys.argv.append('lin=1')
-        sys.argv.append("rfile=dl_001.txt")
-        sys.argv.append('dx=//span[@class="next-button"]/a/@href')
-        sys.argv.append('dimax=3')
-        sys.argv.append('ua=ua/0.0.0')
-        #sys.argv.append("tbdir=/opt/tor")
+        sys.argv.append("rfile=dl_1.txt")
+        #sys.argv.append("cx=//img/@src")
+        #sys.argv.append('dx=//span[@class="next-button"]/a/@href')
+        #sys.argv.append('dimax=3')
+        #sys.argv.append('ua=ua/0.0.0')
+        ##sys.argv.append("tbdir=/opt/tor")
+        #sys.argv.append("sel=f")
+        #sys.argv.append("strat=dedup")
+        #sys.argv.append("cin=1")
+        #sys.argv.append("lin=1")
+        #sys.argv.append("din=1")
+        #sys.argv.append("url=https://old.reddit.com/")
+        sys.argv.append("cx=//img/@src")
         sys.argv.append("sel=f")
-        sys.argv.append("strat=dedup")
-        sys.argv.append("cin=1")
-        sys.argv.append("lin=1")
-        sys.argv.append("din=1")
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
@@ -739,6 +802,10 @@ def main():
             ctx.print_ctx = get_bool_arg(arg, "cprint")
         elif begins(arg, "cin"):
             ctx.content.interactive = get_bool_arg(arg, "cin")
+        elif begins(arg, "craw"):
+            ctx.content_raw = get_bool_arg(arg, "craw")
+        elif begins(arg, "cesc"):
+            ctx.content_escape_sequence = get_arg(arg)
 
         elif begins(arg, "lx="):
             ctx.label.xpath = get_arg(arg)
