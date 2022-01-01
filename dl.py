@@ -6,7 +6,7 @@ import sys
 import select
 import re
 import os
-import validators
+from string import Formatter
 import readline
 import urllib.parse
 from http.cookiejar import MozillaCookieJar
@@ -52,11 +52,6 @@ class Verbosity(IntEnum):
     WARN = 2
     INFO = 3
 
-class PrintMode(Enum):
-    OFF = 0
-    URL = 1
-    DATA = 2
-
 class ContentMatch:
     def __init__(self, label_match, content):
         self.label_match = label_match
@@ -78,9 +73,7 @@ class RegexMatch:
         self.group_dict = group_dict
 
     def __key(self):
-        # it is assumed here that matches from different regexes are never compared, therefore
-        # same match means same groups
-        return self.value
+        return [self.value] + self.group_list + sorted(self.group_dict.items())
 
     def __eq__(x, y):
         return isinstance(y, x.__class__) and x.__key() == y.__key()
@@ -208,8 +201,8 @@ class DlContext:
         self.ci = self.cimin
         self.cimax = float("inf")
         self.ci_continuous = False
-        self.content_save = True
-        self.content_print_mode = PrintMode.OFF
+        self.content_save_format = None
+        self.content_print_format = None
         self.content_raw = False
         self.content.multimatch = True
 
@@ -242,6 +235,8 @@ class DlContext:
         self.have_label_matching = False
         self.have_content_xpaths = False
         self.have_interactive_matching = False
+        self.content_download_required = False
+
 
     def is_valid_label(self, label):
         if self.allow_slashes_in_labels: return True
@@ -264,13 +259,16 @@ def help(err=False):
     Content to Write out:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
-        cf=<format string>   content format string (args: <regex capture groups>, content, di, ci)
-        cm=<bool>            allow multiple content matches in one document instead of picking the first, defaults to true
+        cf=<format string>   content format string (args: <cr capture groups>, content, di, ci)
+        cm=<bool>            allow multiple content matches in one document instead of picking the first
+                             (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
-        cprint=<print mode>  print found content (default: off, values: off, url, data)
-        csave=<bool>         save output to files, defaults to true
+        cpf=<format string>  print the result of this format string for each content, empty to disable
+                             (args: label, content, document, [url], <lr capture groups>, <cr capture groups>)
+        csf=<format string>  save content to file at the path resulting from the format string, non empty to enable
+                             (args: label, content, document, [url], <lr capture groups>, <cr capture groups>)
         cin=<bool>           give a prompt to ignore a potential content match
         craw=<bool>          don't treat content as a link, but as raw data
         cesc=<string>        escape sequence to terminate content
@@ -278,7 +276,7 @@ def help(err=False):
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
-        lf=<format string>  label format string (args: label, di, ci)
+        lf=<format string>  label format string (args: <lr capture groups>, label, di, ci)
         lic=<bool>          match for the label within the content instead of the hole document
         las=<bool>          allow slashes in labels
         lm=<bool>           allow multiple label matches in one document instead of picking the first
@@ -288,7 +286,7 @@ def help(err=False):
     Further documents to scan referenced in already found ones:
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
-        df=<format string>  document format string (args: document)
+        df=<format string>  document format string (args: <dr capture groups>, document)
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
         dm=<bool>           allow multiple document matches in one document instead of picking the first
@@ -305,9 +303,11 @@ def help(err=False):
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
-        sel=<browser>       use selenium to load urls into an interactive browser session (values: tor,chrome,firefox,disabled)
+        sel=<browser>       use selenium to load urls into an interactive browser session
+                            (default: disabled, values: tor, chrome, firefox, disabled)
         strat=<browser>     matching strategy for selenium (values: first, new, interactive)
-        tbdir=<path>        root directory of the tor browser installation, implies selenium=tor (default: environment variable TOR_BROWSER_DIR)
+        tbdir=<path>        root directory of the tor browser installation, implies sel=tor
+                            (default: environment variable TOR_BROWSER_DIR)
         """.strip()
     if err:
         error(text)
@@ -318,6 +318,9 @@ def add_cwd_to_path():
     cwd = os.path.dirname(os.path.abspath(__file__))
     os.environ["PATH"] += ":" + cwd
     return cwd
+
+def download_url(ctx, url):
+   return requests.get(url, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent})
 
 def setup_selenium_tor(ctx):
     # use bundled geckodriver if available
@@ -393,6 +396,10 @@ def setup_selenium(ctx):
                 cookie_dict['path'] = cookie.path
             ctx.selenium_driver.add_cookie(cookie_dict)
 
+def format_string_uses_arg(fmt_string, arg_pos, arg_name):
+    fmt_args = [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
+    return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
+
 def setup(ctx):
     if len(ctx.pathes) == 0:
         error("must specify at least one url or file")
@@ -409,11 +416,8 @@ def setup(ctx):
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
 
-    if ctx.content_print_mode == PrintMode.OFF and ctx.content_save:
-        error(f"one form of output (via cprint or csave) must be enabled")
-
-    if ctx.content_print_mode == PrintMode.URL and ctx.content_raw:
-        error(f"the options cprint=url and craw=true are incompatible")
+    if ctx.content_print_mode is None and not ctx.content_save:
+        error(f"one form of output (via cpf or csf) must be enabled")
 
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
@@ -453,12 +457,16 @@ def setup(ctx):
         elif ctx.have_multidocs:
             form += f"{{di:0{didigits}}}"
         else:
-            form = "dl.txt"
+            form = "dl"
         form += "" if not ctx.content_save else ".txt"
         if ctx.label.format is None: ctx.label.format = form
         if ctx.label_default_format is None: ctx.label_default_format = form
 
-
+    if not ctx.content_raw:
+        if ctx.content_save_format:
+            ctx.content_download_required = format_string_uses_arg(ctx.content_save_format, 0, "content")
+        if ctx.content_print_format and not ctx.content_download_required:
+            ctx.content_download_required = format_string_uses_arg(ctx.content_print_format, 0, "content")
 
     setup_selenium(ctx)
 
@@ -502,8 +510,9 @@ def fetch_doc_source(ctx, doc):
             ctx.selenium_driver.get(doc.path)
             src = ctx.selenium_driver.page_source
         else:
-            with requests.get(doc.path, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent}) as response:
-                src = response.text
+            res = download_url(ctx, doc.path)
+            src = res.text
+            res.close()
             if not src:
                 error(f"aborting! failed to download {doc.path}")
     return src
@@ -589,22 +598,26 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
     if not ctx.content_raw:
         try:
             url = content
-            if ctx.content_print_mode == PrintMode.DATA or ctx.content_save:
-                res = requests.get(content)
+            if ctx.content_download_required:
+                res = download_url(ctx, content)
                 content = res.content
-
-            if ctx.content_print_mode == PrintMode.URL:
-                print_string = " " + url
-            elif ctx.content_print_mode == PrintMode.DATA:
-                print_string = "\n" + res.text
+                content_txt = res.text
+                res.close()
+            else:
+                content = None
         except Exception as ex:
-            sys.stderr.write(f'{document_context}: failed to download content "{content}": {str(ex)}')
+            sys.stderr.write(f'{document_context}: failed to download content "{url}": {str(ex)}')
             return False
     else:
-        print_string = "\n" + content + ctx.content_escape_sequence
+        content_txt = content
 
-    if ctx.content_print_mode != PrintMode.OFF:
-        print(f'{label}:' + print_string)
+    if ctx.content_print_format != None:
+        args_list = [content_txt, label, doc.path, url]
+        args_dict = {"content_txt": content_txt, "label": label, "document": doc.path}
+        if not ctx.content_raw:
+            args_dict["url"] = url
+        str = ctx.content_print_format.format(*args_list, **args_dict)
+        print(str)
 
     if ctx.content_save:
         if not ctx.is_valid_label(label):
@@ -851,20 +864,12 @@ def main():
             ctx.cimax = get_int_arg(arg, "cimax")
         elif begins(arg, "cicont="):
             ctx.ci_continuous = get_bool_arg(arg, "cicont")
-        elif begins(arg, "cprint="):
-            variants_dict = {
-                "off": PrintMode.OFF,
-                "url": PrintMode.URL,
-                "data": PrintMode.DATA,
-            }
-            res = select_variant(get_arg(arg), variants_dict)
-            if res is None:
-                error(f"no matching print mode for '{arg}'")
-            ctx.content_print_mode = res
+        elif begins(arg, "cpf="):
+            ctx.content_print_format = get_arg(arg)
         elif begins(arg, "cin="):
             ctx.content.interactive = get_bool_arg(arg, "cin")
-        elif begins(arg, "csave="):
-            ctx.content_save = get_bool_arg(arg, "csave")
+        elif begins(arg, "csf="):
+            ctx.content_save_format = get_arg(arg)
         elif begins(arg, "craw="):
             ctx.content_raw = get_bool_arg(arg, "craw")
         elif begins(arg, "cesc="):
