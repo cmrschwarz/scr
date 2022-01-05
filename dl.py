@@ -81,6 +81,10 @@ class RegexMatch:
     def __hash__(self):
         return hash(self.__key())
 
+def empty_string_to_none(string):
+    if string == "": return None
+    return string
+
 class Locator:
     def __init__(self, name):
         self.name = name
@@ -105,6 +109,9 @@ class Locator:
 
     def setup(self):
         self.compile_regex()
+        self.xpath = empty_string_to_none(self.xpath)
+        self.regex = empty_string_to_none(self.regex)
+        self.format = empty_string_to_none(self.format)
         if self.format is None:
             if self.xpath is not None or self.regex is not None:
                 self.format = "{}"
@@ -115,7 +122,7 @@ class Locator:
     def match_xpath(self, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None: return default
         try:
-            res_xpath = src_xml.xpath(self.xpath)
+            xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
             error(f"aborting! invalid {self.name[0]}x: {ex.msg}: {path}")
         except Exception as ex:
@@ -123,22 +130,23 @@ class Locator:
                 f"aborting! failed to apply {self.name[0]}x: "
                 + f"{ex.__class__.__name__}: {str(ex)}: {path}"
             )
-        if len(res_xpath) > 1 and not self.multimatch:
-            res_xpath = res_xpath[:1]
+        if len(xpath_matches) > 1 and not self.multimatch:
+            xpath_matches = xpath_matches[:1]
         res = []
         res_xml = []
-        for r in res_xpath:
-            if type(r) == lxml.etree._ElementUnicodeResult:
-                res.append(str(r))
+        for xm in xpath_matches:
+            if type(xm) == lxml.etree._ElementUnicodeResult:
+                string = str(xm)
+                res.append(string)
                 if return_xml_tuple:
                     try:
-                        r = lxml.html.fromstring(res[-1])
+                        res_xml.append(lxml.html.fromstring(string))
                     except:
                         pass
             else:
-                res.append(lxml.html.tostring(r, encoding="utf-8"))
-            if return_xml_tuple:
-                res_xml.append(r)
+                res.append(lxml.html.tostring(xm, encoding="unicode"))
+                if return_xml_tuple:
+                    res_xml.append(xm)
         if return_xml_tuple:
             return res, res_xml
         return res
@@ -178,9 +186,10 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path):
+    def __init__(self, document_type, path, encoding):
         self.document_type = document_type
         self.path = path
+        self.encoding = encoding
 
     def __key(self):
         return (self.document_type, self.path)
@@ -201,8 +210,8 @@ class DlContext:
         self.ci = self.cimin
         self.cimax = float("inf")
         self.ci_continuous = False
-        self.content_save_format = None
-        self.content_print_format = None
+        self.content_save_format = ""
+        self.content_print_format = ""
         self.content_raw = False
         self.content.multimatch = True
 
@@ -230,6 +239,7 @@ class DlContext:
         self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
         self.verbosity = Verbosity.INFO
+        self.default_encoding = "utf-8"
 
         self.have_xpath_matching = False
         self.have_label_matching = False
@@ -308,6 +318,7 @@ def help(err=False):
         strat=<browser>     matching strategy for selenium (values: first, new, interactive)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
+        enc=<encoding>      default encoding to use for following documents, default is utf-8 
         """.strip()
     if err:
         error(text)
@@ -416,9 +427,11 @@ def setup(ctx):
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
 
-    if ctx.content_print_mode is None and not ctx.content_save:
-        error(f"one form of output (via cpf or csf) must be enabled")
-
+    if not ctx.content_print_format and not ctx.content_save_format:
+        if ctx.content_raw:
+            ctx.content_print_format = "{label}: \n {content}"
+        else:
+            ctx.content_print_format = "{label}: {url}"
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
@@ -458,7 +471,7 @@ def setup(ctx):
             form += f"{{di:0{didigits}}}"
         else:
             form = "dl"
-        form += "" if not ctx.content_save else ".txt"
+        form += "" if not ctx.content_save_format else ".txt"
         if ctx.label.format is None: ctx.label.format = form
         if ctx.label_default_format is None: ctx.label_default_format = form
 
@@ -500,8 +513,8 @@ def prompt_yes_no(prompt_text, default=None):
 def fetch_doc_source(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
-            with open(doc.path, "r") as f:
-                src = f.read()
+            with open(doc.path, "rb") as f:
+                src = str(f.read(), encoding=doc.encoding)
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
@@ -512,12 +525,14 @@ def fetch_doc_source(ctx, doc):
         else:
             res = download_url(ctx, doc.path)
             src = res.text
+            if res.encoding is not None:
+                doc.encoding = res.encoding
             res.close()
             if not src:
                 error(f"aborting! failed to download {doc.path}")
     return src
 
-def handle_content_match(ctx, doc, content, label_match, di, ci):
+def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
     if label_match is None:
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
     else:
@@ -534,23 +549,25 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
 
     if ctx.content_raw:
         context = document_context
+    else:
+        content_url = content_txt
 
     while True:
         if not ctx.content_raw:
             if doc.document_type == DocumentType.URL:
                 doc_url_parsed = urllib.parse.urlparse(doc.path)
-                content_url_parsed = urllib.parse.urlparse(content)
+                content_url_parsed = urllib.parse.urlparse(content_url)
                 if content_url_parsed.netloc == "":
                     content_url_parsed = content_url_parsed._replace(netloc=doc_url_parsed.netloc)
                 if content_url_parsed.scheme == "":
                     content_url_parsed = content_url_parsed._replace(scheme=doc_url_parsed.scheme if (doc_url_parsed.scheme != "") else "http")
-                content = content_url_parsed.geturl()
+                content_url = content_url_parsed.geturl()
             elif doc.document_type == DocumentType.RFILE:
-                content_url_parsed = urllib.parse.urlparse(content)
+                content_url_parsed = urllib.parse.urlparse(content_url)
                 if content_url_parsed.scheme == "":
                     content_url_parsed = content_url_parsed._replace(scheme="http")
-                content = content_url_parsed.geturl()
-            context = f'content url "{content}"'
+                content_url = content_url_parsed.geturl()
+            context = f'content url "{content_url}"'
 
         if ctx.content.interactive:
             res = prompt(
@@ -563,15 +580,15 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
             if res == 4: return None
             assert res == 2
             if not ctx.content_raw:
-                content = input("enter new content url:\n")
+                download_url = input("enter new content url:\n")
             else:
                 sys.stdout.write(f'enter new content (terminate with the string "{ctx.content_escape_sequence}"):\n')
-                content = ""
+                content_txt = ""
                 while True:
-                    content += input() + "\n"
-                    i = content.find(ctx.content_escape_sequence)
+                    content_txt += input() + "\n"
+                    i = content_txt.find(ctx.content_escape_sequence)
                     if i != -1:
-                        content = content[:i]
+                        content_txt = content_txt[:i]
                         break
         break
 
@@ -587,7 +604,7 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
                 )
                 if res == 1: break
                 if res == 3:
-                    print(f'"{doc.path}": content for "{label}":\n' + content)
+                    print(f'"{doc.path}": content for "{label}":\n' + content_txt)
                     continue
                 if res == 4:
                     print("skipping...")
@@ -597,29 +614,27 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
 
     if not ctx.content_raw:
         try:
-            url = content
             if ctx.content_download_required:
-                res = download_url(ctx, content)
-                content = res.content
+                res = download_url(ctx, content_url)
+                content_bytes = res.content
                 content_txt = res.text
                 res.close()
             else:
-                content = None
+                content_bytes = None
+                content_txt = None
         except Exception as ex:
-            sys.stderr.write(f'{document_context}: failed to download content "{url}": {str(ex)}')
+            sys.stderr.write(f'{document_context}: failed to download content from "{content_url}"\n')
             return False
-    else:
-        content_txt = content
 
-    if ctx.content_print_format != None:
-        args_list = [content_txt, label, doc.path, url]
+    if ctx.content_print_format:
+        args_list = [content_txt, label, doc.path, content_url]
         args_dict = {"content_txt": content_txt, "label": label, "document": doc.path}
         if not ctx.content_raw:
-            args_dict["url"] = url
-        str = ctx.content_print_format.format(*args_list, **args_dict)
-        print(str)
+            args_dict["url"] = content_url
+        fmt = ctx.content_print_format.format(*args_list, **args_dict)
+        print(fmt)
 
-    if ctx.content_save:
+    if ctx.content_save_format:
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         try:
@@ -627,7 +642,11 @@ def handle_content_match(ctx, doc, content, label_match, di, ci):
         except Exception as ex:
             error(
                 f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
-        f.write(content)
+        if not ctx.content_raw:
+            f.write(content_bytes)
+        else:
+            f.write(content_txt.encode(doc.encoding))
+        
         f.close()
         if ctx.verbosity >= Verbosity.INFO:
             print(f"wrote content into {label} for {doc.path}")
@@ -692,7 +711,7 @@ def gen_document_matches(ctx, doc, src, src_xml):
     document_type = doc.document_type
     if document_type == DocumentType.RFILE:
         document_type = DocumentType.URL
-    return [ Document(document_type, path) for path in new_paths ]
+    return [ Document(document_type, path, doc.encoding) for path in new_paths ]
 
 def dl(ctx):
     docs = deque(ctx.pathes)
@@ -909,11 +928,11 @@ def main():
         elif begins(arg, "din="):
             ctx.document.interactive = get_bool_arg(arg, "din")
         elif begins(arg, "url="):
-            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg)))
+            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg), ctx.default_encoding))
         elif begins(arg, "file="):
-            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg)))
+            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg), ctx.default_encoding))
         elif begins(arg, "rfile="):
-            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg)))
+            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg), ctx.default_encoding))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "sel="):
@@ -957,6 +976,14 @@ def main():
             if res is None:
                 error(f"no matching verbosity level for '{arg}'")
             ctx.verbosity = res
+        elif begins(arg, "enc="):
+            enc = get_arg(arg)
+            # try if this is a supported encoding
+            try:
+                "test".encode(enc)
+            except:
+                error(f"unknown text encoding '{arg}'")
+            ctx.default_encoding = enc
         else:
             error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
