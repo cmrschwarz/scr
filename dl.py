@@ -186,13 +186,14 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path, encoding):
+    def __init__(self, document_type, path, encoding, force_encoding=False):
         self.document_type = document_type
         self.path = path
         self.encoding = encoding
+        self.force_encoding = False
 
     def __key(self):
-        return (self.document_type, self.path)
+        return (self.document_type, self.path, self.encoding, self.output_enciding)
 
     def __eq__(x, y):
         return isinstance(y, x.__class__) and x.__key() == y.__key()
@@ -214,6 +215,7 @@ class DlContext:
         self.content_print_format = ""
         self.content_raw = False
         self.content.multimatch = True
+        self.forced_content_encoding = None
 
         self.label = Locator("label")
         self.label_default_format = None
@@ -225,6 +227,8 @@ class DlContext:
         self.dimin = 1
         self.di = self.dimin
         self.dimax = float("inf")
+        self.default_document_encoding = "utf-8"
+        self.force_document_encoding = False
 
         self.cookie_file = None
         self.cookie_jar = None
@@ -239,7 +243,8 @@ class DlContext:
         self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
         self.verbosity = Verbosity.INFO
-        self.default_encoding = "utf-8"
+       
+        
 
         self.have_xpath_matching = False
         self.have_label_matching = False
@@ -302,6 +307,8 @@ def help(err=False):
         dm=<bool>           allow multiple document matches in one document instead of picking the first
         dbfs=<bool>         traverse the matched documents in breadth first order instead of depth first
         din=<bool>          give a prompt to ignore a potential document match
+        denc=<encoding>     default document encoding to use for following documents, default is utf-8 
+        dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently 
 
     Initial Documents:
         url=<url>           fetch a document from a url, derived document matches are (relative) urls
@@ -318,7 +325,6 @@ def help(err=False):
         strat=<browser>     matching strategy for selenium (values: first, new, interactive)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
-        enc=<encoding>      default encoding to use for following documents, default is utf-8 
         """.strip()
     if err:
         error(text)
@@ -413,7 +419,7 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 def setup(ctx):
     if len(ctx.pathes) == 0:
-        error("must specify at least one url or file")
+        error("must specify at least one url or (r)file")
 
     [l.setup() for l in ctx.locators]
 
@@ -514,7 +520,7 @@ def fetch_doc_source(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
-                src = str(f.read(), encoding=doc.encoding)
+                src = str(f.read(), encoding=doc.default_input_e)
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
@@ -580,7 +586,7 @@ def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
             if res == 4: return None
             assert res == 2
             if not ctx.content_raw:
-                download_url = input("enter new content url:\n")
+                content_url = input("enter new content url:\n")
             else:
                 sys.stdout.write(f'enter new content (terminate with the string "{ctx.content_escape_sequence}"):\n')
                 content_txt = ""
@@ -617,7 +623,10 @@ def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
             if ctx.content_download_required:
                 res = download_url(ctx, content_url)
                 content_bytes = res.content
-                content_txt = res.text
+                if doc.force_encoding or res.encoding is None:
+                    content_txt = str(content_bytes, encoding=doc.default_document_encoding)
+                else:
+                    content_txt = res.text
                 res.close()
             else:
                 content_bytes = None
@@ -711,7 +720,7 @@ def gen_document_matches(ctx, doc, src, src_xml):
     document_type = doc.document_type
     if document_type == DocumentType.RFILE:
         document_type = DocumentType.URL
-    return [ Document(document_type, path, doc.encoding) for path in new_paths ]
+    return [ Document(document_type, path, doc.encoding, doc.force_encoding) for path in new_paths ]
 
 def dl(ctx):
     docs = deque(ctx.pathes)
@@ -859,6 +868,12 @@ def select_variant(val, variants_dict):
             match = v
     return match
 
+def verify_encoding(encoding):
+    try:
+        "!".encode(encoding=encoding)
+        return True
+    except:
+        return False
 
 def main():
     ctx = DlContext()
@@ -869,6 +884,8 @@ def main():
         if arg == "--help" or arg=="-h":
             help()
             return 0
+
+        # content args
         if begins(arg, "cx="):
             ctx.content.xpath = get_arg(arg)
         elif begins(arg, "cr="):
@@ -893,6 +910,8 @@ def main():
             ctx.content_raw = get_bool_arg(arg, "craw")
         elif begins(arg, "cesc="):
             ctx.content_escape_sequence = get_arg(arg)
+
+        # label args
         elif begins(arg, "lx="):
             ctx.label.xpath = get_arg(arg)
         elif begins(arg, "lr="):
@@ -909,6 +928,8 @@ def main():
             ctx.label.multimatch = get_bool_arg(arg, "lm")
         elif begins(arg, "lin="):
             ctx.label.interactive = get_bool_arg(arg, "lin")
+
+        # document args
         elif begins(arg, "dx="):
             ctx.document.xpath = get_arg(arg)
         elif begins(arg, "dr="):
@@ -927,12 +948,28 @@ def main():
             ctx.document_files = get_bool_arg(arg, "dfiles")
         elif begins(arg, "din="):
             ctx.document.interactive = get_bool_arg(arg, "din")
+        elif begins(arg, "denc="):
+            enc = get_arg(arg)
+            if verify_encoding(enc):
+                ctx.default_document_encoding = enc
+                ctx.force_document_encoding = False
+            else:
+                error(f"unknown encoding in '{arg}'")
+        elif begins(arg, "dfenc="):
+            enc = get_arg(arg)
+            if verify_encoding(enc):
+                ctx.default_document_encoding = enc
+                ctx.force_document_encoding = True
+            else:
+                error(f"unknown encoding in '{arg}'")
+
+        # misc args
         elif begins(arg, "url="):
-            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg), ctx.default_encoding))
+            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
         elif begins(arg, "file="):
-            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg), ctx.default_encoding))
+            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
         elif begins(arg, "rfile="):
-            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg), ctx.default_encoding))
+            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "sel="):
@@ -976,16 +1013,17 @@ def main():
             if res is None:
                 error(f"no matching verbosity level for '{arg}'")
             ctx.verbosity = res
-        elif begins(arg, "enc="):
+        elif begins(arg, "oenc="):
             enc = get_arg(arg)
-            # try if this is a supported encoding
-            try:
-                "test".encode(enc)
-            except:
-                error(f"unknown text encoding '{arg}'")
-            ctx.default_encoding = enc
+            if verify_encoding(enc):
+                ctx.forced_output_encoding = enc
+            else:
+                error(f"unknown encoding in '{arg}'")
         else:
-            error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
+            if "=" not in arg:
+                error(f"unrecognized option: '{arg}', are you missing an equals sign?")
+            else:
+                error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
     dl(ctx)
     return 0
