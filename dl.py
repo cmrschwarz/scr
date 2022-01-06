@@ -111,11 +111,32 @@ class Locator:
             self.regex_groups = True
         self.regex = regex_comp
 
-    def setup(self):
-        self.compile_regex()
+    def setup(self, additional_format_keys=[]):
         self.xpath = empty_string_to_none(self.xpath)
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
+        self.compile_regex()
+        if self.format:
+            try:
+                if self.regex:
+                    capture_group_keys = self.regex.groupindex.values()
+                    unnamed_regex_group_count = self.regex.groups - len(capture_group_keys) 
+                else:
+                    capture_group_keys = []
+                    unnamed_regex_group_count = 0
+                known_keys = [self.name] + capture_group_keys + additional_format_keys  
+                key_count = len(known_keys) + unnamed_regex_group_count
+                fmt_keys = get_format_string_keys(self.format)
+                named_arg_count = 0
+                for k in fmt_keys:
+                    if k == "":
+                        named_arg_count += 1
+                        if named_arg_count > key_count:
+                            error(f"exceeded number of keys in {self.name[0]}f={self.format}")
+                    elif k not in known_keys:
+                        error(f"unknown key {{{k}}} in {self.name[0]}f={self.format}")
+            except Exception as ex:
+                error(f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
         if self.format is None:
             if self.xpath is not None or self.regex is not None:
                 self.format = "{}"
@@ -282,13 +303,12 @@ def help(err=False):
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
-                             (args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, non empty to enable
-                             (args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
         cin=<bool>           give a prompt to ignore a potential content match
         craw=<bool>          don't treat content as a link, but as raw data
         cesc=<string>        escape sequence to terminate content
-        cenc
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -416,8 +436,11 @@ def setup_selenium(ctx):
                 cookie_dict['path'] = cookie.path
             ctx.selenium_driver.add_cookie(cookie_dict)
 
+def get_format_string_keys(fmt_string):
+    return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
+
 def format_string_uses_arg(fmt_string, arg_pos, arg_name):
-    fmt_args = [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
+    fmt_args = get_format_string_keys(fmt_string)
     return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
 
 def setup(ctx):
@@ -438,9 +461,9 @@ def setup(ctx):
 
     if not ctx.content_print_format and not ctx.content_save_format:
         if ctx.content_raw:
-            ctx.content_print_format = "{label}: \n {content}"
+            ctx.content_print_format = "{content}"
         else:
-            ctx.content_print_format = "{label}: {url}"
+            ctx.content_print_format = "{url}"
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
@@ -549,12 +572,24 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
     else:
         url_list = []
         url_dict = {}
-
-    # args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>
+    if label_regex_match is None:
+        label_regex_match = RegexMatch(None)
+    if content_regex_match is None:
+        content_regex_match = RegexMatch(None)
+    # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
     return format.format(
-        [label_txt, content_txt, doc.encoding, doc.path] + url_list + label_regex_match.group_list + content_regex_match.group_list, 
+        *([label_txt, content_txt, doc.encoding, doc.path, ctx.content_escape_sequence] 
+        + url_list + label_regex_match.group_list + content_regex_match.group_list), 
         **dict(
-            list({"label": label_txt, "content": content_txt, "encoding": doc.encoding}.items()) 
+            list(
+                {
+                "label": label_txt,
+                "content": content_txt,
+                "encoding": doc.encoding,
+                "document": doc.path,
+                "escape": ctx.content_escape_sequence
+                }.items()
+            ) 
             + list(url_dict.items()) 
             + list(label_regex_match.group_dict.items()) 
             + list(content_regex_match.group_dict.items()) 
@@ -563,7 +598,7 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
 
 def handle_content_match(ctx, doc, content_match, di, ci):
     label_regex_match = content_match.label_regex_match
-    content_txt = content_match.content_regex_match.value
+    content_txt = ctx.content.apply_format(content_match.content_regex_match, [di, ci], ["di", "ci"])
 
     if label_regex_match is None:
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
@@ -615,11 +650,11 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if not ctx.content_raw:
                 content_url = input("enter new content url:\n")
             else:
-                sys.stdout.write(f'enter new content (terminate with the string "{ctx.content_escape_sequence}"):\n')
+                sys.stdout.write(f'enter new content (terminate with a newline followed by the string "{ctx.content_escape_sequence}"):\n')
                 content_txt = ""
                 while True:
                     content_txt += input() + "\n"
-                    i = content_txt.find(ctx.content_escape_sequence)
+                    i = content_txt.find("\n" + ctx.content_escape_sequence)
                     if i != -1:
                         content_txt = content_txt[:i]
                         break
@@ -663,12 +698,11 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             return False
 
     if ctx.content_print_format:
-        args_list = [content_txt, label, doc.path, content_url]
-        args_dict = {"content_txt": content_txt, "label": label, "document": doc.path}
-        if not ctx.content_raw:
-            args_dict["url"] = content_url
-        fmt = ctx.content_print_format.format(*args_list, **args_dict)
-        print(fmt)
+        print_name = gen_final_content_name(
+            ctx, ctx.content_print_format, label, content_url,
+            content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
+        ) 
+        print(print_name)
 
     if ctx.content_save_format:
         if not ctx.is_valid_label(label):
