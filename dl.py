@@ -53,9 +53,9 @@ class Verbosity(IntEnum):
     INFO = 3
 
 class ContentMatch:
-    def __init__(self, label_match, content):
-        self.label_match = label_match
-        self.content = content
+    def __init__(self, label_match, content_match):
+        self.label_regex_match = label_match
+        self.content_regex_match = content_match
 
     def __key(self):
         return (self.label_match.__key(), self.content)
@@ -91,7 +91,7 @@ class Locator:
         self.xpath = None
         self.regex = None
         self.format = None
-        self.multimatch = False
+        self.multimatch = True
         self.interactive = False
         self.regex_groups = False
 
@@ -99,13 +99,17 @@ class Locator:
         if self.regex is None:
             return
         try:
-            self.regex = re.compile(self.regex)
+            regex_comp = re.compile(self.regex)
         except re.error as err:
             error(f"{self.name[0]}r is not a valid regex: {err.msg}")
+        if regex_comp.groups == 0:
+            regex_comp = re.compile("(" + self.regex + ")")
 
-        if self.regex.groups != 1:
-            error(f"if {self.name[0]} contains more than one capture group it must contain a named capture group named {self.name}")
+        if regex_comp.groups != 1:
+            if self.name not in regex_comp.groupindex: 
+                error(f"if {self.name[0]} contains more than one capture group it must contain a named capture group named {self.name}")
             self.regex_groups = True
+        self.regex = regex_comp
 
     def setup(self):
         self.compile_regex()
@@ -153,16 +157,14 @@ class Locator:
 
     def match_regex(self, val, path, default=[]):
         if self.regex is None or val is None: return default
-        if not self.multimatch:
-            match = self.regex.match(val)
-            if match is None: return []
-            return  [match[1]]
         res = []
         for m in self.regex.finditer(val):
             if self.regex_groups:
-                res.append(RegexMatch(m.group(1)))
-            else:
                 res.append(RegexMatch(m.group(self.name), list(m.groups()), m.groupdict()))
+            else:
+                res.append(RegexMatch(m.group(1)))
+            if not self.multimatch:
+                break
         return res
 
     def apply_format(self, match, values, keys, default=None):
@@ -214,15 +216,14 @@ class DlContext:
         self.content_save_format = ""
         self.content_print_format = ""
         self.content_raw = False
-        self.content.multimatch = True
         self.forced_content_encoding = None
 
         self.label = Locator("label")
         self.label_default_format = None
         self.labels_inside_content = None
+        self.label_allow_missing = False
 
         self.document = Locator("document")
-        self.documents_are_files = False
         self.documents_bfs = False
         self.dimin = 1
         self.di = self.dimin
@@ -281,20 +282,22 @@ def help(err=False):
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
-                             (args: label, content, document, [url], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, non empty to enable
-                             (args: label, content, document, [url], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>)
         cin=<bool>           give a prompt to ignore a potential content match
         craw=<bool>          don't treat content as a link, but as raw data
         cesc=<string>        escape sequence to terminate content
+        cenc
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string (args: <lr capture groups>, label, di, ci)
-        lic=<bool>          match for the label within the content instead of the hole document
+        lic=<bool>          match for the label within the content match instead of the hole document
         las=<bool>          allow slashes in labels
         lm=<bool>           allow multiple label matches in one document instead of picking the first
+        lam=<bool>          allow missing label (default is to skip content if no label is found)
         lfd=<format string> default label format string to use if there's no match (args: di, ci)
         lin=<bool>          give a prompt to edit the generated label
 
@@ -446,8 +449,6 @@ def setup(ctx):
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
         ctx.user_agent = "dl.py/0.0.1"
 
-    if ctx.documents_are_files and ctx.tor:
-        error(f"the modes dfiles and tor are incompatible")
 
     ctx.have_xpath_matching = max([l.xpath is not None for l in ctx.locators])
     ctx.have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
@@ -457,7 +458,10 @@ def setup(ctx):
 
     if not ctx.have_multidocs:
         ctx.dimax = ctx.dimin
-
+    if not ctx.have_label_matching:
+        ctx.label_allow_missing = True
+        if ctx.labels_inside_content:
+            error(f"cannot specify lic without lx or lr")
     if ctx.label.format is None or ctx.label_default_format is None:
         if ctx.label.xpath is None and ctx.label.regex is None:
             form = "dl_"
@@ -479,7 +483,7 @@ def setup(ctx):
             form = "dl"
         form += "" if not ctx.content_save_format else ".txt"
         if ctx.label.format is None: ctx.label.format = form
-        if ctx.label_default_format is None: ctx.label_default_format = form
+        if ctx.label_default_format is None and ctx.label_allow_missing: ctx.label_default_format = form
 
     if not ctx.content_raw:
         if ctx.content_save_format:
@@ -520,7 +524,7 @@ def fetch_doc_source(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
-                src = str(f.read(), encoding=doc.default_input_e)
+                src = str(f.read(), encoding=doc.encoding)
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
@@ -538,11 +542,33 @@ def fetch_doc_source(ctx, doc):
                 error(f"aborting! failed to download {doc.path}")
     return src
 
-def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
-    if label_match is None:
+def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, label_regex_match, content_regex_match, doc):
+    if content_url:
+        url_list = [content_url]
+        url_dict = {"url": content_url}
+    else:
+        url_list = []
+        url_dict = {}
+
+    # args: label, content, encoding, document, [url], <lr capture groups>, <cr capture groups>
+    return format.format(
+        [label_txt, content_txt, doc.encoding, doc.path] + url_list + label_regex_match.group_list + content_regex_match.group_list, 
+        **dict(
+            list({"label": label_txt, "content": content_txt, "encoding": doc.encoding}.items()) 
+            + list(url_dict.items()) 
+            + list(label_regex_match.group_dict.items()) 
+            + list(content_regex_match.group_dict.items()) 
+        )
+    )
+
+def handle_content_match(ctx, doc, content_match, di, ci):
+    label_regex_match = content_match.label_regex_match
+    content_txt = content_match.content_regex_match.value
+
+    if label_regex_match is None:
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
     else:
-        label = ctx.label.apply_format(label_match, [di, ci], ["di", "ci"])
+        label = ctx.label.apply_format(label_regex_match, [di, ci], ["di", "ci"])
     document_context = f'document "{doc.path}"'
     if ctx.have_multidocs:
         if ctx.content.multimatch:
@@ -555,6 +581,7 @@ def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
 
     if ctx.content_raw:
         context = document_context
+        content_url = None
     else:
         content_url = content_txt
 
@@ -646,6 +673,10 @@ def handle_content_match(ctx, doc, content_txt, label_match, di, ci):
     if ctx.content_save_format:
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
+        save_path = gen_final_content_name(
+            ctx, ctx.content_save_format, label, content_url,
+            content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
+        ) 
         try:
             f = open(label, "w" if ctx.content_raw else "wb")
         except Exception as ex:
@@ -690,28 +721,43 @@ def gen_content_matches(ctx, doc, src, src_xml):
     match_index = 0
     labels_none_for_n = 0
     for content in contents:
-        if ctx.labels_inside_content:
+        content_regex_matches = ctx.content.match_regex(content, doc.path, [RegexMatch(content)])
+        if ctx.labels_inside_content and ctx.label.xpath:
             content_xml = contents_xml[match_index] if ctx.have_content_xpaths else None
             labels = []
             for lx in ctx.label.match_xpath(content_xml, doc.path, [src]):
                 labels.extend(ctx.label.match_regex(src, doc.path, [RegexMatch(lx)]))
             if len(labels) == 0:
-                # will skip the content if there is no label match for it
-                # TODO: make this configurable
-                continue
-            else:
-                label = labels[0]
-        else:
-            if not ctx.label.multimatch and len(labels) > 0:
-                label = labels[0]
-            elif match_index in labels:
-                label = labels[match_index]
-            elif ctx.label_default_format is not None:
+                if not ctx.label_allow_missing:
+                    labels_none_for_n += len(content_regex_matches)
+                    continue
                 label = None
             else:
-                labels_none_for_n += 1
-                label = None
-        content_matches.append(ContentMatch(label, content))
+                label = labels[0]
+
+        for crm in content_regex_matches:
+            if ctx.labels_inside_content:
+                if not ctx.label.xpath:
+                    labels = ctx.label.match_regex(crm.value, doc.path, [RegexMatch(crm.value)])
+                    if len(labels) == 0:
+                        if not ctx.label_allow_missing:
+                            labels_none_for_n += 1
+                            continue
+                        label = None
+                    else:
+                        label = labels[0]
+            else:
+                if not ctx.label.multimatch and len(labels) > 0:
+                    label = labels[0]
+                elif match_index in labels:
+                    label = labels[match_index]
+                elif not ctx.label_allow_missing:
+                    labels_none_for_n += 1
+                    continue
+                else:
+                    label = None
+        
+            content_matches.append(ContentMatch(label, crm))
         match_index += 1
     return content_matches, labels_none_for_n
 
@@ -814,8 +860,8 @@ def dl(ctx):
         if ctx.ci_continuous:
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
-            if not ctx.have_label_matching or cm.label_match is not None:
-                accept = handle_content_match(ctx, doc, cm.content, cm.label_match, di, ci)
+            if not ctx.have_label_matching or cm.label_regex_match is not None:
+                accept = handle_content_match(ctx, doc, cm, di, ci)
                 if accept is None:
                     break
                 if accept:
@@ -928,6 +974,8 @@ def main():
             ctx.label.multimatch = get_bool_arg(arg, "lm")
         elif begins(arg, "lin="):
             ctx.label.interactive = get_bool_arg(arg, "lin")
+        elif begins(arg, "lam="):
+            ctx.label_allow_missing = get_bool_arg(arg, "lam")
 
         # document args
         elif begins(arg, "dx="):
@@ -1019,6 +1067,8 @@ def main():
                 ctx.forced_output_encoding = enc
             else:
                 error(f"unknown encoding in '{arg}'")
+        elif "":
+            continue
         else:
             if "=" not in arg:
                 error(f"unrecognized option: '{arg}', are you missing an equals sign?")
