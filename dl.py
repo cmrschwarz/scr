@@ -69,8 +69,8 @@ class ContentMatch:
 class RegexMatch:
     def __init__(self, value, group_list=[], group_dict={}):
         self.value = value
-        self.group_list = group_list
-        self.group_dict = group_dict
+        self.group_list = [x if x is not None else "" for x in group_list]
+        self.group_dict = {k:(v if v is not None else "") for (k,v) in group_dict.items()}
 
     def __key(self):
         return [self.value] + self.group_list + sorted(self.group_dict.items())
@@ -86,7 +86,7 @@ def empty_string_to_none(string):
     return string
 
 class Locator:
-    def __init__(self, name):
+    def __init__(self, name, additional_format_keys=[]):
         self.name = name
         self.xpath = None
         self.regex = None
@@ -94,6 +94,7 @@ class Locator:
         self.multimatch = True
         self.interactive = False
         self.regex_groups = False
+        self.additional_format_keys = additional_format_keys
 
     def compile_regex(self):
         if self.regex is None:
@@ -111,7 +112,7 @@ class Locator:
             self.regex_groups = True
         self.regex = regex_comp
 
-    def setup(self, additional_format_keys=[]):
+    def setup(self):
         self.xpath = empty_string_to_none(self.xpath)
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
@@ -119,12 +120,12 @@ class Locator:
         if self.format:
             try:
                 if self.regex:
-                    capture_group_keys = self.regex.groupindex.values()
+                    capture_group_keys = list(self.regex.groupindex.keys())
                     unnamed_regex_group_count = self.regex.groups - len(capture_group_keys) 
                 else:
                     capture_group_keys = []
                     unnamed_regex_group_count = 0
-                known_keys = [self.name] + capture_group_keys + additional_format_keys  
+                known_keys = [self.name] + capture_group_keys + self.additional_format_keys  
                 key_count = len(known_keys) + unnamed_regex_group_count
                 fmt_keys = get_format_string_keys(self.format)
                 named_arg_count = 0
@@ -193,7 +194,7 @@ class Locator:
         return self.format.format(
             *(match.group_list + [match.value] + values),
             **dict(
-                list(match.group_dict.items()) + [(self.name, match.value)] + [(keys[i], values[i]) for i in range(len(values))]
+                [(keys[i], values[i]) for i in range(len(values))] + [(self.name, match.value)] + list(match.group_dict.items()) 
             )
         )
 
@@ -228,7 +229,7 @@ class DlContext:
     def __init__(self):
         self.pathes = []
 
-        self.content = Locator("content")
+        self.content = Locator("content", ["di", "ci"])
         self.cimin = 1
         self.content_escape_sequence = "<END>"
         self.ci = self.cimin
@@ -239,12 +240,12 @@ class DlContext:
         self.content_raw = False
         self.forced_content_encoding = None
 
-        self.label = Locator("label")
+        self.label = Locator("label", ["di", "ci"])
         self.label_default_format = None
         self.labels_inside_content = None
         self.label_allow_missing = False
 
-        self.document = Locator("document")
+        self.document = Locator("document", ["di", "ci"])
         self.documents_bfs = False
         self.dimin = 1
         self.di = self.dimin
@@ -273,6 +274,7 @@ class DlContext:
         self.have_content_xpaths = False
         self.have_interactive_matching = False
         self.content_download_required = False
+        self.need_content_download_txt = False
 
 
     def is_valid_label(self, label):
@@ -447,7 +449,9 @@ def setup(ctx):
     if len(ctx.pathes) == 0:
         error("must specify at least one url or (r)file")
 
-    [l.setup() for l in ctx.locators]
+    ctx.label.setup()
+    ctx.content.setup()
+    ctx.document.setup()
 
     if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
     if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
@@ -485,11 +489,10 @@ def setup(ctx):
         ctx.label_allow_missing = True
         if ctx.labels_inside_content:
             error(f"cannot specify lic without lx or lr")
-    if ctx.label.format is None or ctx.label_default_format is None:
-        if ctx.label.xpath is None and ctx.label.regex is None:
-            form = "dl_"
-        else:
-            form = "{label}_"
+
+    if ctx.label_default_format is None and ctx.label_allow_missing:
+        have_ext = False
+        form = "dl_"
         # if max was not set it is 'inf' which has length 3 which is a fine default
         didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
         cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
@@ -500,19 +503,19 @@ def setup(ctx):
                 form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
             else:
                 form += f"{{ci:0{cidigits}}}"
+            
         elif ctx.have_multidocs:
             form += f"{{di:0{didigits}}}"
-        else:
-            form = "dl"
-        form += "" if not ctx.content_save_format else ".txt"
-        if ctx.label.format is None: ctx.label.format = form
-        if ctx.label_default_format is None and ctx.label_allow_missing: ctx.label_default_format = form
+        
+        ctx.label_default_format = form
 
     if not ctx.content_raw:
         if ctx.content_save_format:
-            ctx.content_download_required = format_string_uses_arg(ctx.content_save_format, 0, "content")
+            ctx.content_download_required = True
         if ctx.content_print_format and not ctx.content_download_required:
-            ctx.content_download_required = format_string_uses_arg(ctx.content_print_format, 0, "content")
+            content_printed = format_string_uses_arg(ctx.content_print_format, 0, "content")
+            ctx.content_download_required = content_printed
+            ctx.need_content_download_txt = content_printed
 
     setup_selenium(ctx)
 
@@ -581,7 +584,10 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
         *([label_txt, content_txt, doc.encoding, doc.path, ctx.content_escape_sequence] 
         + url_list + label_regex_match.group_list + content_regex_match.group_list), 
         **dict(
-            list(
+            list(content_regex_match.group_dict.items()) 
+            + list(label_regex_match.group_dict.items()) 
+            + list(url_dict.items()) 
+            + list(
                 {
                 "label": label_txt,
                 "content": content_txt,
@@ -590,9 +596,6 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
                 "escape": ctx.content_escape_sequence
                 }.items()
             ) 
-            + list(url_dict.items()) 
-            + list(label_regex_match.group_dict.items()) 
-            + list(content_regex_match.group_dict.items()) 
         )
     )
 
@@ -685,10 +688,14 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if ctx.content_download_required:
                 res = download_url(ctx, content_url)
                 content_bytes = res.content
-                if doc.force_encoding or res.encoding is None:
-                    content_txt = str(content_bytes, encoding=doc.default_document_encoding)
-                else:
-                    content_txt = res.text
+                if ctx.need_content_download_txt:
+                    if doc.force_encoding or res.encoding is None:
+                        try:
+                            content_txt = str(content_bytes, encoding=doc.encoding)
+                        except:
+                            content_txt = res.text
+                    else:
+                        content_txt = res.text
                 res.close()
             else:
                 content_bytes = None
@@ -712,10 +719,10 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
         ) 
         try:
-            f = open(label, "w" if ctx.content_raw else "wb")
+            f = open(save_path, "w" if ctx.content_raw else "wb")
         except Exception as ex:
             error(
-                f"aborting! failed to write to file '{label}': {ex.msg}: {doc.path}")
+                f"aborting! failed to write to file '{save_path}': {ex.msg}: {doc.path}")
         if not ctx.content_raw:
             f.write(content_bytes)
         else:
@@ -723,7 +730,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         
         f.close()
         if ctx.verbosity >= Verbosity.INFO:
-            print(f"wrote content into {label} for {doc.path}")
+            print(f"wrote content into {save_path} for {context}")
     return True
 
 def handle_document_match(ctx, doc, matched_path):
