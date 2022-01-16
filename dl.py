@@ -189,8 +189,8 @@ class Locator:
                 break
         return res
 
-    def apply_format(self, match, values, keys, default=None):
-        if self.format is None: return default
+    def apply_format(self, match, values, keys):
+        if self.format is None: return match.value
         return self.format.format(
             *(match.group_list + [match.value] + values),
             **dict(
@@ -206,7 +206,7 @@ class Locator:
         res = []
         for x in self.match_xpath(src_xml, path, [src]):
             for m in self.match_regex(x, path, [x]):
-                res.append(self.apply_format(m, values, keys, m.value))
+                res.append(self.apply_format(m, values, keys))
         return res
 
 class Document:
@@ -621,7 +621,11 @@ def normalize_url(src_doctype, url, src_doc_url=None):
 
 def handle_content_match(ctx, doc, content_match, di, ci):
     label_regex_match = content_match.label_regex_match
-    content_txt = ctx.content.apply_format(content_match.content_regex_match, [di, ci], ["di", "ci"])
+    content_txt = ctx.content.apply_format(
+        content_match.content_regex_match,
+        [di, ci],
+        ["di", "ci"],
+    )
 
     if label_regex_match is None:
         label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
