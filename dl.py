@@ -165,11 +165,11 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(f"aborting! invalid {self.name[0]}x: {str(ex)}: ")
+            error(f"aborting! {self.name[0]}x is not a valid xpath")
         except Exception as ex:
             error(
                 f"aborting! failed to apply {self.name[0]}x to {path}: "
-                + f"{ex.__class__.__name__}:  {str(ex)}:"
+                + f"{ex.__class__.__name__}:  {str(ex)}"
             )
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
