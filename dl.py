@@ -30,6 +30,8 @@ next_doc_indicating_strings = prefixes("nextdoc")
 edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
 
+DEFAULT_CPF="{content}\\n"
+
 class DocumentType(Enum):
     URL = 1
     FILE = 2
@@ -311,6 +313,7 @@ def unescape_string(txt, context):
         error(f"failed to unescape {context}: {str(ex)}")
 
 def help(err=False):
+    global DEFAULT_CPF
     text = f"""{sys.argv[0]} [OPTIONS]
     Scan documents for content matches and write these out.
 
@@ -328,10 +331,10 @@ def help(err=False):
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
-                             defaults to \"{{content}}\\n\" if cpf and csf are both unspecified
-                             (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
+                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
-                             (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
@@ -474,6 +477,7 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
 
 def setup(ctx):
+    global DEFAULT_CPF
     if len(ctx.pathes) == 0:
         error("must specify at least one url or (r)file")
 
@@ -490,14 +494,15 @@ def setup(ctx):
             ctx.cookie_jar.load(ctx.cookie_file, ignore_discard=True,ignore_expires=True)
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
+    if not ctx.content_print_format and not ctx.content_save_format:
+        ctx.content_print_format = DEFAULT_CPF
 
     if ctx.content_print_format:
         ctx.content_print_format = unescape_string(ctx.content_print_format, "cpf")
     if ctx.content_save_format:
         ctx.content_save_format = unescape_string(ctx.content_save_format, "csf")
 
-    if not ctx.content_print_format and not ctx.content_save_format:
-        ctx.content_print_format = "{content}\n"
+    
 
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
@@ -543,10 +548,12 @@ def setup(ctx):
     if not ctx.content_raw:
         if ctx.content_save_format:
             ctx.content_download_required = True
-            ctx.need_content_download_txt = format_string_uses_arg(ctx.content_save_format, 0, "content") 
+            ctx.need_content_download_txt = ctx.need_content_download_txt or format_string_uses_arg(ctx.content_save_format, 3, "content_enc")
         if ctx.content_print_format and not ctx.content_download_required:
-            content_printed = format_string_uses_arg(ctx.content_print_format, 0, "content")
-            ctx.content_download_required = content_printed
+            content_printed = format_string_uses_arg(ctx.content_print_format, 2, "content")
+            content_enc_printed = format_string_uses_arg(ctx.content_print_format, 3, "content_enc")
+            ctx.need_content_download_txt = ctx.need_content_download_txt or content_enc_printed
+            ctx.content_download_required = content_printed or content_enc_printed
 
        
 
@@ -618,7 +625,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if not nosingle and len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, label_regex_match, content_regex_match, doc):
+def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc, raw=True):
     opts_list = []
     opts_dict = {}
     if ctx.document.multimatch:
@@ -647,15 +654,16 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
             {
             "label": label_txt,
             "content": content,
+            "content_enc": content_enc,
             "encoding": doc.encoding,
             "document": doc.path,
             "escape": ctx.content_escape_sequence
             }.items()
         ) 
     )
+    res = b''
+    args_list.reverse()
     if type(content) == bytes:
-        res = b''
-        args_list.reverse()
         for (text, key, _, _) in Formatter().parse(format):
             if text is not None:
                 res += text.encode("utf-8")
@@ -668,9 +676,13 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
                     res += val
                 else:
                     res += text.encode(val)
-        return res
+        if raw: return res
+        return res.decode("utf-8")
     else:
-        return format.format(*args_list, **args_dict)
+        fmt = format.format(*args_list, **args_dict)
+        if raw: return fmt.encode("utf-8")
+        return fmt
+
 def normalize_link(ctx, src_doc, link):
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
@@ -788,11 +800,13 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         except Exception as ex:
             sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}: {str(ex)}"\n')
             return False
+    else:
+        content_bytes = content_txt
 
     if ctx.content_print_format:
         print_data = gen_final_content_format(
             ctx, ctx.content_print_format, label, di, ci, content_link,
-            content_txt if ctx.content_raw else content_bytes, content_match.label_regex_match, content_match.content_regex_match, doc
+            content_bytes, content_txt, content_match.label_regex_match, content_match.content_regex_match, doc, raw=not ctx.content_raw
         ) 
         if ctx.content_raw:
             sys.stdout.write(print_data)
@@ -804,10 +818,11 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_format(
             ctx, ctx.content_save_format, label, di, ci, content_link,
-            content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
+            content_bytes, content_txt, content_match.label_regex_match, content_match.content_regex_match,
+            doc, raw=False
         ) 
         try:
-            f = open(save_path, "w" if ctx.content_raw else "wb")
+            f = open(save_path, "wb")
         except Exception as ex:
             error(
                 f"aborting! failed to write to file '{save_path}': {ex.msg}: {doc.path}")
