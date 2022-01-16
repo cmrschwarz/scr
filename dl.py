@@ -215,11 +215,14 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path, encoding, force_encoding=False):
+    def __init__(self, document_type, path, encoding, force_encoding, default_scheme, prefer_parent_scheme, force_scheme):
         self.document_type = document_type
         self.path = path
         self.encoding = encoding
-        self.force_encoding = False
+        self.force_encoding = force_encoding
+        self.default_scheme = default_scheme
+        self.prefer_parent_scheme = prefer_parent_scheme
+        self.force_scheme = force_scheme
 
     def __key(self):
         return (self.document_type, self.path, self.encoding, self.output_enciding)
@@ -257,6 +260,9 @@ class DlContext:
         self.dimax = float("inf")
         self.default_document_encoding = "utf-8"
         self.force_document_encoding = False
+        self.default_document_scheme = "https"
+        self.prefer_parent_document_scheme = None
+        self.force_document_scheme = False
 
         self.cookie_file = None
         self.cookie_jar = None
@@ -341,6 +347,9 @@ def help(err=False):
         din=<bool>          give a prompt to ignore a potential document match
         denc=<encoding>     default document encoding to use for following documents, default is utf-8 
         dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently 
+        dsch=<scheme>       default scheme for urls derived from following documents, defaults to "https"
+        dpsch=<bool>        use the parent documents scheme if available, defaults to true unless dsch is specified
+        dfsch=<scheme>      force this scheme for urls derived from following documents
 
     Initial Documents:
         url=<url>           fetch a document from a url, derived document matches are (relative) urls
@@ -608,26 +617,27 @@ def gen_final_content_name(ctx, format, label_txt, content_link, content_txt, la
             ) 
         )
     )
-def normalize_link(src_doctype, link, src_doc_url=None):
+def normalize_link(ctx, src_doc, link):
     # todo: make this configurable
-    default_scheme = "https"
-    if src_doctype == DocumentType.FILE:
+    if src_doc.document_type == DocumentType.FILE:
         return link
     url_parsed = urllib.parse.urlparse(link)
-    doc_url_parsed = urllib.parse.urlparse(src_doc_url) if src_doc_url else None
+    doc_url_parsed = urllib.parse.urlparse(src_doc.path) if src_doc.path else None
 
-    if doc_url_parsed and url_parsed.netloc == "" and src_doctype == DocumentType.URL:
+    if doc_url_parsed and url_parsed.netloc == "" and src_doc.document_type == DocumentType.URL:
         url_parsed = url_parsed._replace(netloc=doc_url_parsed.netloc)
 
     # for urls like 'google.com' urllib makes this a path instead of a netloc
-    if url_parsed.netloc == "" and src_doc_url is None and url_parsed.scheme == "" and url_parsed.path != "" and link[0] not in [".", "/"]:
+    if url_parsed.netloc == "" and not doc_url_parsed and url_parsed.scheme == "" and url_parsed.path != "" and link[0] not in [".", "/"]:
         url_parsed = url_parsed._replace(path="", netloc=url_parsed.path)
-    if url_parsed.scheme == "":
-        if doc_url_parsed and doc_url_parsed.scheme != "":
+    if src_doc.force_scheme:
+        url_parsed = url_parsed._replace(scheme=src_doc.default_scheme)
+    elif url_parsed.scheme == "":
+        if src_doc.prefer_parent_scheme and doc_url_parsed and doc_url_parsed.scheme != "":
             scheme = doc_url_parsed.scheme
         else:
-            scheme = default_scheme        
-        url_parsed = url_parsed._replace(scheme=scheme)
+            scheme = src_doc.default_scheme    
+        url_parsed = url_parsed._replace(scheme=scheme)      
     return url_parsed.geturl()
 
 def handle_content_match(ctx, doc, content_match, di, ci):
@@ -660,7 +670,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
 
     while True:
         if not ctx.content_raw:
-            content_link = normalize_link(doc.document_type, content_link, doc.path)
+            content_link = normalize_link(ctx, doc, content_link)
             context = f'content link "{content_link}"'
 
         if ctx.content.interactive:
@@ -711,7 +721,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if ctx.content_download_required:
                 content_bytes = fetch_doc(
                     ctx, 
-                    Document(doc.derived_type(), content_link, doc.encoding, False),
+                    Document(doc.derived_type(), content_link, doc.encoding, False, None, False, False),
                     raw=True
                 )
                 if ctx.need_content_download_txt:
@@ -830,7 +840,18 @@ def gen_content_matches(ctx, doc, src, src_xml):
 
 def gen_document_matches(ctx, doc, src, src_xml):
     new_paths = ctx.document.apply(src, src_xml, doc.path)
-    return [ Document(doc.document_type.derived_type(), path, doc.encoding, doc.force_encoding) for path in new_paths ]
+    return [ 
+        Document(
+            doc.document_type.derived_type(),
+            path,
+            doc.encoding,
+            doc.force_encoding,
+            doc.default_scheme,
+            doc.prefer_parent_scheme,
+            doc.force_scheme
+        ) 
+        for path in new_paths 
+    ]
 
 def dl(ctx):
     docs = deque(ctx.pathes)
@@ -986,12 +1007,18 @@ def verify_encoding(encoding):
         return False
 
 def add_doc(ctx, doctype, path):
+    prefer_parent_scheme = ctx.prefer_parent_document_scheme
+    if prefer_parent_scheme is None:
+        prefer_parent_scheme = True
     ctx.pathes.append(
         Document(
             doctype,
-            normalize_link(doctype, path, None),
+            normalize_link(ctx, Document(doctype, None, None, False, ctx.default_document_scheme, False, False), path),
             ctx.default_document_encoding,
-            ctx.force_document_encoding
+            ctx.force_document_encoding,
+            ctx.default_document_scheme,
+            prefer_parent_scheme,
+            ctx.force_document_scheme
         )
     )
 
@@ -1084,7 +1111,18 @@ def main():
                 ctx.force_document_encoding = True
             else:
                 error(f"unknown encoding in '{arg}'")
-
+        elif begins(arg, "dsch="):
+            enc = get_arg(arg)
+            ctx.default_document_scheme = enc
+            ctx.force_document_scheme = False
+            if ctx.prefer_parent_document_scheme is None:
+                ctx.prefer_parent_document_scheme = False
+        elif begins(arg, "dfsch="):
+            enc = get_arg(arg)
+            ctx.default_document_scheme = enc
+            ctx.force_document_scheme = True
+        elif begins(arg, "dpsch="):
+            ctx.prefer_parent_document_scheme = get_bool_arg(arg, "dpsch")
         # misc args
         elif begins(arg, "url="):
             add_doc(ctx, DocumentType.URL, get_arg(arg))
