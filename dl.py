@@ -237,7 +237,7 @@ class DlContext:
         self.ci_continuous = False
         self.content_save_format = ""
         self.content_print_format = ""
-        self.content_raw = False
+        self.content_raw = True
         self.forced_content_encoding = None
 
         self.label = Locator("label", ["di", "ci"])
@@ -308,8 +308,9 @@ def help(err=False):
                              (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, non empty to enable
                              (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
+        csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
-        craw=<bool>          don't treat content as a link, but as raw data
+        cl=<bool>            treat content match as a link to the actual content
         cesc=<string>        escape sequence to terminate content
 
     Labels to give each matched content (becomes the filename):
@@ -464,10 +465,8 @@ def setup(ctx):
             error(f"failed to read cookie file: {str(ex)}")
 
     if not ctx.content_print_format and not ctx.content_save_format:
-        if ctx.content_raw:
-            ctx.content_print_format = "{content}"
-        else:
-            ctx.content_print_format = "{url}"
+        ctx.content_print_format = "{content}"
+
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
@@ -598,6 +597,27 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
             ) 
         )
     )
+def normalize_url(src_doctype, url, src_doc_url=None):
+    # todo: make this configurable
+    default_scheme = "https"
+    if src_doctype == DocumentType.FILE:
+        return url
+    url_parsed = urllib.parse.urlparse(url)
+    doc_url_parsed = urllib.parse.urlparse(src_doc_url) if src_doc_url else None
+
+    if doc_url_parsed and url_parsed.netloc == "" and src_doctype == DocumentType.URL:
+        url_parsed = url_parsed._replace(netloc=doc_url_parsed.netloc)
+
+    # for urls like 'google.com' urllib makes this a path instead of a netloc
+    if url_parsed.netloc == "" and src_doc_url is None and url_parsed.scheme == "" and url_parsed.path != "" and url[0] not in [".", "/"]:
+        url_parsed = url_parsed._replace(path="", netloc=url_parsed.path)
+    if url_parsed.scheme == "":
+        if doc_url_parsed and doc_url_parsed.scheme != "":
+            scheme = doc_url_parsed.scheme
+        else:
+            scheme = default_scheme        
+        url_parsed = url_parsed._replace(scheme=scheme)
+    return url_parsed.geturl()
 
 def handle_content_match(ctx, doc, content_match, di, ci):
     label_regex_match = content_match.label_regex_match
@@ -625,19 +645,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
 
     while True:
         if not ctx.content_raw:
-            if doc.document_type == DocumentType.URL:
-                doc_url_parsed = urllib.parse.urlparse(doc.path)
-                content_url_parsed = urllib.parse.urlparse(content_url)
-                if content_url_parsed.netloc == "":
-                    content_url_parsed = content_url_parsed._replace(netloc=doc_url_parsed.netloc)
-                if content_url_parsed.scheme == "":
-                    content_url_parsed = content_url_parsed._replace(scheme=doc_url_parsed.scheme if (doc_url_parsed.scheme != "") else "http")
-                content_url = content_url_parsed.geturl()
-            elif doc.document_type == DocumentType.RFILE:
-                content_url_parsed = urllib.parse.urlparse(content_url)
-                if content_url_parsed.scheme == "":
-                    content_url_parsed = content_url_parsed._replace(scheme="http")
-                content_url = content_url_parsed.geturl()
+            content_url = normalize_url(doc.document_type, content_url, doc.path)
             context = f'content url "{content_url}"'
 
         if ctx.content.interactive:
@@ -962,6 +970,16 @@ def verify_encoding(encoding):
     except:
         return False
 
+def add_doc(ctx, doctype, path):
+    ctx.pathes.append(
+        Document(
+            doctype,
+            normalize_url(doctype, path, None),
+            ctx.default_document_encoding,
+            ctx.force_document_encoding
+        )
+    )
+
 def main():
     ctx = DlContext()
     if len(sys.argv) < 2:
@@ -993,8 +1011,8 @@ def main():
             ctx.content.interactive = get_bool_arg(arg, "cin")
         elif begins(arg, "csf="):
             ctx.content_save_format = get_arg(arg)
-        elif begins(arg, "craw="):
-            ctx.content_raw = get_bool_arg(arg, "craw")
+        elif begins(arg, "cl="):
+            ctx.content_raw = not get_bool_arg(arg, "cl")
         elif begins(arg, "cesc="):
             ctx.content_escape_sequence = get_arg(arg)
 
@@ -1054,11 +1072,11 @@ def main():
 
         # misc args
         elif begins(arg, "url="):
-            ctx.pathes.append(Document(DocumentType.URL, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
+            add_doc(ctx, DocumentType.URL, get_arg(arg))
         elif begins(arg, "file="):
-            ctx.pathes.append(Document(DocumentType.FILE, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
+            add_doc(ctx, DocumentType.FILE, get_arg(arg))
         elif begins(arg, "rfile="):
-            ctx.pathes.append(Document(DocumentType.RFILE, get_arg(arg), ctx.default_document_encoding, ctx.force_document_encoding))
+            add_doc(ctx, DocumentType.RFILE, get_arg(arg))
         elif begins(arg, "cookiefile="):
             ctx.cookie_file = get_arg(arg)
         elif begins(arg, "sel="):
