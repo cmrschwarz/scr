@@ -17,6 +17,7 @@ from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
 from enum import Enum, IntEnum
 import time
+import warnings
 import datetime
 
 def prefixes(str):
@@ -125,6 +126,8 @@ class Locator:
         self.xpath = empty_string_to_none(self.xpath)
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
+        if self.format:
+            self.format = unescape_string(self.format, f"{self.name[0]}f")
         self.compile_regex()
         if self.format:
             try:
@@ -159,11 +162,11 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(f"aborting! invalid {self.name[0]}x: {ex.msg}: {path}")
+            error(f"aborting! invalid {self.name[0]}x: {str(ex)}: ")
         except Exception as ex:
             error(
-                f"aborting! failed to apply {self.name[0]}x: "
-                + f"{ex.__class__.__name__}: {str(ex)}: {path}"
+                f"aborting! failed to apply {self.name[0]}x to {path}: "
+                + f"{ex.__class__.__name__}:  {str(ex)}:"
             )
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
@@ -301,6 +304,12 @@ def error(text):
     sys.stderr.write(text + "\n")
     exit(1)
 
+def unescape_string(txt, context):
+    try:
+        return txt.encode("utf-8").decode("unicode_escape")
+    except Exception as ex:
+        error(f"failed to unescape {context}: {str(ex)}")
+
 def help(err=False):
     text = f"""{sys.argv[0]} [OPTIONS]
     Scan documents for content matches and write these out.
@@ -319,7 +328,7 @@ def help(err=False):
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
-                             defaults to \"{{content}}\" if cpf and csf are both unspecified
+                             defaults to \"{{content}}\\n\" if cpf and csf are both unspecified
                              (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
                              (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
@@ -482,8 +491,13 @@ def setup(ctx):
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
 
+    if ctx.content_print_format:
+        ctx.content_print_format = unescape_string(ctx.content_print_format, "cpf")
+    if ctx.content_save_format:
+        ctx.content_save_format = unescape_string(ctx.content_save_format, "csf")
+
     if not ctx.content_print_format and not ctx.content_save_format:
-        ctx.content_print_format = "{content}"
+        ctx.content_print_format = "{content}\n"
 
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
@@ -529,10 +543,12 @@ def setup(ctx):
     if not ctx.content_raw:
         if ctx.content_save_format:
             ctx.content_download_required = True
+            ctx.need_content_download_txt = format_string_uses_arg(ctx.content_save_format, 0, "content") 
         if ctx.content_print_format and not ctx.content_download_required:
             content_printed = format_string_uses_arg(ctx.content_print_format, 0, "content")
             ctx.content_download_required = content_printed
-            ctx.need_content_download_txt = content_printed
+
+       
 
     setup_selenium(ctx)
 
@@ -563,7 +579,7 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, raw=False, enc=True):
+def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
@@ -599,10 +615,10 @@ def fetch_doc(ctx, doc, raw=False, enc=True):
     result = []
     if raw: result.append(data)
     if enc: result.append(data_enc)
-    if len(result) == 1: return result[0]
+    if not nosingle and len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_name(ctx, format, label_txt,  di, ci, content_link, content_txt, label_regex_match, content_regex_match, doc):
+def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, label_regex_match, content_regex_match, doc):
     opts_list = []
     opts_dict = {}
     if ctx.document.multimatch:
@@ -621,24 +637,40 @@ def gen_final_content_name(ctx, format, label_txt,  di, ci, content_link, conten
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    return format.format(
-        *([label_txt, content_txt, doc.encoding, doc.path, ctx.content_escape_sequence] 
-        + opts_list + label_regex_match.group_list + content_regex_match.group_list), 
-        **dict(
-            list(content_regex_match.group_dict.items()) 
-            + list(label_regex_match.group_dict.items()) 
-            + list(opts_dict.items()) 
-            + list(
-                {
-                "label": label_txt,
-                "content": content_txt,
-                "encoding": doc.encoding,
-                "document": doc.path,
-                "escape": ctx.content_escape_sequence
-                }.items()
-            ) 
-        )
+    args_list = ([label_txt, content, doc.encoding, doc.path, ctx.content_escape_sequence] 
+        + opts_list + label_regex_match.group_list + content_regex_match.group_list)
+    args_dict = dict(
+        list(content_regex_match.group_dict.items()) 
+        + list(label_regex_match.group_dict.items()) 
+        + list(opts_dict.items()) 
+        + list(
+            {
+            "label": label_txt,
+            "content": content,
+            "encoding": doc.encoding,
+            "document": doc.path,
+            "escape": ctx.content_escape_sequence
+            }.items()
+        ) 
     )
+    if type(content) == bytes:
+        res = b''
+        args_list.reverse()
+        for (text, key, _, _) in Formatter().parse(format):
+            if text is not None:
+                res += text.encode("utf-8")
+            if key is not None:
+                if key == "":
+                    val = args_list.pop()
+                else:
+                    val = args_dict[key]
+                if val is content:
+                    res += val
+                else:
+                    res += text.encode(val)
+        return res
+    else:
+        return format.format(*args_list, **args_dict)
 def normalize_link(ctx, src_doc, link):
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
@@ -741,11 +773,15 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     if not ctx.content_raw:
         try:
             if ctx.content_download_required:
-                content_bytes, content_txt = fetch_doc(
+                res = fetch_doc(
                     ctx, 
-                    Document(doc.document_type.derived_type(), content_link, doc.encoding, doc.force_encoding if ctx.need_content_download_txt else False, None, False, False),
-                    raw=True
+                    Document(doc.document_type.derived_type(), content_link, doc.encoding, doc.force_encoding, None, False, False),
+                    raw=True,
+                    enc=ctx.need_content_download_txt,
+                    nosingle=True
                 )
+                content_bytes = res[0]
+                content_txt = res[1] if ctx.need_content_download_txt else None
             else:
                 content_bytes = None
                 content_txt = None
@@ -754,17 +790,20 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             return False
 
     if ctx.content_print_format:
-        print_name = gen_final_content_name(
-            ctx, ctx.content_print_format, label, content_link,
-            content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
+        print_data = gen_final_content_format(
+            ctx, ctx.content_print_format, label, di, ci, content_link,
+            content_txt if ctx.content_raw else content_bytes, content_match.label_regex_match, content_match.content_regex_match, doc
         ) 
-        print(print_name)
+        if ctx.content_raw:
+            sys.stdout.write(print_data)
+        else:
+            sys.stdout.buffer.write(print_data)
 
     if ctx.content_save_format:
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
-        save_path = gen_final_content_name(
-            ctx, ctx.content_save_format, label, content_link,
+        save_path = gen_final_content_format(
+            ctx, ctx.content_save_format, label, di, ci, content_link,
             content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
         ) 
         try:
@@ -772,10 +811,10 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         except Exception as ex:
             error(
                 f"aborting! failed to write to file '{save_path}': {ex.msg}: {doc.path}")
-        if not ctx.content_raw:
-            f.write(content_bytes)
-        else:
+        if ctx.content_raw:
             f.write(content_txt.encode(doc.encoding))
+        else:
+            f.write(content_bytes)
         
         f.close()
         if ctx.verbosity >= Verbosity.INFO:
@@ -1205,4 +1244,5 @@ def main():
 
 
 if __name__ == "__main__":
+    warnings.filterwarnings("error", category=DeprecationWarning) 
     exit(main())
