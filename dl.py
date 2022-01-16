@@ -31,6 +31,7 @@ edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
 
 DEFAULT_CPF="{content}\\n"
+DEFAULT_CWF="{content}"
 
 class DocumentType(Enum):
     URL = 1
@@ -254,6 +255,7 @@ class DlContext:
         self.ci_continuous = False
         self.content_save_format = ""
         self.content_print_format = ""
+        self.content_write_format = ""
         self.content_raw = True
         self.content_input_encoding = "utf-8"
         self.content_forced_input_encoding = False
@@ -316,6 +318,7 @@ def unescape_string(txt, context):
 
 def help(err=False):
     global DEFAULT_CPF
+    global DEFAULT_CWF
     text = f"""{sys.argv[0]} [OPTIONS]
     Scan documents for content matches and write these out.
 
@@ -336,6 +339,8 @@ def help(err=False):
                              defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
                              (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
+                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+        cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
                              (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
@@ -502,11 +507,17 @@ def setup(ctx):
             error(f"failed to read cookie file: {str(ex)}")
     if not ctx.content_print_format and not ctx.content_save_format:
         ctx.content_print_format = DEFAULT_CPF
+    if ctx.content_write_format and not ctx.content_save_format:
+        error(f"cannot specify cwf without csf")
+
+    if not ctx.content_write_format:
+        ctx.content_write_format = DEFAULT_CWF
 
     if ctx.content_print_format:
         ctx.content_print_format = unescape_string(ctx.content_print_format, "cpf")
     if ctx.content_save_format:
         ctx.content_save_format = unescape_string(ctx.content_save_format, "csf")
+        ctx.content_write_format = unescape_string(ctx.content_write_format, "cwf")
 
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
@@ -560,8 +571,6 @@ def setup(ctx):
             
         if ctx.content_print_format and not ctx.content_download_required:
             ctx.content_download_required = ctx.need_content_enc or format_string_uses_arg(ctx.content_print_format, 2, "content")
-
-       
 
     setup_selenium(ctx)
 
@@ -680,7 +689,7 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
             if type(val) is bytes:
                 res += val
             else:
-                res += text.encode("utf-8")
+                res += str(val).encode("utf-8")
     return res
   
 
@@ -834,20 +843,23 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             doc
         ) 
         try:
-            save_path = save_path.encode("utf-8")
+            save_path = save_path.decode("utf-8")
         except:
             error(
-                f"aborting! generated save path is not valid utf-8: {doc.path}")
+                f"{context}: aborting! generated save path is not valid utf-8")
         try:
             f = open(save_path, "wb")
         except Exception as ex:
             error(
-                f"aborting! failed to write to file '{save_path}': {ex.msg}: {doc.path}")
-        if ctx.content_raw:
-            f.write(content_txt.encode(doc.encoding))
-        else:
-            f.write(content_bytes)
-        
+                f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
+
+        write_data = gen_final_content_format(
+            ctx, ctx.content_write_format, label, di, ci, content_link,
+            content_bytes, content_enc, 
+            content_match.label_regex_match, content_match.content_regex_match,
+            doc
+        ) 
+        f.write(write_data)
         f.close()
         if ctx.verbosity >= Verbosity.INFO:
             print(f"wrote content into {save_path} for {context}")
@@ -1143,6 +1155,8 @@ def main():
             ctx.content.interactive = get_bool_arg(arg)
         elif begins(arg, "csf="):
             ctx.content_save_format = get_arg(arg)
+        elif begins(arg, "cwf="):
+            ctx.content_write_format = get_arg(arg)
         elif begins(arg, "cl="):
             ctx.content_raw = not get_bool_arg(arg)
         elif begins(arg, "cesc="):
