@@ -34,9 +34,13 @@ class DocumentType(Enum):
     FILE = 2
     RFILE = 3
     def derived_type(self):
-        if self.value == DocumentType.RFILE:
+        if self == DocumentType.RFILE:
             return DocumentType.URL
-        return DocumentType(self.value)
+        return self
+    def url_handling_type(self):
+        if self == DocumentType.RFILE:
+            return DocumentType.FILE
+        return self
 
 
 class SeleniumVariant(Enum):
@@ -310,20 +314,19 @@ def help(err=False):
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
         cf=<format string>   content format string (args: <cr capture groups>, content, di, ci)
-        cm=<bool>            allow multiple content matches in one document instead of picking the first
-                             (defaults to true)
+        cm=<bool>            allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
-        cpf=<format string>  print the result of this format string for each content, empty to disable,
+        cpf=<format string>  print the result of this format string for each content, empty to disable
                              defaults to \"{{content}}\" if cpf and csf are both unspecified
-                             (args: label, content, encoding, document, escape, [link], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
-                             (args: label, content, encoding, document, escape, [link], <lr capture groups>, <cr capture groups>)
+                             (args: label, content, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
-        cesc=<string>        escape sequence to terminate content
+        cesc=<string>        escape sequence to terminate content in cin mode
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -599,13 +602,20 @@ def fetch_doc(ctx, doc, raw=False, enc=True):
     if len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_name(ctx, format, label_txt, content_link, content_txt, label_regex_match, content_regex_match, doc):
+def gen_final_content_name(ctx, format, label_txt,  di, ci, content_link, content_txt, label_regex_match, content_regex_match, doc):
+    opts_list = []
+    opts_dict = {}
+    if ctx.document.multimatch:
+        opts_list.append(di)
+        opts_dict["di"] = di
+    if ctx.content.multimatch:
+        opts_list.append(ci)
+        opts_dict["ci"] = ci
     if content_link:
-        url_list = [content_link]
-        url_dict = {"link": content_link}
-    else:
-        url_list = []
-        url_dict = {}
+        opts_list.append(content_link)
+        opts_dict["link"] = content_link
+       
+
     if label_regex_match is None:
         label_regex_match = RegexMatch(None)
     if content_regex_match is None:
@@ -613,11 +623,11 @@ def gen_final_content_name(ctx, format, label_txt, content_link, content_txt, la
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
     return format.format(
         *([label_txt, content_txt, doc.encoding, doc.path, ctx.content_escape_sequence] 
-        + url_list + label_regex_match.group_list + content_regex_match.group_list), 
+        + opts_list + label_regex_match.group_list + content_regex_match.group_list), 
         **dict(
             list(content_regex_match.group_dict.items()) 
             + list(label_regex_match.group_dict.items()) 
-            + list(url_dict.items()) 
+            + list(opts_dict.items()) 
             + list(
                 {
                 "label": label_txt,
@@ -1016,7 +1026,7 @@ def add_doc(ctx, doctype, path):
     ctx.pathes.append(
         Document(
             doctype,
-            normalize_link(ctx, Document(doctype, None, None, False, ctx.default_document_scheme, False, False), path),
+            normalize_link(ctx, Document(doctype.url_handling_type(), None, None, False, ctx.default_document_scheme, False, False), path),
             ctx.default_document_encoding,
             ctx.force_document_encoding,
             ctx.default_document_scheme,
