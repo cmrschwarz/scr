@@ -560,32 +560,44 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, raw=False):
+def fetch_doc(ctx, doc, raw=False, enc=True):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
-                res = f.read()
-            if not raw:
-                res = str(res, encoding=doc.encoding)
+                data = f.read()
+            data_enc = str(data, encoding=doc.encoding)
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
         assert doc.document_type == DocumentType.URL
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
-            ctx.selenium_driver.get(doc.path)
-            src = ctx.selenium_driver.page_source
-        else:
-            response = download_url(ctx, doc.path)
-            if raw:
-                res = response.content
+            if not raw:
+                ctx.selenium_driver.get(doc.path)
+                data_enc = ctx.selenium_driver.page_source
             else:
-                res = response.text
-            if response.encoding is not None:
-                doc.encoding = response.encoding
-            response.close()
-            if not res:
+                raise Exception("downloading content in selenium mode is not supported yet")
+        else:
+            res = download_url(ctx, doc.path)
+            data = res.content
+            if enc:
+                if doc.force_encoding:
+                    try:
+                        data_enc = str(data, encoding=doc.encoding)
+                    except:
+                        data_enc = res.text
+                else:
+                    data_enc = res.text
+                    if res.encoding is not None:
+                        doc.encoding = res.encoding
+
+            res.close()
+            if not data:
                 error(f"aborting! failed to download {doc.path}")
-    return res
+    result = []
+    if raw: result.append(data)
+    if enc: result.append(data_enc)
+    if len(result) == 1: return result[0]
+    return tuple(result)
 
 def gen_final_content_name(ctx, format, label_txt, content_link, content_txt, label_regex_match, content_regex_match, doc):
     if content_link:
@@ -719,25 +731,16 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     if not ctx.content_raw:
         try:
             if ctx.content_download_required:
-                content_bytes = fetch_doc(
+                content_bytes, content_txt = fetch_doc(
                     ctx, 
-                    Document(doc.derived_type(), content_link, doc.encoding, False, None, False, False),
+                    Document(doc.document_type.derived_type(), content_link, doc.encoding, doc.force_encoding if ctx.need_content_download_txt else False, None, False, False),
                     raw=True
                 )
-                if ctx.need_content_download_txt:
-                    if doc.force_encoding or res.encoding is None:
-                        try:
-                            content_txt = str(content_bytes, encoding=doc.encoding)
-                        except:
-                            content_txt = res.text
-                    else:
-                        content_txt = res.text
-                res.close()
             else:
                 content_bytes = None
                 content_txt = None
         except Exception as ex:
-            sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}"\n')
+            sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}: {str(ex)}"\n')
             return False
 
     if ctx.content_print_format:
@@ -946,11 +949,11 @@ def dl(ctx):
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
             if not ctx.have_label_matching or cm.label_regex_match is not None:
+                content_matches_in_doc = True
                 accept = handle_content_match(ctx, doc, cm, di, ci)
                 if accept is None:
                     break
                 if accept:
-                    content_matches_in_doc = True
                     ci += 1
             else:
                 sys.stderr.write(f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}\n")
