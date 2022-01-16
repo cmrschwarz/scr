@@ -255,7 +255,9 @@ class DlContext:
         self.content_save_format = ""
         self.content_print_format = ""
         self.content_raw = True
-        self.forced_content_encoding = None
+        self.content_input_encoding = "utf-8"
+        self.content_forced_input_encoding = False
+        self.content_encoding = "utf-8"
 
         self.label = Locator("label", ["di", "ci"])
         self.label_default_format = None
@@ -339,6 +341,9 @@ def help(err=False):
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
         cesc=<string>        escape sequence to terminate content in cin mode
+        cienc=<encoding>     default encoding to assume that content is in
+        cfienc=<encoding>    encoding to always assume that content is in, even if http(s) says differently 
+        cenc=<encoding>      encoding to use for content_enc
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -502,8 +507,6 @@ def setup(ctx):
     if ctx.content_save_format:
         ctx.content_save_format = unescape_string(ctx.content_save_format, "csf")
 
-    
-
     if ctx.user_agent is None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
@@ -663,25 +666,21 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
     )
     res = b''
     args_list.reverse()
-    if type(content) == bytes:
-        for (text, key, _, _) in Formatter().parse(format):
-            if text is not None:
-                res += text.encode("utf-8")
-            if key is not None:
-                if key == "":
-                    val = args_list.pop()
-                else:
-                    val = args_dict[key]
-                if val is content:
-                    res += val
-                else:
-                    res += text.encode(val)
-        if raw: return res
-        return res.decode("utf-8")
-    else:
-        fmt = format.format(*args_list, **args_dict)
-        if raw: return fmt.encode("utf-8")
-        return fmt
+    for (text, key, _, _) in Formatter().parse(format):
+        if text is not None:
+            res += text.encode("utf-8")
+        if key is not None:
+            if key == "":
+                val = args_list.pop()
+            else:
+                val = args_dict[key]
+            if type(val) is bytes:
+                res += val
+            else:
+                res += val.encode("utf-8")
+    if raw: return res
+    return res.decode("utf-8")
+  
 
 def normalize_link(ctx, src_doc, link):
     # todo: make this configurable
@@ -787,7 +786,12 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if ctx.content_download_required:
                 res = fetch_doc(
                     ctx, 
-                    Document(doc.document_type.derived_type(), content_link, doc.encoding, doc.force_encoding, None, False, False),
+                    Document(
+                        doc.document_type.derived_type(),
+                        content_link, ctx.content_input_encoding,
+                        ctx.content_forced_input_encoding,
+                        None, False, False
+                    ),
                     raw=True,
                     enc=ctx.need_content_download_txt,
                     nosingle=True
@@ -803,10 +807,18 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     else:
         content_bytes = content_txt
 
+    if ctx.need_content_download_txt:
+        content_enc = content_txt.encode(ctx.content_encoding)
+    else:
+        content_enc = None
+        
+
     if ctx.content_print_format:
         print_data = gen_final_content_format(
             ctx, ctx.content_print_format, label, di, ci, content_link,
-            content_bytes, content_txt, content_match.label_regex_match, content_match.content_regex_match, doc, raw=not ctx.content_raw
+            content_bytes, content_enc,  
+            content_match.label_regex_match, content_match.content_regex_match,
+            doc, raw=not ctx.content_raw
         ) 
         if ctx.content_raw:
             sys.stdout.write(print_data)
@@ -818,7 +830,8 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_format(
             ctx, ctx.content_save_format, label, di, ci, content_link,
-            content_bytes, content_txt, content_match.label_regex_match, content_match.content_regex_match,
+            content_bytes, content_enc, 
+            content_match.label_regex_match, content_match.content_regex_match,
             doc, raw=False
         ) 
         try:
@@ -1049,11 +1062,17 @@ def get_int_arg(arg, argname):
     except ValueError:
         error(f"value for {argname} must be an integer")
 
-def get_bool_arg(arg, argname):
+def get_bool_arg(arg):
     res = parse_bool_string(get_arg(arg))
     if res is None:
-        error(f"value for {argname} must be interpretable as a boolean")
+        error(f"value in {arg} must be interpretable as a boolean")
     return res
+
+def get_encoding_arg(arg):
+    enc = get_arg(arg)
+    if not verify_encoding(enc):
+        error(f"unknown encoding in '{arg}'")
+    return enc
 
 def select_variant(val, variants_dict):
     val = val.strip().lower()
@@ -1107,24 +1126,31 @@ def main():
         elif begins(arg, "cf="):
             ctx.content.format = get_arg(arg)
         elif begins(arg, "cm="):
-            ctx.content.multimatch = get_bool_arg(arg, "cm")
+            ctx.content.multimatch = get_bool_arg(arg)
         elif begins(arg, "cimin="):
             ctx.cimin = get_int_arg(arg, "cimin")
         elif begins(arg, "cimax="):
             ctx.cimax = get_int_arg(arg, "cimax")
         elif begins(arg, "cicont="):
-            ctx.ci_continuous = get_bool_arg(arg, "cicont")
+            ctx.ci_continuous = get_bool_arg(arg)
         elif begins(arg, "cpf="):
             ctx.content_print_format = get_arg(arg)
         elif begins(arg, "cin="):
-            ctx.content.interactive = get_bool_arg(arg, "cin")
+            ctx.content.interactive = get_bool_arg(arg)
         elif begins(arg, "csf="):
             ctx.content_save_format = get_arg(arg)
         elif begins(arg, "cl="):
-            ctx.content_raw = not get_bool_arg(arg, "cl")
+            ctx.content_raw = not get_bool_arg(arg)
         elif begins(arg, "cesc="):
             ctx.content_escape_sequence = get_arg(arg)
-
+        elif begins(arg, "cienc="):
+            ctx.content_input_encoding = get_encoding_arg(arg)
+        elif begins(arg, "cienc="):
+            ctx.content_encoding = get_encoding_arg(arg)
+            ctx.content_forced_input_encoding = False
+        elif begins(arg, "cenc="):
+            ctx.content_encoding = get_encoding_arg(arg)
+            ctx.content_forced_input_encoding = True
         # label args
         elif begins(arg, "lx="):
             ctx.label.xpath = get_arg(arg)
@@ -1133,17 +1159,17 @@ def main():
         elif begins(arg, "lf="):
             ctx.label.format = get_arg(arg)
         elif begins("arg", "las="):
-            ctx.allow_slashes_in_labels = get_bool_arg(arg, "las")
+            ctx.allow_slashes_in_labels = get_bool_arg(arg)
         elif begins(arg, "ldf="):
             ctx.label_default_format = get_arg(arg)
         elif begins(arg, "lic="):
-            ctx.labels_inside_content = get_bool_arg(arg, "lic")
+            ctx.labels_inside_content = get_bool_arg(arg)
         elif begins(arg, "lm="):
-            ctx.label.multimatch = get_bool_arg(arg, "lm")
+            ctx.label.multimatch = get_bool_arg(arg)
         elif begins(arg, "lin="):
-            ctx.label.interactive = get_bool_arg(arg, "lin")
+            ctx.label.interactive = get_bool_arg(arg)
         elif begins(arg, "lam="):
-            ctx.label_allow_missing = get_bool_arg(arg, "lam")
+            ctx.label_allow_missing = get_bool_arg(arg)
 
         # document args
         elif begins(arg, "dx="):
@@ -1153,31 +1179,23 @@ def main():
         elif begins(arg, "df="):
             ctx.document.format = get_arg(arg)
         elif begins(arg, "dimin="):
-            ctx.dimin = get_int_arg(arg, "dimin")
+            ctx.dimin = get_int_arg(arg)
         elif begins(arg, "dimax="):
-            ctx.dimax = get_int_arg(arg, "dimax")
+            ctx.dimax = get_int_arg(arg)
         elif begins(arg, "dm="):
-            ctx.document.multimatch = get_bool_arg(arg, "dm")
+            ctx.document.multimatch = get_bool_arg(arg)
         elif begins(arg, "dbfs="):
-            ctx.document_dfs = get_bool_arg(arg, "dbfs")
+            ctx.document_dfs = get_bool_arg(arg)
         elif begins(arg, "ddfs="):
-            ctx.document_files = get_bool_arg(arg, "dfiles")
+            ctx.document_files = get_bool_arg(arg)
         elif begins(arg, "din="):
-            ctx.document.interactive = get_bool_arg(arg, "din")
+            ctx.document.interactive = get_bool_arg(arg)
         elif begins(arg, "denc="):
-            enc = get_arg(arg)
-            if verify_encoding(enc):
-                ctx.default_document_encoding = enc
-                ctx.force_document_encoding = False
-            else:
-                error(f"unknown encoding in '{arg}'")
+            ctx.default_document_encoding = get_encoding_arg(arg)
+            ctx.force_document_encoding = False
         elif begins(arg, "dfenc="):
-            enc = get_arg(arg)
-            if verify_encoding(enc):
-                ctx.default_document_encoding = enc
-                ctx.force_document_encoding = True
-            else:
-                error(f"unknown encoding in '{arg}'")
+            tx.default_document_encoding = get_encoding_arg(arg)
+            ctx.force_document_encoding = True
         elif begins(arg, "dsch="):
             enc = get_arg(arg)
             ctx.default_document_scheme = enc
@@ -1189,7 +1207,7 @@ def main():
             ctx.default_document_scheme = enc
             ctx.force_document_scheme = True
         elif begins(arg, "dpsch="):
-            ctx.prefer_parent_document_scheme = get_bool_arg(arg, "dpsch")
+            ctx.prefer_parent_document_scheme = get_bool_arg(arg)
         # misc args
         elif begins(arg, "url="):
             add_doc(ctx, DocumentType.URL, get_arg(arg))
@@ -1224,11 +1242,11 @@ def main():
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
             ctx.tor_browser_dir = get_arg(arg)
         elif begins(arg, "overwrite="):
-            ctx.overwrite_files = get_bool_arg(arg, "overwrite")
+            ctx.overwrite_files = get_bool_arg(arg)
         elif begins(arg, "ua="):
             ctx.user_agent = get_arg(arg)
         elif begins(arg, "uarandom="):
-            ctx.user_agent_random = get_bool_arg(arg, "uarandom")
+            ctx.user_agent_random = get_bool_arg(arg)
         elif begins(arg, "v="):
             strats_dict = {
                 "silent": Verbosity.SILENT,
@@ -1241,11 +1259,7 @@ def main():
                 error(f"no matching verbosity level for '{arg}'")
             ctx.verbosity = res
         elif begins(arg, "oenc="):
-            enc = get_arg(arg)
-            if verify_encoding(enc):
-                ctx.forced_output_encoding = enc
-            else:
-                error(f"unknown encoding in '{arg}'")
+            ctx.forced_output_encoding = get_encoding_arg(arg)
         elif "":
             continue
         else:
