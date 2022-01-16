@@ -33,6 +33,11 @@ class DocumentType(Enum):
     URL = 1
     FILE = 2
     RFILE = 3
+    def derived_type(self):
+        if self.value == DocumentType.RFILE:
+            return DocumentType.URL
+        return DocumentType(self.value)
+
 
 class SeleniumVariant(Enum):
     DISABLED = 0
@@ -304,10 +309,11 @@ def help(err=False):
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
-        cpf=<format string>  print the result of this format string for each content, empty to disable
-                             (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
-        csf=<format string>  save content to file at the path resulting from the format string, non empty to enable
-                             (args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>)
+        cpf=<format string>  print the result of this format string for each content, empty to disable,
+                             defaults to \"{{content}}\" if cpf and csf are both unspecified
+                             (args: label, content, encoding, document, escape, [link], <lr capture groups>, <cr capture groups>)
+        csf=<format string>  save content to file at the path resulting from the format string, empty to enable
+                             (args: label, content, encoding, document, escape, [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
@@ -545,11 +551,13 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc_source(ctx, doc):
+def fetch_doc(ctx, doc, raw=False):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
-                src = str(f.read(), encoding=doc.encoding)
+                res = f.read()
+            if not raw:
+                res = str(res, encoding=doc.encoding)
         except Exception as ex:
             error(f"aborting! failed to read: {str(ex)}")
     else:
@@ -558,19 +566,22 @@ def fetch_doc_source(ctx, doc):
             ctx.selenium_driver.get(doc.path)
             src = ctx.selenium_driver.page_source
         else:
-            res = download_url(ctx, doc.path)
-            src = res.text
-            if res.encoding is not None:
-                doc.encoding = res.encoding
-            res.close()
-            if not src:
+            response = download_url(ctx, doc.path)
+            if raw:
+                res = response.content
+            else:
+                res = response.text
+            if response.encoding is not None:
+                doc.encoding = response.encoding
+            response.close()
+            if not res:
                 error(f"aborting! failed to download {doc.path}")
-    return src
+    return res
 
-def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, label_regex_match, content_regex_match, doc):
-    if content_url:
-        url_list = [content_url]
-        url_dict = {"url": content_url}
+def gen_final_content_name(ctx, format, label_txt, content_link, content_txt, label_regex_match, content_regex_match, doc):
+    if content_link:
+        url_list = [content_link]
+        url_dict = {"link": content_link}
     else:
         url_list = []
         url_dict = {}
@@ -597,19 +608,19 @@ def gen_final_content_name(ctx, format, label_txt, content_url, content_txt, lab
             ) 
         )
     )
-def normalize_url(src_doctype, url, src_doc_url=None):
+def normalize_link(src_doctype, link, src_doc_url=None):
     # todo: make this configurable
     default_scheme = "https"
     if src_doctype == DocumentType.FILE:
-        return url
-    url_parsed = urllib.parse.urlparse(url)
+        return link
+    url_parsed = urllib.parse.urlparse(link)
     doc_url_parsed = urllib.parse.urlparse(src_doc_url) if src_doc_url else None
 
     if doc_url_parsed and url_parsed.netloc == "" and src_doctype == DocumentType.URL:
         url_parsed = url_parsed._replace(netloc=doc_url_parsed.netloc)
 
     # for urls like 'google.com' urllib makes this a path instead of a netloc
-    if url_parsed.netloc == "" and src_doc_url is None and url_parsed.scheme == "" and url_parsed.path != "" and url[0] not in [".", "/"]:
+    if url_parsed.netloc == "" and src_doc_url is None and url_parsed.scheme == "" and url_parsed.path != "" and link[0] not in [".", "/"]:
         url_parsed = url_parsed._replace(path="", netloc=url_parsed.path)
     if url_parsed.scheme == "":
         if doc_url_parsed and doc_url_parsed.scheme != "":
@@ -643,14 +654,14 @@ def handle_content_match(ctx, doc, content_match, di, ci):
 
     if ctx.content_raw:
         context = document_context
-        content_url = None
+        content_link = None
     else:
-        content_url = content_txt
+        content_link = content_txt
 
     while True:
         if not ctx.content_raw:
-            content_url = normalize_url(doc.document_type, content_url, doc.path)
-            context = f'content url "{content_url}"'
+            content_link = normalize_link(doc.document_type, content_link, doc.path)
+            context = f'content link "{content_link}"'
 
         if ctx.content.interactive:
             res = prompt(
@@ -663,7 +674,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if res == 4: return None
             assert res == 2
             if not ctx.content_raw:
-                content_url = input("enter new content url:\n")
+                content_link = input("enter new content link:\n")
             else:
                 sys.stdout.write(f'enter new content (terminate with a newline followed by the string "{ctx.content_escape_sequence}"):\n')
                 content_txt = ""
@@ -698,8 +709,11 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     if not ctx.content_raw:
         try:
             if ctx.content_download_required:
-                res = download_url(ctx, content_url)
-                content_bytes = res.content
+                content_bytes = fetch_doc(
+                    ctx, 
+                    Document(doc.derived_type(), content_link, doc.encoding, False),
+                    raw=True
+                )
                 if ctx.need_content_download_txt:
                     if doc.force_encoding or res.encoding is None:
                         try:
@@ -713,12 +727,12 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 content_bytes = None
                 content_txt = None
         except Exception as ex:
-            sys.stderr.write(f'{document_context}: failed to download content from "{content_url}"\n')
+            sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}"\n')
             return False
 
     if ctx.content_print_format:
         print_name = gen_final_content_name(
-            ctx, ctx.content_print_format, label, content_url,
+            ctx, ctx.content_print_format, label, content_link,
             content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
         ) 
         print(print_name)
@@ -727,7 +741,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         if not ctx.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_name(
-            ctx, ctx.content_save_format, label, content_url,
+            ctx, ctx.content_save_format, label, content_link,
             content_txt, content_match.label_regex_match, content_match.content_regex_match, doc
         ) 
         try:
@@ -816,10 +830,7 @@ def gen_content_matches(ctx, doc, src, src_xml):
 
 def gen_document_matches(ctx, doc, src, src_xml):
     new_paths = ctx.document.apply(src, src_xml, doc.path)
-    document_type = doc.document_type
-    if document_type == DocumentType.RFILE:
-        document_type = DocumentType.URL
-    return [ Document(document_type, path, doc.encoding, doc.force_encoding) for path in new_paths ]
+    return [ Document(doc.document_type.derived_type(), path, doc.encoding, doc.force_encoding) for path in new_paths ]
 
 def dl(ctx):
     docs = deque(ctx.pathes)
@@ -834,7 +845,7 @@ def dl(ctx):
         try_number = 0
         final_document_matches = []
         final_content_matches = []
-        src = fetch_doc_source(ctx, doc)
+        src = fetch_doc(ctx, doc)
         static_content = (doc.document_type != DocumentType.URL)
         input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
         while True:
@@ -978,7 +989,7 @@ def add_doc(ctx, doctype, path):
     ctx.pathes.append(
         Document(
             doctype,
-            normalize_url(doctype, path, None),
+            normalize_link(doctype, path, None),
             ctx.default_document_encoding,
             ctx.force_document_encoding
         )
