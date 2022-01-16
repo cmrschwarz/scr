@@ -289,7 +289,7 @@ class DlContext:
         self.user_agent = None
         self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
-        self.verbosity = Verbosity.INFO
+        self.verbosity = Verbosity.WARN
        
         
 
@@ -315,6 +315,10 @@ def unescape_string(txt, context):
         return txt.encode("utf-8").decode("unicode_escape")
     except Exception as ex:
         error(f"failed to unescape {context}: {str(ex)}")
+
+def log(ctx, verbosity, msg):
+    if ctx.verbosity >= verbosity:
+        print(msg)
 
 def help(err=False):
     global DEFAULT_CPF
@@ -382,7 +386,7 @@ def help(err=False):
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
     Further Options:
-        sel=<browser>       output verbosity levels (default: info, values: info,warn,error,silent)
+        v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
@@ -534,8 +538,6 @@ def setup(ctx):
     ctx.have_multidocs = ctx.document.xpath is not None or ctx.document.regex is not None or ctx.document.format is not None
     ctx.have_interactive_matching = ctx.label.interactive or ctx.content.interactive
 
-    if not ctx.have_multidocs:
-        ctx.dimax = ctx.dimin
     if not ctx.have_label_matching:
         ctx.label_allow_missing = True
         if ctx.labels_inside_content:
@@ -601,14 +603,17 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
+def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False, allowfail=False):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
                 data = f.read()
             data_enc = str(data, encoding=doc.encoding)
         except Exception as ex:
-            error(f"aborting! failed to read: {str(ex)}")
+            if allowfail:
+                raise ex
+            else:
+                error("aborting! failed to read: {str(ex)}")
     else:
         assert doc.document_type == DocumentType.URL
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
@@ -616,7 +621,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
                 ctx.selenium_driver.get(doc.path)
                 data_enc = ctx.selenium_driver.page_source
             else:
-                raise Exception("downloading content in selenium mode is not supported yet")
+                error("downloading content in selenium mode is not supported yet")
         else:
             res = download_url(ctx, doc.path)
             data = res.content
@@ -633,7 +638,10 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
 
             res.close()
             if not data:
-                error(f"aborting! failed to download {doc.path}")
+                if allowfail:
+                    raise Exception(f"failed to download {doc.path}")
+                else:
+                    error("aborting! failed to download {doc.path}")
     result = []
     if raw: result.append(data)
     if enc: result.append(data_enc)
@@ -801,12 +809,15 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                         doc.document_type.derived_type(),
                         content_link, ctx.content_input_encoding,
                         ctx.content_forced_input_encoding,
-                        None, False, False
+                        None, False, False,
                     ),
                     raw=True,
                     enc=ctx.need_content_enc,
-                    nosingle=True
+                    nosingle=True,
+                    allowfail=True
                 )
+                if res is None:
+                    return False
                 content_bytes = res[0]
                 content_txt = res[1] if ctx.need_content_enc else None
             else:
@@ -861,8 +872,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         ) 
         f.write(write_data)
         f.close()
-        if ctx.verbosity >= Verbosity.INFO:
-            print(f"wrote content into {save_path} for {context}")
+        log(ctx, Verbosity.INFO, f"wrote content into {save_path} for {context}")
     return True
 
 def handle_document_match(ctx, doc, matched_path):
@@ -1049,12 +1059,12 @@ def dl(ctx):
                 if accept:
                     ci += 1
             else:
-                sys.stderr.write(f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}\n")
+                log(ctx, Verbosity.WARN, f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}")
                 break
         if not ctx.have_interactive_matching and not content_matches_in_doc:
-            sys.stderr.write(f"no content matches for document: {doc.path}\n")
-        if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc:
-            sys.stderr.write(f"no content matches for document: {doc.path}\n")
+            log(ctx, Verbosity.WARN, f"no content matches for document: {doc.path}")
+        if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc and ctx.have_multidocs:
+            log(ctx, Verbosity.WARN, f"no document matches for document: {doc.path}")
         final_document_matches = [d for d in final_document_matches if handle_document_match(ctx, doc, d.path)]
         if ctx.documents_bfs:
             docs.extend(final_document_matches)
@@ -1063,7 +1073,7 @@ def dl(ctx):
         di += 1
 
     if di <= ctx.dimax and ctx.dimax != float("inf") :
-        sys.stderr.write("exiting! all documents handled before dimax was reached\n")
+        log(ctx, Verbosity.WARN, "exiting! all documents handled before dimax was reached")
 
 
 def begins(string, begin):
@@ -1072,11 +1082,11 @@ def begins(string, begin):
 def get_arg(arg):
     return arg[arg.find("=")+1:]
 
-def get_int_arg(arg, argname):
+def get_int_arg(arg):
     try:
         return int(get_arg(arg))
     except ValueError:
-        error(f"value for {argname} must be an integer")
+        error(f"value for {arg} must be an integer")
 
 def get_bool_arg(arg):
     res = parse_bool_string(get_arg(arg))
@@ -1144,9 +1154,9 @@ def main():
         elif begins(arg, "cm="):
             ctx.content.multimatch = get_bool_arg(arg)
         elif begins(arg, "cimin="):
-            ctx.cimin = get_int_arg(arg, "cimin")
+            ctx.cimin = get_int_arg(arg)
         elif begins(arg, "cimax="):
-            ctx.cimax = get_int_arg(arg, "cimax")
+            ctx.cimax = get_int_arg(arg)
         elif begins(arg, "cicont="):
             ctx.ci_continuous = get_bool_arg(arg)
         elif begins(arg, "cpf="):
@@ -1212,7 +1222,7 @@ def main():
             ctx.default_document_encoding = get_encoding_arg(arg)
             ctx.force_document_encoding = False
         elif begins(arg, "dfenc="):
-            tx.default_document_encoding = get_encoding_arg(arg)
+            ctx.default_document_encoding = get_encoding_arg(arg)
             ctx.force_document_encoding = True
         elif begins(arg, "dsch="):
             enc = get_arg(arg)
@@ -1267,7 +1277,6 @@ def main():
             ctx.user_agent_random = get_bool_arg(arg)
         elif begins(arg, "v="):
             strats_dict = {
-                "silent": Verbosity.SILENT,
                 "info": Verbosity.INFO,
                 "warn": Verbosity.WARN,
                 "error": Verbosity.ERROR,
