@@ -296,7 +296,7 @@ class DlContext:
         self.have_content_xpaths = False
         self.have_interactive_matching = False
         self.content_download_required = False
-        self.need_content_download_txt = False
+        self.need_content_enc = False
 
 
     def is_valid_label(self, label):
@@ -478,6 +478,7 @@ def get_format_string_keys(fmt_string):
     return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
 
 def format_string_uses_arg(fmt_string, arg_pos, arg_name):
+    if fmt_string is None: return False
     fmt_args = get_format_string_keys(fmt_string)
     return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
 
@@ -548,15 +549,17 @@ def setup(ctx):
         
         ctx.label_default_format = form
 
+    ctx.need_content_enc = (
+        ctx.need_content_enc 
+        or format_string_uses_arg(ctx.content_save_format, 3, "content_enc") 
+        or format_string_uses_arg(ctx.content_print_format, 3, "content_enc")
+    )
     if not ctx.content_raw:
         if ctx.content_save_format:
             ctx.content_download_required = True
-            ctx.need_content_download_txt = ctx.need_content_download_txt or format_string_uses_arg(ctx.content_save_format, 3, "content_enc")
+            
         if ctx.content_print_format and not ctx.content_download_required:
-            content_printed = format_string_uses_arg(ctx.content_print_format, 2, "content")
-            content_enc_printed = format_string_uses_arg(ctx.content_print_format, 3, "content_enc")
-            ctx.need_content_download_txt = ctx.need_content_download_txt or content_enc_printed
-            ctx.content_download_required = content_printed or content_enc_printed
+            ctx.content_download_required = ctx.need_content_enc or format_string_uses_arg(ctx.content_print_format, 2, "content")
 
        
 
@@ -628,7 +631,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if not nosingle and len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc, raw=True):
+def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
     opts_list = []
     opts_dict = {}
     if ctx.document.multimatch:
@@ -647,7 +650,7 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    args_list = ([label_txt, content, doc.encoding, doc.path, ctx.content_escape_sequence] 
+    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, ctx.content_escape_sequence] 
         + opts_list + label_regex_match.group_list + content_regex_match.group_list)
     args_dict = dict(
         list(content_regex_match.group_dict.items()) 
@@ -677,9 +680,8 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
             if type(val) is bytes:
                 res += val
             else:
-                res += val.encode("utf-8")
-    if raw: return res
-    return res.decode("utf-8")
+                res += text.encode("utf-8")
+    return res
   
 
 def normalize_link(ctx, src_doc, link):
@@ -793,11 +795,11 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                         None, False, False
                     ),
                     raw=True,
-                    enc=ctx.need_content_download_txt,
+                    enc=ctx.need_content_enc,
                     nosingle=True
                 )
                 content_bytes = res[0]
-                content_txt = res[1] if ctx.need_content_download_txt else None
+                content_txt = res[1] if ctx.need_content_enc else None
             else:
                 content_bytes = None
                 content_txt = None
@@ -807,7 +809,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     else:
         content_bytes = content_txt
 
-    if ctx.need_content_download_txt:
+    if ctx.need_content_enc:
         content_enc = content_txt.encode(ctx.content_encoding)
     else:
         content_enc = None
@@ -818,12 +820,9 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             ctx, ctx.content_print_format, label, di, ci, content_link,
             content_bytes, content_enc,  
             content_match.label_regex_match, content_match.content_regex_match,
-            doc, raw=not ctx.content_raw
+            doc
         ) 
-        if ctx.content_raw:
-            sys.stdout.write(print_data)
-        else:
-            sys.stdout.buffer.write(print_data)
+        sys.stdout.buffer.write(print_data)
 
     if ctx.content_save_format:
         if not ctx.is_valid_label(label):
@@ -832,8 +831,13 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             ctx, ctx.content_save_format, label, di, ci, content_link,
             content_bytes, content_enc, 
             content_match.label_regex_match, content_match.content_regex_match,
-            doc, raw=False
+            doc
         ) 
+        try:
+            save_path = save_path.encode("utf-8")
+        except:
+            error(
+                f"aborting! generated save path is not valid utf-8: {doc.path}")
         try:
             f = open(save_path, "wb")
         except Exception as ex:
