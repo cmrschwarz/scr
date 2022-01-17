@@ -220,7 +220,7 @@ class Locator:
         if self.is_unset(): return default
         res = []
         for x in self.match_xpath(src_xml, path, [src]):
-            for m in self.match_regex(x, path, [x]):
+            for m in self.match_regex(x, path, [RegexMatch(x)]):
                 res.append(self.apply_format(m, values, keys))
         return res
 
@@ -402,7 +402,7 @@ def help(err=False):
         print(text)
 
 def add_cwd_to_path():
-    cwd = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
     os.environ["PATH"] += ":" + cwd
     return cwd
 
@@ -417,7 +417,7 @@ def setup_selenium_tor(ctx):
         if tb_env_var in os.environ:
             ctx.tor_browser_dir = os.environ[tb_env_var]
         else:
-            ctx.tor_browser_dir = "start-tor-browser"
+            error(f"error! no tbdir specified, check --help")
     try:
         options = webdriver.firefox.options.Options()
         if ctx.user_agent != None:
@@ -993,7 +993,7 @@ def dl(ctx):
                     document_matches = gen_document_matches(ctx, doc, src, src_xml)
 
                 if ctx.selenium_strategy == SeleniumStrategy.FIRST:
-                    if not content_matches or (not document_matches and di < ctx.dimax):
+                    if not content_matches or (not document_matches and (ctx.have_multidocs and di < ctx.dimax)):
                         time.sleep(ctx.selenium_poll_frequency_secs)
                         continue
                 if ctx.selenium_strategy == SeleniumStrategy.DEDUP:
@@ -1301,5 +1301,6 @@ def main():
 
 
 if __name__ == "__main__":
-    warnings.filterwarnings("error", category=DeprecationWarning) 
+    # to silence: "Setting a profile has been deprecated" on launching tor
+    warnings.filterwarnings("ignore", module=".*selenium.*", category=DeprecationWarning) 
     exit(main())
