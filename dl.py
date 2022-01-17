@@ -565,6 +565,7 @@ def setup(ctx):
     ctx.need_content_enc = (
         ctx.need_content_enc 
         or format_string_uses_arg(ctx.content_save_format, 3, "content_enc") 
+        or format_string_uses_arg(ctx.content_write_format, 3, "content_enc")
         or format_string_uses_arg(ctx.content_print_format, 3, "content_enc")
     )
     if not ctx.content_raw:
