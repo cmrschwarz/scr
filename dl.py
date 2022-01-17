@@ -782,16 +782,22 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
                 res = prompt(
-                    f'{context}: accept label "{label}" [Yes/edit/inspect/skip]? ',
-                    [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, inspect_indicating_strings), (4, skip_indicating_strings)],
+                    f'{context}: accept label "{label}" [Yes/edit/inspect/skip/nextdoc]? ',
+                    [
+                        (1, yes_indicating_strings),
+                        (2, edit_indicating_strings),
+                        (3, inspect_indicating_strings),
+                        (4, skip_indicating_strings),
+                        (5, next_doc_indicating_strings)
+                    ],
                     1
                 )
                 if res == 1: break
+                if res == 5: return None
                 if res == 3:
                     print(f'"{doc.path}": content for "{label}":\n' + content_txt)
                     continue
                 if res == 4:
-                    print("skipping...")
                     return False
                 assert res == 2
             label = input("enter new label: ")
@@ -847,12 +853,40 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             content_bytes, content_enc, 
             content_match.label_regex_match, content_match.content_regex_match,
             doc
-        ) 
+        )
         try:
             save_path = save_path.decode("utf-8")
         except:
+            log(ctx. Verbosity.ERROR, f"{context}: generated save path is not valid utf-8")
+            save_path = None
+        while True:
+            if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
+                log(ctx. Verbosity.ERROR, f"{context}: directory of generated save path does not exist")
+                save_path = None
+            if not save_path and not ctx.save_path_interactive:
+                return False
+            if save_path:
+                res = prompt(
+                    f'{context}: accept save path "{save_path}" [Yes/edit/skip/nextdoc]? ',
+                    [
+                        (1, yes_indicating_strings),
+                        (2, edit_indicating_strings),
+                        (3, skip_indicating_strings),
+                        (4, next_doc_indicating_strings)
+                    ],
+                    1
+                )
+                if res == 1: break
+                if res == 4: return None
+                if res == 3: return False
+                assert res == 2
+            save_path = input("enter new save path: ")
+        try:
+            f = open(save_path, "wb")
+        except Exception as ex:
             error(
-                f"{context}: aborting! generated save path is not valid utf-8")
+                f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
+        
         try:
             f = open(save_path, "wb")
         except Exception as ex:
@@ -1166,6 +1200,8 @@ def main():
             ctx.content.interactive = get_bool_arg(arg)
         elif begins(arg, "csf="):
             ctx.content_save_format = get_arg(arg)
+        elif begins(arg, "csin="):
+            ctx.save_path_interactive = get_bool_arg(arg)
         elif begins(arg, "cwf="):
             ctx.content_write_format = get_arg(arg)
         elif begins(arg, "cl="):
