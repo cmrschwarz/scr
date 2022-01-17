@@ -107,7 +107,7 @@ class Locator:
         self.format = None
         self.multimatch = True
         self.interactive = False
-        self.regex_groups = False
+        self.content_capture_group = None
         self.additional_format_keys = additional_format_keys
 
     def compile_regex(self):
@@ -118,12 +118,27 @@ class Locator:
         except re.error as err:
             error(f"{self.name[0]}r is not a valid regex: {err.msg}")
         if regex_comp.groups == 0:
-            regex_comp = re.compile("(" + self.regex + ")")
-
-        if regex_comp.groups != 1:
-            if self.name not in regex_comp.groupindex: 
-                error(f"if {self.name[0]} contains more than one capture group it must contain a named capture group named {self.name}")
-            self.regex_groups = True
+            self.content_capture_group = 0
+        elif self.name in regex_comp.groupindex: 
+            self.content_capture_group = self.name 
+        elif regex_comp.groups == 1 + len(regex_comp.groupindex):
+            named_indices = list(regex_comp.groupindex.values())
+            # find the group index that is not part of named_indices
+            # algorithm: put each index value at it's array index
+            # the array index that does not contain the right value at the end
+            # is not present 
+            named_indices.append(0)
+            for i in range(0, len(named_indices)):
+                v = named_indices[i] - 1
+                if v != i and v != -1:
+                    named_indices[i], named_indices[v] = named_indices[v], named_indices[i]
+            
+            for i in range(1, regex_comp.groups):
+                if named_indices[i] != i + 1:
+                    self.content_capture_group = i + 1
+                    break
+        else:
+            self.content_capture_group  = 0
         self.regex = regex_comp
 
     def setup(self):
@@ -134,6 +149,8 @@ class Locator:
             self.format = unescape_string(self.format, f"{self.name[0]}f")
         self.compile_regex()
         if self.format:
+            if self.xpath is None and self.regex is None:
+                error(f"cannot specify {self.name[0]}f without {self.name[0]}x or {self.name[0]}r")
             try:
                 if self.regex:
                     capture_group_keys = list(self.regex.groupindex.keys())
@@ -153,13 +170,7 @@ class Locator:
                     elif k not in known_keys:
                         error(f"unknown key {{{k}}} in {self.name[0]}f={self.format}")
             except Exception as ex:
-                error(f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
-        if self.format is None:
-            if self.xpath is not None or self.regex is not None:
-                self.format = "{}"
-        else:
-            if self.xpath is None and self.regex is None:
-                error(f"cannot specify {self.name[0]}f without {self.name[0]}x or {self.name[0]}r")
+                error(f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")           
 
     def match_xpath(self, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None: return default
@@ -197,10 +208,7 @@ class Locator:
         if self.regex is None or val is None: return default
         res = []
         for m in self.regex.finditer(val):
-            if self.regex_groups:
-                res.append(RegexMatch(m.group(self.name), list(m.groups()), m.groupdict()))
-            else:
-                res.append(RegexMatch(m.group(1)))
+            res.append(RegexMatch(m.group(self.content_capture_group), list(m.groups()), m.groupdict()))
             if not self.multimatch:
                 break
         return res
@@ -545,7 +553,6 @@ def setup(ctx):
             error(f"cannot specify lic without lx or lr")
 
     if ctx.label_default_format is None and ctx.label_allow_missing:
-        have_ext = False
         form = "dl_"
         # if max was not set it is 'inf' which has length 3 which is a fine default
         didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
@@ -639,7 +646,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if not nosingle and len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
+def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
     opts_list = []
     opts_dict = {}
     if ctx.document.multimatch:
@@ -677,7 +684,7 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
     )
     res = b''
     args_list.reverse()
-    for (text, key, _, _) in Formatter().parse(format):
+    for (text, key, format_args, b) in Formatter().parse(format_str):
         if text is not None:
             res += text.encode("utf-8")
         if key is not None:
@@ -688,7 +695,7 @@ def gen_final_content_format(ctx, format, label_txt, di, ci, content_link, conte
             if type(val) is bytes:
                 res += val
             else:
-                res += str(val).encode("utf-8")
+                res += format(val, format_args).encode("utf-8")
     return res
   
 
@@ -1042,7 +1049,7 @@ def dl(ctx):
                 if accept:
                     break
             break
-        if ctx.ci_continuous:
+        if not ctx.ci_continuous:
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
             if not ctx.have_label_matching or cm.label_regex_match is not None:
@@ -1052,6 +1059,7 @@ def dl(ctx):
                     break
                 if accept:
                     ci += 1
+                if ci > ctx.cimax: break
             else:
                 log(ctx, Verbosity.WARN, f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}")
                 break
