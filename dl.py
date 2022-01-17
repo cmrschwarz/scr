@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from sqlite3 import DataError
 import lxml # pip3 install lxml
 import lxml.html
 import requests
@@ -602,19 +603,11 @@ def prompt(prompt_text, options, default=None):
 
 def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
-
-
-def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False, allowfail=False):
+def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-        try:
-            with open(doc.path, "rb") as f:
-                data = f.read()
-            data_enc = str(data, encoding=doc.encoding)
-        except Exception as ex:
-            if allowfail:
-                raise ex
-            else:
-                error("aborting! failed to read: {str(ex)}")
+        with open(doc.path, "rb") as f:
+            data = f.read()
+        data_enc = str(data, encoding=doc.encoding)
     else:
         assert doc.document_type == DocumentType.URL
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
@@ -638,11 +631,8 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False, allowfail=False):
                         doc.encoding = res.encoding
 
             res.close()
-            if not data:
-                if allowfail:
-                    raise Exception(f"failed to download {doc.path}")
-                else:
-                    error("aborting! failed to download {doc.path}")
+            if data is None:
+                raise ValueError("empty response")
     result = []
     if raw: result.append(data)
     if enc: result.append(data_enc)
@@ -814,8 +804,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                     ),
                     raw=True,
                     enc=ctx.need_content_enc,
-                    nosingle=True,
-                    allowfail=True
+                    nosingle=True                
                 )
                 if res is None:
                     return False
@@ -825,7 +814,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 content_bytes = None
                 content_txt = None
         except Exception as ex:
-            sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}: {str(ex)}"\n')
+            sys.stderr.write(f'{document_context}: failed to fetch content from "{content_link}"\n')
             return False
     else:
         content_bytes = content_txt
@@ -879,7 +868,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
 def handle_document_match(ctx, doc, matched_path):
     if not ctx.document.interactive: return True
     res = prompt(
-        f'"{doc.path}": accept matched document "{matched_path}" [Yes/no/edit]? ',
+        f'accept matched document "{matched_path}" [Yes/no/edit]? ',
         [(1, yes_indicating_strings), (2, no_indicating_strings), (3, edit_indicating_strings)],
         1
     )
@@ -973,7 +962,11 @@ def dl(ctx):
         try_number = 0
         final_document_matches = []
         final_content_matches = []
-        src = fetch_doc(ctx, doc)
+        try:
+            src = fetch_doc(ctx, doc)
+        except Exception as ex:
+            log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}")
+            continue
         static_content = (doc.document_type != DocumentType.URL)
         input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
         while True:
@@ -1066,11 +1059,12 @@ def dl(ctx):
             log(ctx, Verbosity.WARN, f"no content matches for document: {doc.path}")
         if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc and ctx.have_multidocs:
             log(ctx, Verbosity.WARN, f"no document matches for document: {doc.path}")
-        final_document_matches = [d for d in final_document_matches if handle_document_match(ctx, doc, d.path)]
-        if ctx.documents_bfs:
-            docs.extend(final_document_matches)
-        else:
-            docs.extendleft(final_document_matches)
+        if di < ctx.dimax :
+            final_document_matches = [d for d in final_document_matches if handle_document_match(ctx, doc, d.path)]
+            if ctx.documents_bfs:
+                docs.extend(final_document_matches)
+            else:
+                docs.extendleft(final_document_matches)
         di += 1
 
     if di <= ctx.dimax and ctx.dimax != float("inf") :
