@@ -14,12 +14,10 @@ from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
 from selenium import webdriver
-from selenium.webdriver.common.by import By as SeleniumLookupBy
 from collections import deque
 from enum import Enum, IntEnum
 import time
 import warnings
-import datetime
 
 def prefixes(str):
     return [str[:i] for i in range(len(str), 0, -1)]
