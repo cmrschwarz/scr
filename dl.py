@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from audioop import minmax
 from sqlite3 import DataError
 import lxml # pip3 install lxml
 import lxml.html
@@ -292,6 +293,7 @@ class DlContext:
         self.selenium_driver = None
         self.selenium_timeout_secs = 10
         self.selenium_poll_frequency_secs = 0.3
+        self.selenium_content_count_pad_length = 6
         self.selenium_strategy = SeleniumStrategy.FIRST
         self.user_agent_random = False
         self.user_agent = None
@@ -1011,6 +1013,7 @@ def dl(ctx):
             continue
         static_content = (doc.document_type != DocumentType.URL)
         input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
+        last_msg = ""
         while True:
             try_number += 1
             same_content = static_content and try_number > 1
@@ -1051,11 +1054,17 @@ def dl(ctx):
                 content_count = len(final_content_matches)
                 docs_count = len(final_document_matches)
                 msg = ""
-                if try_number > 1:
-                    msg += "\r"
-                msg += f'"{doc.path}": accept {content_count} content'
+                content_count_pad_len = (
+                    ctx.selenium_content_count_pad_length 
+                    - min(len(str(content_count)), ctx.selenium_content_count_pad_length)
+                )
+                rpad = int(content_count_pad_len / 2)
+                lpad = content_count_pad_len - rpad
+                msg += f'"{doc.path}": accept {lpad * " "} < {content_count} > {rpad * " "} content'
                 if content_count != 1:
                     msg += "s"
+                else:
+                    msg += " "
 
                 if labels_none_for_n != 0:
                     msg += f" (missing {labels_none_for_n} labels)"
@@ -1064,26 +1073,31 @@ def dl(ctx):
                     if docs_count != 1:
                         msg += "s"
                 msg += " [Yes/skip]? "
+
+                if msg != last_msg:
+                    msg_full = "\r" + " " * len(last_msg) + "\r" + msg
+                    last_msg = msg
+                    msg = msg_full
+                else:
+                    msg = None
                 rlist = []
                 if try_number > 1:
                     rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
-                if not rlist:
+                if not rlist and msg:
                     sys.stdout.write(msg)
-                while True:
-                    if not rlist:
-                        rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
-                    if rlist:
-                        accept = parse_prompt_option(sys.stdin.readline(), [(True, yes_indicating_strings), (False, skip_indicating_strings)], True)
-                        if accept is None:
-                            print("please answer with yes or skip")
-                            sys.stdout.write(msg)
-                            continue
-                        break
-                    accept = None
+               
+                if not rlist:
+                    rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
+                if rlist:
+                    accept = parse_prompt_option(sys.stdin.readline(), [(True, yes_indicating_strings), (False, skip_indicating_strings + no_indicating_strings)], True)
+                    if accept is None:
+                        print("please answer with yes or skip")
+                        sys.stdout.write(msg)
+                        continue
                     break
-                if accept:
-                    break
-            break
+        if accept == False: 
+            continue    
+                        
         if not ctx.ci_continuous:
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
