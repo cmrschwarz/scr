@@ -55,7 +55,7 @@ class SeleniumVariant(Enum):
 class SeleniumStrategy(Enum):
     DISABLED = 0
     FIRST = 1
-    ASK = 2
+    INTERACTIVE = 2
     DEDUP = 3
 
 class Verbosity(IntEnum):
@@ -1047,7 +1047,7 @@ def dl(ctx):
                     final_content_matches = content_matches
                     final_document_matches = document_matches
 
-            if ctx.selenium_strategy in [SeleniumStrategy.ASK, SeleniumStrategy.DEDUP] and not static_content:
+            if ctx.selenium_strategy in [SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP] and not static_content:
                 content_count = len(final_content_matches)
                 docs_count = len(final_document_matches)
                 msg = ""
@@ -1299,7 +1299,7 @@ def main():
         elif begins(arg, "strat="):
             strats_dict = {
                 "first": SeleniumStrategy.FIRST,
-                "ask": SeleniumStrategy.ASK,
+                "interactive": SeleniumStrategy.INTERACTIVE,
                 "dedup": SeleniumStrategy.DEDUP,
             }
             res = select_variant(get_arg(arg), strats_dict)
