@@ -267,6 +267,7 @@ class DlContext:
         self.content_input_encoding = "utf-8"
         self.content_forced_input_encoding = False
         self.content_encoding = "utf-8"
+        self.save_path_interactive = False
 
         self.label = Locator("label", ["di", "ci"])
         self.label_default_format = None
@@ -865,6 +866,8 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 save_path = None
             if not save_path and not ctx.save_path_interactive:
                 return False
+            if not ctx.save_path_interactive: 
+                break
             if save_path:
                 res = prompt(
                     f'{context}: accept save path "{save_path}" [Yes/edit/skip/nextdoc]? ',
