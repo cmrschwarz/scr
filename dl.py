@@ -1015,17 +1015,26 @@ def dl(ctx):
         input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
         last_msg = ""
         while True:
+            accept = False
             try_number += 1
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
-                src_new = ctx.selenium_driver.page_source
-                same_content = (src_new == src)
-                src = src_new
+                try:
+                    src_new = ctx.selenium_driver.page_source
+                    same_content = (src_new == src)
+                    src = src_new
+                except:
+                    same_content = False
+                    src = ""
 
             if not same_content:
-                src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
-                content_matches, labels_none_for_n = gen_content_matches(ctx, doc, src, src_xml)
+                try:
+                    src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
+                    content_matches, labels_none_for_n = gen_content_matches(ctx, doc, src, src_xml)
+                except:
+                    content_matches = []
+                    labels_none_for_n = 0
                 document_matches = []
                 if di <= ctx.dimax:
                     document_matches = gen_document_matches(ctx, doc, src, src_xml)
@@ -1034,7 +1043,14 @@ def dl(ctx):
                     if not content_matches or (not document_matches and (ctx.have_multidocs and di < ctx.dimax)):
                         time.sleep(ctx.selenium_poll_frequency_secs)
                         continue
-                if ctx.selenium_strategy == SeleniumStrategy.DEDUP:
+                    accept = True
+                elif ctx.selenium_strategy == SeleniumStrategy.DISABLED:
+                    accept = True
+
+                if ctx.selenium_strategy != SeleniumStrategy.DEDUP:
+                    final_content_matches = content_matches
+                    final_document_matches = document_matches
+                else:
                     for cm in content_matches:
                         if cm in handled_content_matches:
                             continue
@@ -1046,9 +1062,8 @@ def dl(ctx):
                             continue
                         handled_document_matches[dm] = None
                         final_document_matches.append(dm)
-                else:
-                    final_content_matches = content_matches
-                    final_document_matches = document_matches
+                    
+               
 
             if ctx.selenium_strategy in [SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP] and not static_content:
                 content_count = len(final_content_matches)
@@ -1095,6 +1110,9 @@ def dl(ctx):
                         sys.stdout.write(msg)
                         continue
                     break
+            if accept:
+                break
+            
         if accept == False: 
             continue    
                         
