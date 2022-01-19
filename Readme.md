@@ -25,16 +25,29 @@ dl.py url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href c
 
 ## Setup
 
-### Setting up geckodriver for selenium (firefox/tor)
-
-The geckodriver executable (to be placed in the root directory)
-can be downloaded from
-https://github.com/mozilla/geckodriver/releases
- 
 ### Python packages
 
 The required non standard pip packages can be installed using:
  ```bash
- pip3 install tbselenium lxml readline selenium random_user_agent
+ pip3 install tbselenium lxml selenium random_user_agent readline
  ```
+
+### Setting up Selenium
+
+To use the selenium feature,
+you need to have a driver for the selected browser installed.
+
+#### Setting up geckodriver for selenium (firefox/tor)
+
+The geckodriver executable (to be placed in the root directory next to dl.py)
+can be downloaded from
+https://github.com/mozilla/geckodriver/releases
+ 
+#### Setting up chromium driver for selenium (chrome)
+
+Simply install the `chromium-driver` (debian +deriviates),
+`chromium-chromedriver` (alpine) or `chromedriver` (arch aur)
+package for your distribution. 
+(A pullrequest with instructions for windows here would be appreciated.)
+
   
