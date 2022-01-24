@@ -195,7 +195,7 @@ class Locator:
                 if return_xml_tuple:
                     try:
                         res_xml.append(lxml.html.fromstring(string))
-                    except:
+                    except Exception:
                         pass
             else:
                 res.append(lxml.html.tostring(xm, encoding="unicode"))
@@ -642,7 +642,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
                 if doc.force_encoding:
                     try:
                         data_enc = str(data, encoding=doc.encoding)
-                    except:
+                    except Exception:
                         data_enc = res.text
                 else:
                     data_enc = res.text
@@ -870,7 +870,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         )
         try:
             save_path = save_path.decode("utf-8")
-        except:
+        except Exception:
             log(ctx. Verbosity.ERROR, f"{context}: generated save path is not valid utf-8")
             save_path = None
         while True:
@@ -1032,7 +1032,7 @@ def dl(ctx):
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == src)
                     src = src_new
-                except:
+                except Exception:
                     same_content = False
                     src = ""
 
@@ -1040,7 +1040,7 @@ def dl(ctx):
                 try:
                     src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
                     content_matches, labels_none_for_n = gen_content_matches(ctx, doc, src, src_xml)
-                except:
+                except Exception:
                     content_matches = []
                     labels_none_for_n = 0
                 document_matches = []
@@ -1241,7 +1241,7 @@ def verify_encoding(encoding):
     try:
         "!".encode(encoding=encoding)
         return True
-    except:
+    except Exception:
         return False
 
 def add_doc(ctx, doctype, path):
