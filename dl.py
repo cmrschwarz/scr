@@ -235,11 +235,15 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path, src_mc, encoding=None):
+    def __init__(self, document_type, path, src_mc, target_mcs=None, encoding=None):
         self.document_type = document_type
         self.path = path
         self.encoding = encoding
         self.src_mc = src_mc
+        if not target_mcs:
+            self.target_mcs = []
+        else:
+            self.target_mcs = target_mcs
 
     def __key(self):
         return (self.document_type, self.path, self.encoding, self.output_enciding)
@@ -262,7 +266,7 @@ class MatchChain:
         self.content_write_format = ""
         self.content_raw = True
         self.content_input_encoding = "utf-8"
-        self.content_forced_input_encoding = False
+        self.content_forced_input_encoding = None
         self.content_encoding = "utf-8"
         self.save_path_interactive = False
 
@@ -275,7 +279,7 @@ class MatchChain:
         self.di = self.dimin
         self.dimax = float("inf")
         self.default_document_encoding = "utf-8"
-        self.force_document_encoding = False
+        self.forced_document_encoding = None
         self.default_document_scheme = "https"
 
         self.prefer_parent_document_scheme = True
@@ -1192,22 +1196,29 @@ def parse_mc_range(ctx, mc_spec, arg):
         if len(esc_split) == 1: return parse_simple_mc_range(ctx, mc_spec, arg)
         return {*parse_simple_mc_range(esc_split[0])} - {*parse_simple_mc_range(esc_split[1])}
 
-def apply_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _: x):
-    if not begins(arg, argname): return False
+def parse_mc_arg(ctx, argname, arg):
+    if not begins(arg, argname): return False, None, None
     argname_len = len(argname)
     eq_pos = arg.find("=")
     if eq_pos == -1:
         error("missing equals sign in argument '{arg}'")
     pre_eq_arg = arg[:eq_pos]
     mc_spec = arg[argname_len: eq_pos-argname_len]
-    value = value_cast(arg[eq_pos+1:], arg)
+    value = arg[eq_pos+1:]
+    return True, parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
-    for mc in parse_mc_range(ctx, mc_spec, pre_eq_arg):
+def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg: x):
+    success, mcs, value = parse_mc_arg(ctx, argname, arg)
+    value = value_cast(value, arg)
+    for mc in mcs:
         t = mc
         for n in config_opt_names[:-1]:
             t = t.__dict__[n]
         t.__dict__[config_opt_names[-1]] = value
     return True
+
+def get_arg_val(arg):
+    return arg[arg.find("=") + 1:]
 
 def parse_bool_arg(v, arg):
     try:
@@ -1237,6 +1248,12 @@ def select_variant(val, variants_dict):
             match = v
     return match
 
+def parse_variant_arg(val, variants_dict, arg):
+    res = select_variant(val, variants_dict)
+    if res is None:
+        error(f"no matching selenium variant for '{arg}'")
+    return res
+
 def verify_encoding(encoding):
     try:
         "!".encode(encoding=encoding)
@@ -1244,171 +1261,123 @@ def verify_encoding(encoding):
     except Exception:
         return False
 
-def add_doc(ctx, doctype, path):
-    ctx.docs.append(
-        Document(
+def apply_doc_arg(ctx, argname, doctype, arg):
+    success, mcs, value = parse_mc_arg(ctx, argname, arg)
+    if success:
+        doc = Document(
             doctype,
-            normalize_link(None, Document(doctype.url_handling_type(), None, None), path),
-            None
+            normalize_link(None, Document(doctype.url_handling_type(), None, None), value),
+            None,
+            list(mcs)
         )
-    )
+        ctx.docs.append(doc)
+    return success
+
+def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v):
+    if not begins(arg, f"{optname}="): return False
+    ctx.__dict__[argname] = get_arg_val(arg)
+    return True
 
 def main():
     ctx = DlContext()
     if len(sys.argv) < 2:
         error(f"missing command line options. Consider {sys.argv[0]} --help")
 
+    selenium_variants_dict = {
+        "disabled": SeleniumVariant.DISABLED,
+        "tor": SeleniumVariant.TORBROWSER,
+        "firefox": SeleniumVariant.FIREFOX,
+        "chrome": SeleniumVariant.CHROME
+    }
+    selenium_strats_dict = {
+        "first": SeleniumStrategy.FIRST,
+        "interactive": SeleniumStrategy.INTERACTIVE,
+        "dedup": SeleniumStrategy.DEDUP,
+    }
+    verbosities_dict = {
+        "info": Verbosity.INFO,
+        "warn": Verbosity.WARN,
+        "error": Verbosity.ERROR,
+    }
+
     for arg in sys.argv[1:]:
         if arg == "--help" or arg=="-h":
             help()
             return 0
 
-        if apply_arg(ctx, "cx", ["content", "xpath"], arg): continue
-        if apply_arg(ctx, "cr", ["content", "regex"], arg): continue
-        if apply_arg(ctx, "cf", ["content", "format"], arg): continue
-        if apply_arg(ctx, "cm", ["content", "multimatch"], arg, parse_bool_arg): continue
-        if apply_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg): continue
-        if apply_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg): continue
-        if apply_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg): continue
-        if apply_arg(ctx, "cipf", ["content_print_format"], arg, parse_bool_arg): continue
+         # content args
+        if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg): continue
+        if apply_mc_arg(ctx, "cr", ["content", "regex"], arg): continue
+        if apply_mc_arg(ctx, "cf", ["content", "format"], arg): continue
+        if apply_mc_arg(ctx, "cm", ["content", "multimatch"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg): continue
 
-        # content args
+        if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg): continue
+        if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg): continue
+        if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg): continue
 
-        elif begins(arg, "cin="):
-            ctx.content.interactive = get_bool_arg(arg)
-        elif begins(arg, "csf="):
-            ctx.content_save_format = get_arg(arg)
-        elif begins(arg, "csin="):
-            ctx.save_path_interactive = get_bool_arg(arg)
-        elif begins(arg, "cwf="):
-            ctx.content_write_format = get_arg(arg)
-        elif begins(arg, "cl="):
-            ctx.content_raw = not get_bool_arg(arg)
-        elif begins(arg, "cesc="):
-            ctx.content_escape_sequence = get_arg(arg)
-        elif begins(arg, "cienc="):
-            ctx.content_input_encoding = get_encoding_arg(arg)
-        elif begins(arg, "cienc="):
-            ctx.content_encoding = get_encoding_arg(arg)
-            ctx.content_forced_input_encoding = False
-        elif begins(arg, "cenc="):
-            ctx.content_encoding = get_encoding_arg(arg)
-            ctx.content_forced_input_encoding = True
+        if apply_mc_arg(ctx, "cipf", ["content_print_format"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "cwf", ["content_write_format"], arg): continue
+        if apply_mc_arg(ctx, "csf", ["content_save_format"], arg): continue
+        if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg): continue
+
+        if apply_mc_arg(ctx, "cenc", ["content_encoding"], parse_encoding_arg): continue
+        if apply_mc_arg(ctx, "cienc", ["content_input_encoding"], parse_encoding_arg): continue
+        if apply_mc_arg(ctx, "cfienc", ["content_forced_input_encoding"], parse_encoding_arg): continue
+
+        if apply_mc_arg(ctx, "cl", ["content_raw"], arg, lambda v, arg: not parse_bool_arg(v, arg)): continue
+        if apply_mc_arg(ctx, "cesc", ["content_escape_sequence"], arg): continue
+
+
         # label args
-        elif begins(arg, "lx="):
-            ctx.label.xpath = get_arg(arg)
-        elif begins(arg, "lr="):
-            ctx.label.regex = get_arg(arg)
-        elif begins(arg, "lf="):
-            ctx.label.format = get_arg(arg)
-        elif begins("arg", "las="):
-            ctx.allow_slashes_in_labels = get_bool_arg(arg)
-        elif begins(arg, "ldf="):
-            ctx.label_default_format = get_arg(arg)
-        elif begins(arg, "lic="):
-            ctx.labels_inside_content = get_bool_arg(arg)
-        elif begins(arg, "lm="):
-            ctx.label.multimatch = get_bool_arg(arg)
-        elif begins(arg, "lin="):
-            ctx.label.interactive = get_bool_arg(arg)
-        elif begins(arg, "lam="):
-            ctx.label_allow_missing = get_bool_arg(arg)
+        if apply_mc_arg(ctx, "lx", ["label", "xpath"], arg): continue
+        if apply_mc_arg(ctx, "lr", ["label", "regex"], arg): continue
+        if apply_mc_arg(ctx, "lf", ["label", "format"], arg): continue
+        if apply_mc_arg(ctx, "lm", ["label", "multimatch"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "lin", ["label", "interactive"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "las", ["allow_slashes_in_labels"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "lic", ["labels_inside_content"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "lam", ["label_allow_missing"], arg, parse_bool_arg): continue
+
 
         # document args
-        elif begins(arg, "dx="):
-            ctx.document.xpath = get_arg(arg)
-        elif begins(arg, "dr="):
-            ctx.document.regex= get_arg(arg)
-        elif begins(arg, "df="):
-            ctx.document.format = get_arg(arg)
-        elif begins(arg, "dimin="):
-            ctx.dimin = get_int_arg(arg)
-        elif begins(arg, "dimax="):
-            ctx.dimax = get_int_arg(arg)
-        elif begins(arg, "dm="):
-            ctx.document.multimatch = get_bool_arg(arg)
-        elif begins(arg, "dbfs="):
-            ctx.document_dfs = get_bool_arg(arg)
-        elif begins(arg, "ddfs="):
-            ctx.document_files = get_bool_arg(arg)
-        elif begins(arg, "din="):
-            ctx.document.interactive = get_bool_arg(arg)
-        elif begins(arg, "denc="):
-            ctx.default_document_encoding = get_encoding_arg(arg)
-            ctx.force_document_encoding = False
-        elif begins(arg, "dfenc="):
-            ctx.default_document_encoding = get_encoding_arg(arg)
-            ctx.force_document_encoding = True
-        elif begins(arg, "dsch="):
-            enc = get_arg(arg)
-            ctx.default_document_scheme = enc
-            ctx.force_document_scheme = False
-            if ctx.prefer_parent_document_scheme is None:
-                ctx.prefer_parent_document_scheme = False
-        elif begins(arg, "dfsch="):
-            enc = get_arg(arg)
-            ctx.default_document_scheme = enc
-            ctx.force_document_scheme = True
-        elif begins(arg, "dpsch="):
-            ctx.prefer_parent_document_scheme = get_bool_arg(arg)
+        if apply_mc_arg(ctx, "dx", ["document", "xpath"], arg): continue
+        if apply_mc_arg(ctx, "dr", ["document", "regex"], arg): continue
+        if apply_mc_arg(ctx, "df", ["document", "format"], arg): continue
+        if apply_mc_arg(ctx, "dm", ["document", "multimatch"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "din", ["document", "interactive"], arg, parse_bool_arg): continue
+
+        if apply_mc_arg(ctx, "dimin", ["dimin"], arg, parse_int_arg): continue
+        if apply_mc_arg(ctx, "dimax", ["dimax"], arg, parse_int_arg): continue
+
+        if apply_mc_arg(ctx, "owf", ["overwrite_files"], arg, parse_bool_arg): continue
+
+        if apply_mc_arg(ctx, "denc", ["document_encoding"], parse_encoding_arg): continue
+        if apply_mc_arg(ctx, "dfenc", ["document_forced_encoding"], parse_encoding_arg): continue
+        if apply_mc_arg(ctx, "dsch", ["document_scheme"]): continue
+        if apply_mc_arg(ctx, "dpsch", ["document_prefer_parent_scheme"]): continue
+        if apply_mc_arg(ctx, "dfsch", ["document_forced_scheme"]): continue
+
         # misc args
-        elif begins(arg, "url="):
-            add_doc(ctx, DocumentType.URL, get_arg(arg))
-        elif begins(arg, "file="):
-            add_doc(ctx, DocumentType.FILE, get_arg(arg))
-        elif begins(arg, "rfile="):
-            add_doc(ctx, DocumentType.RFILE, get_arg(arg))
-        elif begins(arg, "cookiefile="):
-            ctx.cookie_file = get_arg(arg)
-        elif begins(arg, "sel="):
-            variants_dict = {
-                "disabled": SeleniumVariant.DISABLED,
-                "tor": SeleniumVariant.TORBROWSER,
-                "firefox": SeleniumVariant.FIREFOX,
-                "chrome": SeleniumVariant.CHROME
-            }
-            res = select_variant(get_arg(arg), variants_dict)
-            if res is None:
-                error(f"no matching selenium variant for '{arg}'")
-            ctx.selenium_variant = res
-        elif begins(arg, "strat="):
-            strats_dict = {
-                "first": SeleniumStrategy.FIRST,
-                "interactive": SeleniumStrategy.INTERACTIVE,
-                "dedup": SeleniumStrategy.DEDUP,
-            }
-            res = select_variant(get_arg(arg), strats_dict)
-            if res is None:
-                error(f"no matching selenium strategy for '{arg}'")
-            ctx.selenium_strategy = res
-        elif begins(arg, "tbdir="):
-            ctx.selenium_variant = SeleniumVariant.TORBROWSER
-            ctx.tor_browser_dir = get_arg(arg)
-        elif begins(arg, "overwrite="):
-            ctx.overwrite_files = get_bool_arg(arg)
-        elif begins(arg, "ua="):
-            ctx.user_agent = get_arg(arg)
-        elif begins(arg, "uarandom="):
-            ctx.user_agent_random = get_bool_arg(arg)
-        elif begins(arg, "v="):
-            strats_dict = {
-                "info": Verbosity.INFO,
-                "warn": Verbosity.WARN,
-                "error": Verbosity.ERROR,
-            }
-            res = select_variant(get_arg(arg), strats_dict)
-            if res is None:
-                error(f"no matching verbosity level for '{arg}'")
-            ctx.verbosity = res
-        elif begins(arg, "oenc="):
-            ctx.forced_output_encoding = get_encoding_arg(arg)
-        elif "":
-            continue
+        if apply_doc_arg(arg, "url", Document.URL, arg): continue
+        if apply_doc_arg(arg, "rfile", Document.RFILE, arg): continue
+        if apply_doc_arg(arg, "file", Document.FILE, arg): continue
+
+        if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg): continue
+        if apply_ctx_arg(ctx, "sel", "cookie_file", arg): continue
+
+        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)): continue
+        if apply_ctx_arg(ctx, "strat", "selenium_strategy", arg, lambda v, arg: parse_variant_arg(v, selenium_strats_dict, arg)): continue
+        if apply_ctx_arg(ctx, "tbdir", "tor_browser_dir", arg): continue # implies sel=t
+        if apply_ctx_arg(ctx, "dbfs", "documents_bfs", arg, parse_bool_arg): continue
+        if apply_ctx_arg(ctx, "ua", "user_agent", arg): continue
+        if apply_ctx_arg(ctx, "ua", "user_agent_random", parse_bool_arg): continue
+        if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)): continue
+
+        if "=" not in arg:
+            error(f"unrecognized option: '{arg}', are you missing an equals sign?")
         else:
-            if "=" not in arg:
-                error(f"unrecognized option: '{arg}', are you missing an equals sign?")
-            else:
-                error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
+            error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
     dl(ctx)
     return 0
