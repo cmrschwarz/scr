@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from audioop import minmax
+from multiprocessing.sharedctypes import Value
 from sqlite3 import DataError
 import lxml # pip3 install lxml
 import lxml.html
@@ -18,8 +19,9 @@ from selenium import webdriver
 from collections import deque
 from enum import Enum, IntEnum
 import time
+import itertools
 import warnings
-
+import copy
 def prefixes(str):
     return [str[:i] for i in range(len(str), 0, -1)]
 
@@ -250,7 +252,6 @@ class Document:
 
 class MatchChain:
     def __init__(self, blank=False):
-        self.content = None if blank else Locator("content", ["di", "ci"])
         self.cimin = 1
         self.content_escape_sequence = "<END>"
         self.ci = self.cimin
@@ -265,12 +266,10 @@ class MatchChain:
         self.content_encoding = "utf-8"
         self.save_path_interactive = False
 
-        self.label = None if blank else Locator("label", ["di", "ci"])
         self.label_default_format = None
         self.labels_inside_content = None
         self.label_allow_missing = False
 
-        self.document = None if blank else Locator("document", ["di", "ci"])
         self.documents_bfs = False
         self.dimin = 1
         self.di = self.dimin
@@ -285,6 +284,9 @@ class MatchChain:
         if blank:
             for k in self.__dict__:
                 self.__dict__[k] = None
+        self.content = Locator("content", ["di", "ci"])
+        self.label = Locator("label", ["di", "ci"])
+        self.document = Locator("document", ["di", "ci"])
 
     def apply_defaults(self, defaults):
         for k, v in self.__dict__:
@@ -296,6 +298,9 @@ class DlContext:
     def __init__(self):
         self.match_chains = []
         self.docs = []
+        self.defaults_mc = MatchChain()
+        self.origin_mc = MatchChain(blank=True)
+
         self.cookie_file = None
         self.cookie_jar = None
 
@@ -1152,26 +1157,74 @@ def dl(ctx):
 def begins(string, begin):
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 
-def get_arg(arg):
-    return arg[arg.find("=")+1:]
-
-def get_int_arg(arg):
+def parse_mc_range_int(ctx, v, arg):
     try:
-        return int(get_arg(arg))
+        return int(v)
     except ValueError:
-        error(f"value for {arg} must be an integer")
+        error(f"failed to parse '{v}' as an integer for match chain specification of '{arg}'")
 
-def get_bool_arg(arg):
-    res = parse_bool_string(get_arg(arg))
-    if res is None:
-        error(f"value in {arg} must be interpretable as a boolean")
-    return res
+def parse_simple_mc_range(ctx, mc_spec, arg):
+    sections = mc_spec.split(",")
+    ranges = []
+    for s in sections:
+        s = s.trim()
+        if s == "":
+            error("invalid empty range in match chain specification of '{arg}'")
+        dash_split = s.split("-")
+        if len(dash_split) == 1:
+            ranges.append([parse_mc_range_int(ctx, dash_split[0], arg)])
+        else:
+            assert len(dash_split) == 2
+            fst = parse_mc_range_int(ctx, dash_split[0], arg)
+            snd = parse_mc_range_int(ctx, dash_split[0], arg)
+            if fst > snd:
+                error(f"second value must be larger than first for range {s} in match chain specification of '{arg}'")
+            ranges.append(range(fst, snd + 1))
+    return itertools.chain(*ranges)
 
-def get_encoding_arg(arg):
-    enc = get_arg(arg)
-    if not verify_encoding(enc):
+def parse_mc_range(ctx, mc_spec, arg):
+    if mc_spec == "":
+        return itertools.chain((x for x in ctx.match_chains), [ctx.origin_mc])
+    else:
+        esc_split = mc_spec.split("^")
+        if len(esc_split) > 2:
+            error(f"cannot have more than one '^' in match chain specification of '{arg}'")
+        if len(esc_split) == 1: return parse_simple_mc_range(ctx, mc_spec, arg)
+        return {*parse_simple_mc_range(esc_split[0])} - {*parse_simple_mc_range(esc_split[1])}
+
+def apply_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _: x):
+    if not begins(arg, argname): return False
+    argname_len = len(argname)
+    eq_pos = arg.find("=")
+    if eq_pos == -1:
+        error("missing equals sign in argument '{arg}'")
+    pre_eq_arg = arg[:eq_pos]
+    mc_spec = arg[argname_len: eq_pos-argname_len]
+    value = value_cast(arg[eq_pos+1:], arg)
+
+    for mc in parse_mc_range(ctx, mc_spec, pre_eq_arg):
+        t = mc
+        for n in config_opt_names[:-1]:
+            t = t.__dict__[n]
+        t.__dict__[config_opt_names[-1]] = value
+    return True
+
+def parse_bool_arg(v, arg):
+    try:
+        return bool(v)
+    except ValueError:
+        error(f"cannot parse '{v}' as a boolean in '{arg}'")
+
+def parse_int_arg(v, arg):
+    try:
+        return int(v)
+    except ValueError:
+        error(f"cannot parse '{v}' as an integer in '{arg}'")
+
+def parse_encoding_arg(v, arg):
+    if not verify_encoding(v):
         error(f"unknown encoding in '{arg}'")
-    return enc
+    return v
 
 def select_variant(val, variants_dict):
     val = val.strip().lower()
@@ -1210,23 +1263,17 @@ def main():
             help()
             return 0
 
+        if apply_arg(ctx, "cx", ["content", "xpath"], arg): continue
+        if apply_arg(ctx, "cr", ["content", "regex"], arg): continue
+        if apply_arg(ctx, "cf", ["content", "format"], arg): continue
+        if apply_arg(ctx, "cm", ["content", "multimatch"], arg, parse_bool_arg): continue
+        if apply_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg): continue
+        if apply_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg): continue
+        if apply_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg): continue
+        if apply_arg(ctx, "cipf", ["content_print_format"], arg, parse_bool_arg): continue
+
         # content args
-        if begins(arg, "cx="):
-            ctx.content.xpath = get_arg(arg)
-        elif begins(arg, "cr="):
-            ctx.content.regex = get_arg(arg)
-        elif begins(arg, "cf="):
-            ctx.content.format = get_arg(arg)
-        elif begins(arg, "cm="):
-            ctx.content.multimatch = get_bool_arg(arg)
-        elif begins(arg, "cimin="):
-            ctx.cimin = get_int_arg(arg)
-        elif begins(arg, "cimax="):
-            ctx.cimax = get_int_arg(arg)
-        elif begins(arg, "cicont="):
-            ctx.ci_continuous = get_bool_arg(arg)
-        elif begins(arg, "cpf="):
-            ctx.content_print_format = get_arg(arg)
+
         elif begins(arg, "cin="):
             ctx.content.interactive = get_bool_arg(arg)
         elif begins(arg, "csf="):
