@@ -118,20 +118,20 @@ class Locator:
             error(f"{self.name[0]}r is not a valid regex: {err.msg}")
         if regex_comp.groups == 0:
             self.content_capture_group = 0
-        elif self.name in regex_comp.groupindex: 
-            self.content_capture_group = self.name 
+        elif self.name in regex_comp.groupindex:
+            self.content_capture_group = self.name
         elif regex_comp.groups == 1 + len(regex_comp.groupindex):
             named_indices = list(regex_comp.groupindex.values())
             # find the group index that is not part of named_indices
             # algorithm: put each index value at it's array index
             # the array index that does not contain the right value at the end
-            # is not present 
+            # is not present
             named_indices.append(0)
             for i in range(0, len(named_indices)):
                 v = named_indices[i] - 1
                 if v != i and v != -1:
                     named_indices[i], named_indices[v] = named_indices[v], named_indices[i]
-            
+
             for i in range(1, regex_comp.groups):
                 if named_indices[i] != i + 1:
                     self.content_capture_group = i + 1
@@ -153,11 +153,11 @@ class Locator:
             try:
                 if self.regex:
                     capture_group_keys = list(self.regex.groupindex.keys())
-                    unnamed_regex_group_count = self.regex.groups - len(capture_group_keys) 
+                    unnamed_regex_group_count = self.regex.groups - len(capture_group_keys)
                 else:
                     capture_group_keys = []
                     unnamed_regex_group_count = 0
-                known_keys = [self.name] + capture_group_keys + self.additional_format_keys  
+                known_keys = [self.name] + capture_group_keys + self.additional_format_keys
                 key_count = len(known_keys) + unnamed_regex_group_count
                 fmt_keys = get_format_string_keys(self.format)
                 named_arg_count = 0
@@ -169,7 +169,7 @@ class Locator:
                     elif k not in known_keys:
                         error(f"unknown key {{{k}}} in {self.name[0]}f={self.format}")
             except Exception as ex:
-                error(f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")           
+                error(f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
 
     def match_xpath(self, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None: return default
@@ -217,7 +217,7 @@ class Locator:
         return self.format.format(
             *(match.group_list + [match.value] + values),
             **dict(
-                [(keys[i], values[i]) for i in range(len(values))] + [(self.name, match.value)] + list(match.group_dict.items()) 
+                [(keys[i], values[i]) for i in range(len(values))] + [(self.name, match.value)] + list(match.group_dict.items())
             )
         )
 
@@ -233,14 +233,11 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path, encoding, force_encoding, default_scheme, prefer_parent_scheme, force_scheme):
+    def __init__(self, document_type, path, src_mc, encoding=None):
         self.document_type = document_type
         self.path = path
         self.encoding = encoding
-        self.force_encoding = force_encoding
-        self.default_scheme = default_scheme
-        self.prefer_parent_scheme = prefer_parent_scheme
-        self.force_scheme = force_scheme
+        self.src_mc = src_mc
 
     def __key(self):
         return (self.document_type, self.path, self.encoding, self.output_enciding)
@@ -251,11 +248,9 @@ class Document:
     def __hash__(self):
         return hash(self.__key())
 
-class DlContext:
-    def __init__(self):
-        self.pathes = []
-
-        self.content = Locator("content", ["di", "ci"])
+class MatchChain:
+    def __init__(self, blank=False):
+        self.content = None if blank else Locator("content", ["di", "ci"])
         self.cimin = 1
         self.content_escape_sequence = "<END>"
         self.ci = self.cimin
@@ -270,12 +265,12 @@ class DlContext:
         self.content_encoding = "utf-8"
         self.save_path_interactive = False
 
-        self.label = Locator("label", ["di", "ci"])
+        self.label = None if blank else Locator("label", ["di", "ci"])
         self.label_default_format = None
         self.labels_inside_content = None
         self.label_allow_missing = False
 
-        self.document = Locator("document", ["di", "ci"])
+        self.document = None if blank else Locator("document", ["di", "ci"])
         self.documents_bfs = False
         self.dimin = 1
         self.di = self.dimin
@@ -283,11 +278,27 @@ class DlContext:
         self.default_document_encoding = "utf-8"
         self.force_document_encoding = False
         self.default_document_scheme = "https"
-        self.prefer_parent_document_scheme = None
+
+        self.prefer_parent_document_scheme = True
         self.force_document_scheme = False
 
+        if blank:
+            for k in self.__dict__:
+                self.__dict__[k] = None
+
+    def apply_defaults(self, defaults):
+        for k, v in self.__dict__:
+            if v is None:
+                self.__dict__[k] = defaults.__dict__[k]
+
+
+class DlContext:
+    def __init__(self):
+        self.match_chains = []
+        self.docs = []
         self.cookie_file = None
         self.cookie_jar = None
+
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
         self.selenium_driver = None
@@ -297,19 +308,8 @@ class DlContext:
         self.selenium_strategy = SeleniumStrategy.FIRST
         self.user_agent_random = False
         self.user_agent = None
-        self.locators = [self.content, self.label, self.document]
         self.allow_slashes_in_labels = False
         self.verbosity = Verbosity.WARN
-       
-        
-
-        self.have_xpath_matching = False
-        self.have_label_matching = False
-        self.have_content_xpaths = False
-        self.have_interactive_matching = False
-        self.content_download_required = False
-        self.need_content_enc = False
-
 
     def is_valid_label(self, label):
         if self.allow_slashes_in_labels: return True
@@ -361,7 +361,7 @@ def help(err=False):
         cl=<bool>            treat content match as a link to the actual content
         cesc=<string>        escape sequence to terminate content in cin mode
         cienc=<encoding>     default encoding to assume that content is in
-        cfienc=<encoding>    encoding to always assume that content is in, even if http(s) says differently 
+        cfienc=<encoding>    encoding to always assume that content is in, even if http(s) says differently
         cenc=<encoding>      encoding to use for content_enc
 
     Labels to give each matched content (becomes the filename):
@@ -384,8 +384,8 @@ def help(err=False):
         dm=<bool>           allow multiple document matches in one document instead of picking the first
         dbfs=<bool>         traverse the matched documents in breadth first order instead of depth first
         din=<bool>          give a prompt to ignore a potential document match
-        denc=<encoding>     default document encoding to use for following documents, default is utf-8 
-        dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently 
+        denc=<encoding>     default document encoding to use for following documents, default is utf-8
+        dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently
         dsch=<scheme>       default scheme for urls derived from following documents, defaults to "https"
         dpsch=<bool>        use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>      force this scheme for urls derived from following documents
@@ -395,7 +395,7 @@ def help(err=False):
         file=<path>         fetch a document from a file, derived documents matches are (relative) file pathes
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
-    Further Options:
+    Global Options:
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
@@ -501,17 +501,84 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     fmt_args = get_format_string_keys(fmt_string)
     return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
 
+def setup_match_chain(mc, ctx):
+    locators = [mc.content, mc.label, mc.document]
+    for l in locators:
+        l.setup()
+
+    if mc.dimin > mc.dimax: error(f"dimin can't exceed dimax")
+    if mc.cimin > mc.cimax: error(f"cimin can't exceed cimax")
+
+    if not mc.content_print_format and not mc.content_save_format:
+        mc.content_print_format = DEFAULT_CPF
+    if mc.content_write_format and not mc.content_save_format:
+        error(f"cannot specify cwf without csf")
+
+    if not mc.content_write_format:
+        mc.content_write_format = DEFAULT_CWF
+
+    if mc.content_print_format:
+        mc.content_print_format = unescape_string(mc.content_print_format, "cpf")
+    if mc.content_save_format:
+        mc.content_save_format = unescape_string(mc.content_save_format, "csf")
+        mc.content_write_format = unescape_string(mc.content_write_format, "cwf")
+
+    if mc.user_agent is None and mc.user_agent_random:
+        error(f"the options ua and uar are incompatible")
+    elif mc.user_agent_random:
+        user_agent_rotator = UserAgent()
+        mc.user_agent = user_agent_rotator.get_random_user_agent()
+    elif mc.user_agent is None and mc.selenium_variant == SeleniumVariant.DISABLED:
+        mc.user_agent = "dl.py/0.0.1"
+
+
+    mc.have_xpath_matching = max([l.xpath is not None for l in mc.locators])
+    mc.have_label_matching = mc.label.xpath is not None or mc.label.regex is not None
+    mc.have_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
+    mc.have_multidocs = mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
+    mc.have_interactive_matching = mc.label.interactive or mc.content.interactive
+
+    if not mc.have_label_matching:
+        mc.label_allow_missing = True
+        if mc.labels_inside_content:
+            error(f"cannot specify lic without lx or lr")
+
+    if mc.label_default_format is None and mc.label_allow_missing:
+        form = "dl_"
+        # if max was not set it is 'inf' which has length 3 which is a fine default
+        didigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
+        cidigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
+        if mc.ci_continuous:
+            form += f"{{ci:0{cidigits}}}"
+        elif mc.content.multimatch:
+            if mc.have_multidocs:
+                form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
+            else:
+                form += f"{{ci:0{cidigits}}}"
+
+        elif mc.have_multidocs:
+            form += f"{{di:0{didigits}}}"
+
+        mc.label_default_format = form
+
+    mc.need_content_enc = (
+        mc.need_content_enc
+        or format_string_uses_arg(mc.content_save_format, 3, "content_enc")
+        or format_string_uses_arg(mc.content_write_format, 3, "content_enc")
+        or format_string_uses_arg(mc.content_print_format, 3, "content_enc")
+    )
+    if not mc.content_raw:
+        if mc.content_save_format:
+            mc.content_download_required = True
+
+        if mc.content_print_format and not mc.content_download_required:
+            mc.content_download_required = mc.need_content_enc or format_string_uses_arg(mc.content_print_format, 2, "content")
+
+
 def setup(ctx):
     global DEFAULT_CPF
     if len(ctx.pathes) == 0:
         error("must specify at least one url or (r)file")
-
-    ctx.label.setup()
-    ctx.content.setup()
-    ctx.document.setup()
-
-    if ctx.dimin > ctx.dimax: error(f"dimin can't exceed dimax")
-    if ctx.cimin > ctx.cimax: error(f"cimin can't exceed cimax")
 
     if ctx.cookie_file is not None:
         try:
@@ -519,70 +586,9 @@ def setup(ctx):
             ctx.cookie_jar.load(ctx.cookie_file, ignore_discard=True,ignore_expires=True)
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
-    if not ctx.content_print_format and not ctx.content_save_format:
-        ctx.content_print_format = DEFAULT_CPF
-    if ctx.content_write_format and not ctx.content_save_format:
-        error(f"cannot specify cwf without csf")
 
-    if not ctx.content_write_format:
-        ctx.content_write_format = DEFAULT_CWF
-
-    if ctx.content_print_format:
-        ctx.content_print_format = unescape_string(ctx.content_print_format, "cpf")
-    if ctx.content_save_format:
-        ctx.content_save_format = unescape_string(ctx.content_save_format, "csf")
-        ctx.content_write_format = unescape_string(ctx.content_write_format, "cwf")
-
-    if ctx.user_agent is None and ctx.user_agent_random:
-        error(f"the options ua and uar are incompatible")
-    elif ctx.user_agent_random:
-        user_agent_rotator = UserAgent()
-        ctx.user_agent = user_agent_rotator.get_random_user_agent()
-    elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
-        ctx.user_agent = "dl.py/0.0.1"
-
-
-    ctx.have_xpath_matching = max([l.xpath is not None for l in ctx.locators])
-    ctx.have_label_matching = ctx.label.xpath is not None or ctx.label.regex is not None
-    ctx.have_content_xpaths = ctx.labels_inside_content is not None and ctx.label.xpath is not None
-    ctx.have_multidocs = ctx.document.xpath is not None or ctx.document.regex is not None or ctx.document.format is not None
-    ctx.have_interactive_matching = ctx.label.interactive or ctx.content.interactive
-
-    if not ctx.have_label_matching:
-        ctx.label_allow_missing = True
-        if ctx.labels_inside_content:
-            error(f"cannot specify lic without lx or lr")
-
-    if ctx.label_default_format is None and ctx.label_allow_missing:
-        form = "dl_"
-        # if max was not set it is 'inf' which has length 3 which is a fine default
-        didigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
-        cidigits = max(len(str(ctx.dimin)), len(str(ctx.dimax)))
-        if ctx.ci_continuous:
-            form += f"{{ci:0{cidigits}}}"
-        elif ctx.content.multimatch:
-            if ctx.have_multidocs:
-                form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
-            else:
-                form += f"{{ci:0{cidigits}}}"
-            
-        elif ctx.have_multidocs:
-            form += f"{{di:0{didigits}}}"
-        
-        ctx.label_default_format = form
-
-    ctx.need_content_enc = (
-        ctx.need_content_enc 
-        or format_string_uses_arg(ctx.content_save_format, 3, "content_enc") 
-        or format_string_uses_arg(ctx.content_write_format, 3, "content_enc")
-        or format_string_uses_arg(ctx.content_print_format, 3, "content_enc")
-    )
-    if not ctx.content_raw:
-        if ctx.content_save_format:
-            ctx.content_download_required = True
-            
-        if ctx.content_print_format and not ctx.content_download_required:
-            ctx.content_download_required = ctx.need_content_enc or format_string_uses_arg(ctx.content_print_format, 2, "content")
+    for mc in ctx.match_chains:
+        setup_match_chain(mc, ctx)
 
     setup_selenium(ctx)
 
@@ -659,19 +665,19 @@ def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, c
     if content_link:
         opts_list.append(content_link)
         opts_dict["link"] = content_link
-       
+
 
     if label_regex_match is None:
         label_regex_match = RegexMatch(None)
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, ctx.content_escape_sequence] 
+    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, ctx.content_escape_sequence]
         + opts_list + label_regex_match.group_list + content_regex_match.group_list)
     args_dict = dict(
-        list(content_regex_match.group_dict.items()) 
-        + list(label_regex_match.group_dict.items()) 
-        + list(opts_dict.items()) 
+        list(content_regex_match.group_dict.items())
+        + list(label_regex_match.group_dict.items())
+        + list(opts_dict.items())
         + list(
             {
             "label": label_txt,
@@ -681,7 +687,7 @@ def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, c
             "document": doc.path,
             "escape": ctx.content_escape_sequence
             }.items()
-        ) 
+        )
     )
     res = b''
     args_list.reverse()
@@ -698,9 +704,9 @@ def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, c
             else:
                 res += format(val, format_args).encode("utf-8")
     return res
-  
 
-def normalize_link(ctx, src_doc, link):
+
+def normalize_link(mc, src_doc, link):
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
         return link
@@ -713,14 +719,14 @@ def normalize_link(ctx, src_doc, link):
     # for urls like 'google.com' urllib makes this a path instead of a netloc
     if url_parsed.netloc == "" and not doc_url_parsed and url_parsed.scheme == "" and url_parsed.path != "" and link[0] not in [".", "/"]:
         url_parsed = url_parsed._replace(path="", netloc=url_parsed.path)
-    if src_doc.force_scheme:
-        url_parsed = url_parsed._replace(scheme=src_doc.default_scheme)
+    if (mc and mc.force_scheme):
+        url_parsed = url_parsed._replace(scheme=mc.default_scheme)
     elif url_parsed.scheme == "":
-        if src_doc.prefer_parent_scheme and doc_url_parsed and doc_url_parsed.scheme != "":
+        if (mc and mc.prefer_parent_scheme) and doc_url_parsed and doc_url_parsed.scheme != "":
             scheme = doc_url_parsed.scheme
         else:
-            scheme = src_doc.default_scheme    
-        url_parsed = url_parsed._replace(scheme=scheme)      
+            scheme = mc.default_scheme
+        url_parsed = url_parsed._replace(scheme=scheme)
     return url_parsed.geturl()
 
 def handle_content_match(ctx, doc, content_match, di, ci):
@@ -809,7 +815,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         try:
             if ctx.content_download_required:
                 res = fetch_doc(
-                    ctx, 
+                    ctx,
                     Document(
                         doc.document_type.derived_type(),
                         content_link, ctx.content_input_encoding,
@@ -818,7 +824,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                     ),
                     raw=True,
                     enc=ctx.need_content_enc,
-                    nosingle=True                
+                    nosingle=True
                 )
                 if res is None:
                     return False
@@ -837,15 +843,15 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         content_enc = content_txt.encode(ctx.content_encoding)
     else:
         content_enc = None
-        
+
 
     if ctx.content_print_format:
         print_data = gen_final_content_format(
             ctx, ctx.content_print_format, label, di, ci, content_link,
-            content_bytes, content_enc,  
+            content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
-        ) 
+        )
         sys.stdout.buffer.write(print_data)
 
     if ctx.content_save_format:
@@ -853,7 +859,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_format(
             ctx, ctx.content_save_format, label, di, ci, content_link,
-            content_bytes, content_enc, 
+            content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
@@ -868,7 +874,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 save_path = None
             if not save_path and not ctx.save_path_interactive:
                 return False
-            if not ctx.save_path_interactive: 
+            if not ctx.save_path_interactive:
                 break
             if save_path:
                 res = prompt(
@@ -891,7 +897,7 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         except Exception as ex:
             error(
                 f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
-        
+
         try:
             f = open(save_path, "wb")
         except Exception as ex:
@@ -900,10 +906,10 @@ def handle_content_match(ctx, doc, content_match, di, ci):
 
         write_data = gen_final_content_format(
             ctx, ctx.content_write_format, label, di, ci, content_link,
-            content_bytes, content_enc, 
+            content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
-        ) 
+        )
         f.write(write_data)
         f.close()
         log(ctx, Verbosity.INFO, f"wrote content into {save_path} for {context}")
@@ -973,24 +979,21 @@ def gen_content_matches(ctx, doc, src, src_xml):
                     continue
                 else:
                     label = None
-        
+
             content_matches.append(ContentMatch(label, crm))
         match_index += 1
     return content_matches, labels_none_for_n
 
 def gen_document_matches(ctx, doc, src, src_xml):
     new_paths = ctx.document.apply(src, src_xml, doc.path)
-    return [ 
+    return [
         Document(
             doc.document_type.derived_type(),
             path,
             doc.encoding,
-            doc.force_encoding,
-            doc.default_scheme,
-            doc.prefer_parent_scheme,
-            doc.force_scheme
-        ) 
-        for path in new_paths 
+
+        )
+        for path in new_paths
     ]
 
 def dl(ctx):
@@ -1062,15 +1065,15 @@ def dl(ctx):
                             continue
                         handled_document_matches[dm] = None
                         final_document_matches.append(dm)
-                    
-               
+
+
 
             if ctx.selenium_strategy in [SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP] and not static_content:
                 content_count = len(final_content_matches)
                 docs_count = len(final_document_matches)
                 msg = ""
                 content_count_pad_len = (
-                    ctx.selenium_content_count_pad_length 
+                    ctx.selenium_content_count_pad_length
                     - min(len(str(content_count)), ctx.selenium_content_count_pad_length)
                 )
                 rpad = int(content_count_pad_len / 2)
@@ -1100,7 +1103,7 @@ def dl(ctx):
                     rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
                 if not rlist and msg:
                     sys.stdout.write(msg)
-               
+
                 if not rlist:
                     rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
                 if rlist:
@@ -1112,10 +1115,10 @@ def dl(ctx):
                     break
             if accept:
                 break
-            
-        if accept == False: 
-            continue    
-                        
+
+        if accept == False:
+            continue
+
         if not ctx.ci_continuous:
             ci = ctx.cimin
         for i, cm in enumerate(final_content_matches):
@@ -1189,18 +1192,11 @@ def verify_encoding(encoding):
         return False
 
 def add_doc(ctx, doctype, path):
-    prefer_parent_scheme = ctx.prefer_parent_document_scheme
-    if prefer_parent_scheme is None:
-        prefer_parent_scheme = True
-    ctx.pathes.append(
+    ctx.docs.append(
         Document(
             doctype,
-            normalize_link(ctx, Document(doctype.url_handling_type(), None, None, False, ctx.default_document_scheme, False, False), path),
-            ctx.default_document_encoding,
-            ctx.force_document_encoding,
-            ctx.default_document_scheme,
-            prefer_parent_scheme,
-            ctx.force_document_scheme
+            normalize_link(None, Document(doctype.url_handling_type(), None, None), path),
+            None
         )
     )
 
@@ -1373,5 +1369,5 @@ def main():
 
 if __name__ == "__main__":
     # to silence: "Setting a profile has been deprecated" on launching tor
-    warnings.filterwarnings("ignore", module=".*selenium.*", category=DeprecationWarning) 
+    warnings.filterwarnings("ignore", module=".*selenium.*", category=DeprecationWarning)
     exit(main())
