@@ -322,6 +322,7 @@ class MatchChain:
         self.have_multidocs = None
         self.have_interactive_matching = None
         self.need_content_enc = None
+        self.content_download_required = False
         self.content_matches = []
         self.document_matches = []
         self.handled_content_matches = set()
@@ -342,6 +343,11 @@ class MatchChain:
 
     def need_content_matches(self):
         return self.ci <= self.cimax
+
+    def is_valid_label(self, label):
+        if self.allow_slashes_in_labels: return True
+        if "/" in label or "\\" in label: return False
+        return True
 
 
 class DlContext:
@@ -369,13 +375,6 @@ class DlContext:
 
         self.defaults_mc = MatchChain(self, None)
         self.origin_mc = MatchChain(self, None, blank=True)
-        
-       
-
-    def is_valid_label(self, label):
-        if self.allow_slashes_in_labels: return True
-        if "/" in label or "\\" in label: return False
-        return True
 
 def error(text):
     sys.stderr.write(text + "\n")
@@ -653,15 +652,22 @@ def setup(ctx):
     
     # if no chains are specified, use the origin chain as chain 0
     if not ctx.match_chains:
-        ctx.match_chains.append(ctx.origin_mc)
+        ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
+        
+    chain_zero_enabled = True in (d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs)
+    for d in ctx.docs:
+        if d.expand_match_chains_above is not None:
+            if not chain_zero_enabled and d.expand_match_chains_above == 0:
+                d.expand_match_chains_above = 1
+            d.match_chains.extend(ctx.match_chains[d.expand_match_chains_above:])
+
+   
 
     for mc in ctx.match_chains:
         setup_match_chain(mc)
     
-    for d in ctx.docs:
-        if d.expand_match_chains_above is not None:
-            d.match_chains.extend(ctx.match_chains[d.expand_match_chains_above:])
+   
 
     setup_selenium(ctx)
 
@@ -795,7 +801,7 @@ def normalize_link(ctx, mc, src_doc, link):
     if (mc and mc.forced_document_scheme):
         url_parsed = url_parsed._replace(scheme=mc.forced_document_scheme)
     elif url_parsed.scheme == "":
-        if (mc and mc.prefer_parent_scheme) and doc_url_parsed and doc_url_parsed.scheme != "":
+        if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme != "":
             scheme = doc_url_parsed.scheme
         elif mc and mc.default_document_scheme:
             scheme = mc.default_document_scheme
@@ -892,7 +898,7 @@ def handle_content_match(mc, doc, content_match):
         try:
             if mc.content_download_required:
                 res = fetch_doc(
-                    mc,
+                    mc.ctx,
                     Document(
                         doc.document_type.derived_type(),
                         content_link, mc, doc.match_chains
@@ -931,7 +937,7 @@ def handle_content_match(mc, doc, content_match):
 
     if mc.content_save_format:
         if not mc.is_valid_label(label):
-            sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
+            log(mc.ctx, Verbosity.WARN, f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_format(
             mc, mc.content_save_format, label, di, ci, content_link,
             content_bytes, content_enc,
@@ -987,7 +993,7 @@ def handle_content_match(mc, doc, content_match):
         )
         f.write(write_data)
         f.close()
-        log(mc, Verbosity.INFO, f"wrote content into {save_path} for {context}")
+        log(mc.ctx, Verbosity.INFO, f"wrote content into {save_path} for {context}")
     mc.ci += 1
     return True
 
@@ -1423,7 +1429,7 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     return True
 
 def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, support_blank=False, blank_val=""):
-    if not begins(arg, f"{optname}"): return False
+    if not begins(arg, optname): return False
     if len(optname) == len(arg):
         if support_blank:
             val = blank_val
@@ -1434,7 +1440,7 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
         if nc == "-" or nc in range(0,10):
             error("option '{optname}' does not support match chain specification")
         if nc != "=":
-            error("unknown option '{arg}'")
+            error(f"unknown option '{arg}'")
         val = get_arg_val(arg)
     ctx.__dict__[argname] = value_parse(val, arg)
     return True
@@ -1453,23 +1459,23 @@ def main():
         if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg): continue
         if apply_mc_arg(ctx, "cr", ["content", "regex"], arg): continue
         if apply_mc_arg(ctx, "cf", ["content", "format"], arg): continue
-        if apply_mc_arg(ctx, "cm", ["content", "multimatch"], arg, parse_bool_arg): continue
-        if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "cm", ["content", "multimatch"], arg, parse_bool_arg, True): continue
+        if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg, True): continue
 
-        if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg): continue
-        if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg): continue
-        if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg, True): continue
+        if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg, True): continue
+        if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg, True): continue
 
         if apply_mc_arg(ctx, "cpf", ["content_print_format"], arg): continue
         if apply_mc_arg(ctx, "cwf", ["content_write_format"], arg): continue
         if apply_mc_arg(ctx, "csf", ["content_save_format"], arg): continue
-        if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg, True): continue
 
         if apply_mc_arg(ctx, "cenc", ["content_encoding"], arg, parse_encoding_arg): continue
         if apply_mc_arg(ctx, "cienc", ["content_input_encoding"], arg, parse_encoding_arg): continue
         if apply_mc_arg(ctx, "cfienc", ["content_forced_input_encoding"], arg, parse_encoding_arg): continue
 
-        if apply_mc_arg(ctx, "cl", ["content_raw"], arg, lambda v, arg: not parse_bool_arg(v, arg)): continue
+        if apply_mc_arg(ctx, "cl", ["content_raw"], arg, lambda v, arg: not parse_bool_arg(v, arg), True): continue
         if apply_mc_arg(ctx, "cesc", ["content_escape_sequence"], arg): continue
 
 
@@ -1517,7 +1523,7 @@ def main():
         if apply_ctx_arg(ctx, "tbdir", "tor_browser_dir", arg): continue # implies sel=t
         if apply_ctx_arg(ctx, "bfs", "documents_bfs", arg, parse_bool_arg, True): continue
         if apply_ctx_arg(ctx, "ua", "user_agent", arg): continue
-        if apply_ctx_arg(ctx, "ua", "user_agent_random", arg, parse_bool_arg, True): continue
+        if apply_ctx_arg(ctx, "uar", "user_agent_random", arg, parse_bool_arg, True): continue
         if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)): continue
 
         if "=" not in arg:

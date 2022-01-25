@@ -21,9 +21,14 @@ screp url=google.com cx='//img/@src' cl=1 cpf='{link}\n'
 screp url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din=1 dimax=3
 ```
 
-### Downloading pdfs from a site (interactively):
+### Downloading first 3 pdfs and from a site:
 ```bash 
-screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl=1 csf='{ci:02}_{name}' csin=1 v=info cimax=5 
+screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl=1 csf='{ci:02}_{name}' v=info 
+```
+
+### Downloading first 3 pdfs and gifs from a site interactively:
+```bash 
+screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr1='.*?(?P<name>[^/]*\.pdf$)' cr2='.*?(?P<name>[^/]*\.gif$)' cin=1 cl=1 csf='{ci:02}_{name}' v=info 
 ```
 
 ## Setup
