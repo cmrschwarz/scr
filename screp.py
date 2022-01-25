@@ -416,11 +416,11 @@ def help(err=False):
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
                              defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
-                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
-                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
-                             (args: label, content, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
@@ -761,7 +761,7 @@ def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, co
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, mc.content_escape_sequence]
+    args_list = ([content, label_txt, content_enc, doc.encoding, doc.path, mc.content_escape_sequence]
         + opts_list + label_regex_match.group_list + content_regex_match.group_list)
     args_dict = dict(
         list(content_regex_match.group_dict.items())
@@ -769,8 +769,8 @@ def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, co
         + list(opts_dict.items())
         + list(
             {
-            "label": label_txt,
             "content": content,
+            "label": label_txt,
             "content_enc": content_enc,
             "encoding": doc.encoding,
             "document": doc.path,
@@ -834,18 +834,22 @@ def handle_content_match(mc, doc, content_match):
         label = mc.label_default_format.format([di, ci], di=di, ci=ci)
     else:
         label = mc.label.apply_format(label_regex_match, [di, ci], ["di", "ci"])
-    document_context = f'document "{doc.path}"'
+    
+    di_ci_context = ""
     if mc.have_multidocs:
         if mc.content.multimatch:
-            document_context += f" (di={di}, ci={ci})"
+            di_ci_context = f" (di={di}, ci={ci})"
         else:
-            document_context += f" (di={di})"
+            di_ci_context = f" (di={di})"
+    elif mc.content.multimatch:
+        di_ci_context = f" (ci={ci})"
+
+    if mc.have_label_matching:
+        label_context = f' (label "{label}")'
     else:
-        if mc.content.multimatch:
-            document_context += f" (ci={ci})"
+        label_context = ""
 
     if mc.content_raw:
-        context = document_context
         content_link = None
     else:
         content_link = content_txt
@@ -856,18 +860,30 @@ def handle_content_match(mc, doc, content_match):
             context = f'content link "{content_link}"'
 
         if mc.content.interactive:
+            prompt_options = [
+                (InteractiveResult.ACCEPT, yes_indicating_strings),
+                (InteractiveResult.REJECT, no_indicating_strings),
+                (InteractiveResult.EDIT, edit_indicating_strings),
+                (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+            ]
+            if mc.content_raw:
+                prompt_options.append((InteractiveResult.INSPECT, inspect_indicating_strings))
+                inspect_opt_str = "/inspect" 
+                prompt_msg = f'accept content from "{doc.path}"{di_ci_context}{label_context}'
+            else:
+                inspect_opt_str = ""
+                prompt_msg = f'"{doc.path}"{di_ci_context}{label_context} accept content link "{content_link}"'
+
             res = prompt(
-                f'accept {context} (label "{label}") [Yes/no/edit/chainskip/docskip]? ',
-                [
-                    (InteractiveResult.ACCEPT, yes_indicating_strings),
-                    (InteractiveResult.REJECT, no_indicating_strings),
-                    (InteractiveResult.EDIT, edit_indicating_strings),
-                    (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
-                    (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
-                ],
+                f'{prompt_msg} [Yes/no/edit{inspect_opt_str}/chainskip/docskip]? ',
+                prompt_options,
                 InteractiveResult.ACCEPT
             )
             if res is InteractiveResult.ACCEPT: break
+            if res == InteractiveResult.INSPECT:
+                print(f'content for "{doc.path}"{label_context}:\n' + content_txt)
+                continue
             if res is not InteractiveResult.EDIT: return res
             if not mc.content_raw:
                 content_link = input("enter new content link:\n")
@@ -887,16 +903,24 @@ def handle_content_match(mc, doc, content_match):
             if not mc.is_valid_label(label):
                 sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
+                prompt_options = [
+                    (InteractiveResult.ACCEPT, yes_indicating_strings),
+                    (InteractiveResult.REJECT, no_indicating_strings),
+                    (InteractiveResult.EDIT, edit_indicating_strings),
+                    (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                    (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                ]
+                if mc.content_raw:
+                    prompt_options.append((InteractiveResult.INSPECT, inspect_indicating_strings))
+                    inspect_opt_str = "/inspect" 
+                    prompt_msg = f'"{doc.path}"{di_ci_context}: accept content label "{label}"'
+                else:
+                    inspect_opt_str = ""
+                    prompt_msg = f'"{doc.path}": content link {content_link}{di_ci_context}: accept content label "{label}"'
+
                 res = prompt(
-                    f'{context}: accept label "{label}" [Yes/no/edit/inspect/chainskip/docskip]? ',
-                    [
-                        (InteractiveResult.ACCEPT, yes_indicating_strings),
-                        (InteractiveResult.REJECT, no_indicating_strings),
-                        (InteractiveResult.INSPECT, inspect_indicating_strings),
-                        (InteractiveResult.EDIT, edit_indicating_strings),
-                        (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
-                        (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
-                    ],
+                    f'{prompt_msg} [Yes/no/edit/{inspect_opt_str}/chainskip/docskip]? ',
+                    prompt_options,
                     InteractiveResult.ACCEPT
                 )
                 if res == InteractiveResult.ACCEPT: break
