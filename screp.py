@@ -260,7 +260,7 @@ class Document:
         if not target_mcs:
             self.target_mcs = []
         else:
-            self.target_mcs = sorted(target_mcs)
+            self.target_mcs = sorted(target_mcs, key=lambda mc: mc.chain_id)
 
     def __key(self):
         return (self.document_type, self.path, self.encoding, self.output_enciding)
@@ -379,13 +379,9 @@ def help(err=False):
     global DEFAULT_CPF
     global DEFAULT_CWF
     text = f"""{sys.argv[0]} [OPTIONS]
-    Scan documents for content matches and write these out.
-
-    Matching is a chain of applying an xpath, a regular expression and a python format expression.
-    Since xpath and regex can generate multiple results, multiple values may be generated at these steps.
-    If a step is not specified, it is skipped.
-    The arguments for the format strings are available in the specified order, or as named arguments.
-
+    Extract content from urls or files by specifying content matching chains 
+    (xpath -> regex -> python format string).   
+     
     Content to Write out:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
@@ -439,6 +435,13 @@ def help(err=False):
         url=<url>           fetch a document from a url, derived document matches are (relative) urls
         file=<path>         fetch a document from a file, derived documents matches are (relative) file pathes
         rfile=<path>        fetch a document from a file, derived documents matches are urls
+
+    Chain Syntax:
+        Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
+        Use "-" for ranges, "," for multiple specifications, and "^" to except the following chains.
+        Examples:
+            lf1,3-5=foo     sets "lf" to "foo" for chains 1, 3, 4 and 5.
+            lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
     Global Options:
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
@@ -1255,17 +1258,17 @@ def parse_mc_range(ctx, mc_spec, arg):
     if mc_spec == "":
         return itertools.chain(ctx.match_chains, [ctx.origin_mc])
     
-    esc_split = mc_spec.split("^")
+    esc_split = [x.strip() for x in mc_spec.split("^")]
     if len(esc_split) > 2:
         error(f"cannot have more than one '^' in match chain specification of '{arg}'")
     if len(esc_split) == 1: 
         return parse_simple_mc_range(ctx, mc_spec, arg)
-   
-    if esc_split[0].strip() == "":
-        lhs = itertools.chain(ctx.match_chains, [ctx.origin_mc])
+    lhs, rhs = esc_split
+    if lhs == "":
+        include = itertools.chain(ctx.match_chains, [ctx.origin_mc])
     else:
-        lhs = parse_simple_mc_range(esc_split[0])
-    return ({*lhs} - {*parse_simple_mc_range(esc_split[1])})
+        include = parse_simple_mc_range(ctx, lhs, arg)
+    return ({*include} - {*parse_simple_mc_range(ctx, rhs, arg)})
 
 
 def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
