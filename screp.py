@@ -1095,7 +1095,7 @@ def gen_content_matches(mc, doc, src, src_xml):
             else:
                 if not mc.label.multimatch and len(labels) > 0:
                     label = labels[0]
-                elif match_index in labels:
+                elif match_index < len(labels):
                     label = labels[match_index]
                 elif not mc.label_allow_missing:
                     labels_none_for_n += 1
@@ -1289,7 +1289,7 @@ def dl(ctx):
         except Exception as ex:
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}")
             continue
-        static_content = (doc.document_type != DocumentType.URL)
+        static_content = (doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
         while unsatisfied_chains > 0:
             try_number += 1
@@ -1328,6 +1328,9 @@ def dl(ctx):
                         mc.satisfied = True
                         unsatisfied_chains -= 1
                         if mc.have_xpath_matching: have_xpath_matching -= 1
+
+            if unsatisfied_chains and not interactive_chains:
+                time.sleep(ctx.selenium_poll_frequency_secs)
         content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
