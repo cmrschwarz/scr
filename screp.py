@@ -968,7 +968,7 @@ def handle_content_match(mc, doc, content_match):
             if not mc.content_raw:
                 content_link = input("enter new content link:\n")
             else:
-                sys.stdout.write(
+                print(
                     f'enter new content (terminate with a newline followed by the string "{mc.content_escape_sequence}"):\n')
                 content_txt = ""
                 while True:
@@ -1036,7 +1036,7 @@ def handle_content_match(mc, doc, content_match):
                 content_bytes = None
                 content_txt = None
         except Exception as ex:
-            sys.stderr.write(
+            log(mc.ctx, Verbosity.ERROR,
                 f'{doc.path}{di_ci_context}: failed to fetch content from "{content_link}"\n')
             return False
     else:
@@ -1292,6 +1292,7 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
         if result is None:
             print('please answer with "yes" or "skip"')
             sys.stdout.write(msg)
+            sys.stdout.flush()
     return False, msg
 
 
