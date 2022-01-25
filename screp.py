@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from audioop import minmax
+from code import interact
 from multiprocessing.sharedctypes import Value
 from sqlite3 import DataError
 import lxml # pip3 install lxml
@@ -252,18 +253,18 @@ class Locator:
         return res
 
 class Document:
-    def __init__(self, document_type, path, src_mc, target_mcs=None, encoding=None):
+    def __init__(self, document_type, path, src_mc, match_chains=None, expand_match_chains_above=None):
         self.document_type = document_type
         self.path = path
-        self.encoding = encoding
+        self.encoding = None
         self.src_mc = src_mc
-        if not target_mcs:
-            self.target_mcs = []
+        if not match_chains:
+            self.match_chains = []
         else:
-            self.target_mcs = sorted(target_mcs, key=lambda mc: mc.chain_id)
-
+            self.match_chains = sorted(match_chains, key=lambda mc: mc.chain_id)
+        self.expand_match_chains_above = expand_match_chains_above
     def __key(self):
-        return (self.document_type, self.path, self.encoding, self.output_enciding)
+        return (self.document_type, self.path)
 
     def __eq__(x, y):
         return isinstance(y, x.__class__) and x.__key() == y.__key()
@@ -292,7 +293,6 @@ class MatchChain:
         self.label_allow_missing = False
         self.allow_slashes_in_labels = False
 
-        self.documents_bfs = False
         self.dimin = 1
         self.dimax = float("inf")
         self.default_document_encoding = "utf-8"
@@ -322,17 +322,32 @@ class MatchChain:
         self.have_multidocs = None
         self.have_interactive_matching = None
         self.need_content_enc = None
+        self.content_matches = []
+        self.document_matches = []
+        self.handled_content_matches = set()
+        self.handled_document_matches = set()
+        self.satisfied = True
+        self.labels_none_for_n = 0
 
     def apply_defaults(self, defaults):
         for k, v in self.__dict__.items():
             if v is None:
                 self.__dict__[k] = defaults.__dict__[k]
 
+    def need_matches(self):
+        return self.need_document_matches() or self.need_content_matches()
+
+    def need_document_matches(self):
+        return self.have_multidocs and self.di <= self.dimax
+
+    def need_content_matches(self):
+        return self.ci <= self.cimax
+
 
 class DlContext:
     def __init__(self):
         self.match_chains = []
-        self.docs = []
+        self.docs = deque()
 
         self.cookie_file = None
         self.cookie_jar = None
@@ -343,6 +358,7 @@ class DlContext:
         self.user_agent_random = False
         self.user_agent = None
         self.verbosity = Verbosity.WARN
+        self.documents_bfs = False
         
         # stuff that can't be reconfigured (yet)
         self.selenium_timeout_secs = 10
@@ -423,7 +439,6 @@ def help(err=False):
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
         dm=<bool>           allow multiple document matches in one document instead of picking the first
-        dbfs=<bool>         traverse the matched documents in breadth first order instead of depth first
         din=<bool>          give a prompt to ignore a potential document match
         denc=<encoding>     default document encoding to use for following documents, default is utf-8
         dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently
@@ -444,6 +459,7 @@ def help(err=False):
             lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
     Global Options:
+        bfs=<bool>          traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
@@ -642,6 +658,10 @@ def setup(ctx):
 
     for mc in ctx.match_chains:
         setup_match_chain(mc)
+    
+    for d in ctx.docs:
+        if d.expand_match_chains_above is not None:
+            d.match_chains.extend(ctx.match_chains[d.expand_match_chains_above:])
 
     setup_selenium(ctx)
 
@@ -687,9 +707,9 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
             res = download_url(ctx, doc.path)
             data = res.content
             if enc:
-                if doc.force_encoding:
+                if doc.src_mc and doc.src_mc.forced_document_encoding:
                     try:
-                        data_enc = str(data, encoding=doc.encoding)
+                        data_enc = str(data, encoding=doc.src_mc.forced_document_encoding)
                     except Exception:
                         data_enc = res.text
                 else:
@@ -706,13 +726,13 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if not nosingle and len(result) == 1: return result[0]
     return tuple(result)
 
-def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
+def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
     opts_list = []
     opts_dict = {}
-    if ctx.document.multimatch:
+    if mc.document.multimatch:
         opts_list.append(di)
         opts_dict["di"] = di
-    if ctx.content.multimatch:
+    if mc.content.multimatch:
         opts_list.append(ci)
         opts_dict["ci"] = ci
     if content_link:
@@ -725,7 +745,7 @@ def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, c
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
     # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, ctx.content_escape_sequence]
+    args_list = ([label_txt, content, content_enc, doc.encoding, doc.path, mc.content_escape_sequence]
         + opts_list + label_regex_match.group_list + content_regex_match.group_list)
     args_dict = dict(
         list(content_regex_match.group_dict.items())
@@ -738,7 +758,7 @@ def gen_final_content_format(ctx, format_str, label_txt, di, ci, content_link, c
             "content_enc": content_enc,
             "encoding": doc.encoding,
             "document": doc.path,
-            "escape": ctx.content_escape_sequence
+            "escape": mc.content_escape_sequence
             }.items()
         )
     )
@@ -784,40 +804,42 @@ def normalize_link(ctx, mc, src_doc, link):
         url_parsed = url_parsed._replace(scheme=scheme)
     return url_parsed.geturl()
 
-def handle_content_match(ctx, doc, content_match, di, ci):
+def handle_content_match(mc, doc, content_match):
+    ci = mc.ci
+    di = mc.di
     label_regex_match = content_match.label_regex_match
-    content_txt = ctx.content.apply_format(
+    content_txt = mc.content.apply_format(
         content_match.content_regex_match,
         [di, ci],
         ["di", "ci"],
     )
 
     if label_regex_match is None:
-        label = ctx.label_default_format.format([di, ci], di=di, ci=ci)
+        label = mc.label_default_format.format([di, ci], di=di, ci=ci)
     else:
-        label = ctx.label.apply_format(label_regex_match, [di, ci], ["di", "ci"])
+        label = mc.label.apply_format(label_regex_match, [di, ci], ["di", "ci"])
     document_context = f'document "{doc.path}"'
-    if ctx.have_multidocs:
-        if ctx.content.multimatch:
+    if mc.have_multidocs:
+        if mc.content.multimatch:
             document_context += f" (di={di}, ci={ci})"
         else:
             document_context += f" (di={di})"
     else:
-        if ctx.content.multimatch:
+        if mc.content.multimatch:
             document_context += f" (ci={ci})"
 
-    if ctx.content_raw:
+    if mc.content_raw:
         context = document_context
         content_link = None
     else:
         content_link = content_txt
 
     while True:
-        if not ctx.content_raw:
-            content_link = normalize_link(ctx, doc, content_link)
+        if not mc.content_raw:
+            content_link = normalize_link(mc.ctx, mc, doc, content_link)
             context = f'content link "{content_link}"'
 
-        if ctx.content.interactive:
+        if mc.content.interactive:
             res = prompt(
                 f'accept {context} (label "{label}") [Yes/edit/skip/nextdoc]? ',
                 [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, skip_indicating_strings), (4, next_doc_indicating_strings)],
@@ -827,22 +849,22 @@ def handle_content_match(ctx, doc, content_match, di, ci):
             if res == 3: return False
             if res == 4: return None
             assert res == 2
-            if not ctx.content_raw:
+            if not mc.content_raw:
                 content_link = input("enter new content link:\n")
             else:
-                sys.stdout.write(f'enter new content (terminate with a newline followed by the string "{ctx.content_escape_sequence}"):\n')
+                sys.stdout.write(f'enter new content (terminate with a newline followed by the string "{mc.content_escape_sequence}"):\n')
                 content_txt = ""
                 while True:
                     content_txt += input() + "\n"
-                    i = content_txt.find("\n" + ctx.content_escape_sequence)
+                    i = content_txt.find("\n" + mc.content_escape_sequence)
                     if i != -1:
                         content_txt = content_txt[:i]
                         break
         break
 
-    if ctx.label.interactive:
+    if mc.label.interactive:
         while True:
-            if not ctx.is_valid_label(label):
+            if not mc.is_valid_label(label):
                 sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
                 res = prompt(
@@ -866,25 +888,23 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 assert res == 2
             label = input("enter new label: ")
 
-    if not ctx.content_raw:
+    if not mc.content_raw:
         try:
-            if ctx.content_download_required:
+            if mc.content_download_required:
                 res = fetch_doc(
-                    ctx,
+                    mc,
                     Document(
                         doc.document_type.derived_type(),
-                        content_link, ctx.content_input_encoding,
-                        ctx.content_forced_input_encoding,
-                        None, False, False,
+                        content_link, mc, doc.match_chains
                     ),
                     raw=True,
-                    enc=ctx.need_content_enc,
+                    enc=mc.need_content_enc,
                     nosingle=True
                 )
                 if res is None:
                     return False
                 content_bytes = res[0]
-                content_txt = res[1] if ctx.need_content_enc else None
+                content_txt = res[1] if mc.need_content_enc else None
             else:
                 content_bytes = None
                 content_txt = None
@@ -894,26 +914,26 @@ def handle_content_match(ctx, doc, content_match, di, ci):
     else:
         content_bytes = content_txt
 
-    if ctx.need_content_enc:
-        content_enc = content_txt.encode(ctx.content_encoding)
+    if mc.need_content_enc:
+        content_enc = content_txt.encode(mc.content_encoding)
     else:
         content_enc = None
 
 
-    if ctx.content_print_format:
+    if mc.content_print_format:
         print_data = gen_final_content_format(
-            ctx, ctx.content_print_format, label, di, ci, content_link,
+            mc, mc.content_print_format, label, di, ci, content_link,
             content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
         sys.stdout.buffer.write(print_data)
 
-    if ctx.content_save_format:
-        if not ctx.is_valid_label(label):
+    if mc.content_save_format:
+        if not mc.is_valid_label(label):
             sys.stderr.write(f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
         save_path = gen_final_content_format(
-            ctx, ctx.content_save_format, label, di, ci, content_link,
+            mc, mc.content_save_format, label, di, ci, content_link,
             content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
@@ -921,15 +941,15 @@ def handle_content_match(ctx, doc, content_match, di, ci):
         try:
             save_path = save_path.decode("utf-8")
         except Exception:
-            log(ctx. Verbosity.ERROR, f"{context}: generated save path is not valid utf-8")
+            log(mc.ctx, Verbosity.ERROR, f"{context}: generated save path is not valid utf-8")
             save_path = None
         while True:
             if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
-                log(ctx. Verbosity.ERROR, f"{context}: directory of generated save path does not exist")
+                log(mc.ctx, Verbosity.ERROR, f"{context}: directory of generated save path does not exist")
                 save_path = None
-            if not save_path and not ctx.save_path_interactive:
+            if not save_path and not mc.save_path_interactive:
                 return False
-            if not ctx.save_path_interactive:
+            if not mc.save_path_interactive:
                 break
             if save_path:
                 res = prompt(
@@ -960,14 +980,15 @@ def handle_content_match(ctx, doc, content_match, di, ci):
                 f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
 
         write_data = gen_final_content_format(
-            ctx, ctx.content_write_format, label, di, ci, content_link,
+            mc, mc.content_write_format, label, di, ci, content_link,
             content_bytes, content_enc,
             content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
         f.write(write_data)
         f.close()
-        log(ctx, Verbosity.INFO, f"wrote content into {save_path} for {context}")
+        log(mc, Verbosity.INFO, f"wrote content into {save_path} for {context}")
+    mc.ci += 1
     return True
 
 def handle_document_match(ctx, doc, matched_path):
@@ -984,29 +1005,29 @@ def handle_document_match(ctx, doc, matched_path):
     if res == 3:
         return input("enter new document: ")
 
-def gen_content_matches(ctx, doc, src, src_xml):
+def gen_content_matches(mc, doc, src, src_xml):
     content_matches = []
 
-    if ctx.have_content_xpaths:
-        contents, contents_xml = ctx.content.match_xpath(src_xml, doc.path, ([doc.src], [src_xml]), True)
+    if mc.have_content_xpaths:
+        contents, contents_xml = mc.content.match_xpath(src_xml, doc.path, ([doc.src], [src_xml]), True)
     else:
-        contents = ctx.content.match_xpath(src_xml, doc.path, [src])
+        contents = mc.content.match_xpath(src_xml, doc.path, [src])
 
     labels = []
-    if ctx.have_label_matching and not ctx.labels_inside_content:
-        for lx in ctx.label.match_xpath(src_xml, doc.path, [src]):
-            labels.extend(ctx.label.match_regex(src, doc.path, [RegexMatch(lx)]))
+    if mc.have_label_matching and not mc.labels_inside_content:
+        for lx in mc.label.match_xpath(src_xml, doc.path, [src]):
+            labels.extend(mc.label.match_regex(src, doc.path, [RegexMatch(lx)]))
     match_index = 0
     labels_none_for_n = 0
     for content in contents:
-        content_regex_matches = ctx.content.match_regex(content, doc.path, [RegexMatch(content)])
-        if ctx.labels_inside_content and ctx.label.xpath:
-            content_xml = contents_xml[match_index] if ctx.have_content_xpaths else None
+        content_regex_matches = mc.content.match_regex(content, doc.path, [RegexMatch(content)])
+        if mc.labels_inside_content and mc.label.xpath:
+            content_xml = contents_xml[match_index] if mc.have_content_xpaths else None
             labels = []
-            for lx in ctx.label.match_xpath(content_xml, doc.path, [src]):
-                labels.extend(ctx.label.match_regex(src, doc.path, [RegexMatch(lx)]))
+            for lx in mc.label.match_xpath(content_xml, doc.path, [src]):
+                labels.extend(mc.label.match_regex(src, doc.path, [RegexMatch(lx)]))
             if len(labels) == 0:
-                if not ctx.label_allow_missing:
+                if not mc.label_allow_missing:
                     labels_none_for_n += len(content_regex_matches)
                     continue
                 label = None
@@ -1014,22 +1035,22 @@ def gen_content_matches(ctx, doc, src, src_xml):
                 label = labels[0]
 
         for crm in content_regex_matches:
-            if ctx.labels_inside_content:
-                if not ctx.label.xpath:
-                    labels = ctx.label.match_regex(crm.value, doc.path, [RegexMatch(crm.value)])
+            if mc.labels_inside_content:
+                if not mc.label.xpath:
+                    labels = mc.label.match_regex(crm.value, doc.path, [RegexMatch(crm.value)])
                     if len(labels) == 0:
-                        if not ctx.label_allow_missing:
+                        if not mc.label_allow_missing:
                             labels_none_for_n += 1
                             continue
                         label = None
                     else:
                         label = labels[0]
             else:
-                if not ctx.label.multimatch and len(labels) > 0:
+                if not mc.label.multimatch and len(labels) > 0:
                     label = labels[0]
                 elif match_index in labels:
                     label = labels[match_index]
-                elif not ctx.label_allow_missing:
+                elif not mc.label_allow_missing:
                     labels_none_for_n += 1
                     continue
                 else:
@@ -1039,44 +1060,171 @@ def gen_content_matches(ctx, doc, src, src_xml):
         match_index += 1
     return content_matches, labels_none_for_n
 
-def gen_document_matches(ctx, doc, src, src_xml):
-    new_paths = ctx.document.apply(src, src_xml, doc.path)
+def gen_document_matches(mc, doc, src, src_xml):
+    new_paths = mc.document.apply(src, src_xml, doc.path)
     return [
         Document(
             doc.document_type.derived_type(),
             path,
-            doc.encoding,
-
+            mc,
+            doc.match_chains
         )
         for path in new_paths
     ]
 
+def make_padding(ctx, count_number):
+    content_count_pad_len = (
+        ctx.selenium_content_count_pad_length
+        - min(len(str(count_number)), ctx.selenium_content_count_pad_length)
+    )
+    rpad = int(content_count_pad_len / 2)
+    lpad = content_count_pad_len - rpad
+    return lpad * " ", rpad * " "
+
+def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg):
+    content_count = 0
+    docs_count = 0
+    labels_none_for_n = 0
+    have_multidocs = False
+    for mc in interactive_chains:
+        content_count += len(mc.content_matches)
+        docs_count += len(mc.document_matches)
+        labels_none_for_n += mc.labels_none_for_n
+        if mc.have_multidocs and mc.need_document_matches(): 
+            have_multidocs = True
+    msg = ""
+    lpad, rpad = make_padding(ctx, content_count)
+    msg += f'"{doc.path}": accept {lpad}< {content_count} >{rpad} content'
+    if content_count != 1:
+        msg += "s"
+    else:
+        msg += " "
+
+    if labels_none_for_n != 0:
+        msg += f" (missing {labels_none_for_n} labels)"
+    if have_multidocs:
+        lpad, rpad = make_padding(mc.ctx, docs_count)
+        msg += f" and {lpad}< {docs_count} >{rpad} document"
+        if docs_count != 1:
+            msg += "s"
+        else:
+            msg += "s"
+    msg += " [Yes/skip]? "
+
+    if msg != last_msg:
+        if last_msg:
+            msg_full = "\r" + " " * len(last_msg) + "\r" + msg
+        else:
+            msg_full = msg
+    else:
+        msg_full = None
+
+    rlist = []
+    if try_number > 1:
+        rlist, _, _ = select.select([sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
+    
+    if not rlist and msg_full:
+        sys.stdout.write(msg_full)
+
+    if not rlist:
+        rlist, _, _ = select.select([sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
+    if rlist:
+        accept = parse_prompt_option(
+            sys.stdin.readline(), 
+            [(True, yes_indicating_strings), (False, skip_indicating_strings + no_indicating_strings)],
+            True
+        )
+        if accept is None:
+            print('please answer with "yes" or "skip"')
+            sys.stdout.write(msg)
+    return accept, msg 
+
+def handle_match_chain(mc, doc, src, src_xml):
+    if mc.need_content_matches():
+        content_matches, mc.labels_none_for_n = gen_content_matches(mc, doc, src, src_xml)
+    else:
+        content_matches = []
+
+    if mc.need_document_matches():
+        document_matches = gen_document_matches(mc, doc, src, src_xml)
+    else:
+        document_matches = []
+        
+    if mc.selenium_strategy != SeleniumStrategy.DEDUP:
+        mc.content_matches = content_matches
+        mc.document_matches = document_matches
+    else:
+        for cm in content_matches:
+            if cm in mc.handled_content_matches:
+                continue
+            mc.handled_content_matches.add(cm)
+            mc.content_matches.append(cm)
+
+        for dm in document_matches:
+            if dm in mc.handled_document_matches:
+                continue
+            cm.handled_document_matches.add(dm)
+            mc.document_matches.append(dm)
+
+    waiting = True
+    interactive = False
+    if mc.selenium_strategy == SeleniumStrategy.DISABLED:
+        waiting = False
+    elif mc.selenium_strategy == SeleniumStrategy.FIRST:
+        contents_missing = not content_matches and mc.need_content_matches()
+        documents_missing = not mc.document_matches and mc.need_document_matches()
+        if not contents_missing and not documents_missing:
+            waiting = False
+    else:
+        assert mc.selenium_strategy in [SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP] 
+        interactive = True
+
+    return waiting, interactive
+
+def accept_for_match_chain(mc, doc):
+    if not mc.ci_continuous:
+        mc.ci = mc.cimin
+    for i, cm in enumerate(mc.content_matches):
+        if not mc.have_label_matching or cm.label_regex_match is not None:
+            accept = handle_content_match(mc, doc, cm)
+            if accept is None:
+                break
+            if mc.ci > mc.cimax: break
+        else:
+            log(mc.ctx, Verbosity.WARN, f"no labels! skipping remaining {len(mc.content_matches) - i} content element(s) in document:\n    {doc.path}")
+            break
+    accepted_document_matches = [d for d in mc.document_matches if handle_document_match(mc, doc, d.path)]
+    if mc.ctx.documents_bfs:
+        mc.ctx.docs.extend(accepted_document_matches)
+    else:
+        mc.ctx.docs.extendleft(accepted_document_matches)
+    mc.document_matches.clear()
+    mc.content_matches.clear()
+    mc.handled_document_matches.clear()
+    mc.handled_content_matches.clear()
+    mc.di += 1
+
 def dl(ctx):
-    docs = deque(ctx.docs)
-    handled_content_matches = {}
-    handled_document_matches = {}
-    doc = None
-    while docs:
-        content_matches_in_doc = False
-        document_matches_in_doc = False
-        if doc:
-            for mc in doc.target_mcs:
-                mc.di += 1
-        doc = docs.popleft()
-        match_chains = list(doc.target_mcs)
+    while ctx.docs:
+        doc = ctx.docs.popleft()
+        unsatisfied_chains = 0
+        have_xpath_matching = 0
+        for mc in doc.match_chains:
+            if mc.need_matches():
+                unsatisfied_chains += 1
+                mc.satisfied = False
+                if mc.have_xpath_matching: 
+                    have_xpath_matching += 1 
+
         try_number = 0
-        final_document_matches = []
-        final_content_matches = []
         try:
             src = fetch_doc(ctx, doc)
         except Exception as ex:
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}")
             continue
         static_content = (doc.document_type != DocumentType.URL)
-        input_timeout = None if static_content else ctx.selenium_poll_frequency_secs
         last_msg = ""
-        while True:
-            accept = False
+        while unsatisfied_chains > 0:
             try_number += 1
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
@@ -1090,121 +1238,32 @@ def dl(ctx):
                     src = ""
 
             if not same_content:
+                interactive_chains = []
                 try:
-                    src_xml = lxml.html.fromstring(src) if ctx.have_xpath_matching else None
-                    content_matches, labels_none_for_n = gen_content_matches(ctx, doc, src, src_xml)
+                    src_xml = lxml.html.fromstring(src) if have_xpath_matching else None
                 except Exception:
-                    content_matches = []
-                    labels_none_for_n = 0
-                document_matches = []
-                if di <= ctx.dimax:
-                    document_matches = gen_document_matches(ctx, doc, src, src_xml)
+                    src_xml = None
 
-                if ctx.selenium_strategy == SeleniumStrategy.FIRST:
-                    if not content_matches or (not document_matches and (ctx.have_multidocs and di < ctx.dimax)):
-                        time.sleep(ctx.selenium_poll_frequency_secs)
-                        continue
-                    accept = True
-                elif ctx.selenium_strategy == SeleniumStrategy.DISABLED:
-                    accept = True
-
-                if ctx.selenium_strategy != SeleniumStrategy.DEDUP:
-                    final_content_matches = content_matches
-                    final_document_matches = document_matches
-                else:
-                    for cm in content_matches:
-                        if cm in handled_content_matches:
-                            continue
-                        handled_content_matches[cm] = None
-                        final_content_matches.append(cm)
-
-                    for dm in document_matches:
-                        if dm in handled_document_matches:
-                            continue
-                        handled_document_matches[dm] = None
-                        final_document_matches.append(dm)
-
-
-
-            if ctx.selenium_strategy in [SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP] and not static_content:
-                content_count = len(final_content_matches)
-                docs_count = len(final_document_matches)
-                msg = ""
-                content_count_pad_len = (
-                    ctx.selenium_content_count_pad_length
-                    - min(len(str(content_count)), ctx.selenium_content_count_pad_length)
-                )
-                rpad = int(content_count_pad_len / 2)
-                lpad = content_count_pad_len - rpad
-                msg += f'"{doc.path}": accept {lpad * " "} < {content_count} > {rpad * " "} content'
-                if content_count != 1:
-                    msg += "s"
-                else:
-                    msg += " "
-
-                if labels_none_for_n != 0:
-                    msg += f" (missing {labels_none_for_n} labels)"
-                if ctx.have_multidocs and di <= ctx.dimax:
-                    msg += f" and {docs_count} document"
-                    if docs_count != 1:
-                        msg += "s"
-                msg += " [Yes/skip]? "
-
-                if msg != last_msg:
-                    msg_full = "\r" + " " * len(last_msg) + "\r" + msg
-                    last_msg = msg
-                    msg = msg_full
-                else:
-                    msg = None
-                rlist = []
-                if try_number > 1:
-                    rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
-                if not rlist and msg:
-                    sys.stdout.write(msg)
-
-                if not rlist:
-                    rlist, _, _ = select.select([sys.stdin], [], [], input_timeout)
-                if rlist:
-                    accept = parse_prompt_option(sys.stdin.readline(), [(True, yes_indicating_strings), (False, skip_indicating_strings + no_indicating_strings)], True)
-                    if accept is None:
-                        print("please answer with yes or skip")
-                        sys.stdout.write(msg)
-                        continue
-                    break
-            if accept:
-                break
-
-        if accept == False:
-            continue
-
-        if not ctx.ci_continuous:
-            ci = ctx.cimin
-        for i, cm in enumerate(final_content_matches):
-            if not ctx.have_label_matching or cm.label_regex_match is not None:
-                content_matches_in_doc = True
-                accept = handle_content_match(ctx, doc, cm, di, ci)
-                if accept is None:
-                    break
+                for mc in doc.match_chains:
+                    if mc.satisfied: continue
+                    waiting, interactive = handle_match_chain(mc, doc, src, src_xml)
+                    if not waiting:
+                        mc.satisfied = True
+                        unsatisfied_chains -= 1
+                        if mc.have_xpath_matching: have_xpath_matching -= 1
+                    elif interactive:
+                        interactive_chains.append(mc)
+                    
+            if interactive_chains and not static_content:
+                accept, last_msg = handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg)
                 if accept:
-                    ci += 1
-                if ci > ctx.cimax: break
-            else:
-                log(ctx, Verbosity.WARN, f"no labels! skipping remaining {len(final_content_matches) - i} content element(s) in document:\n    {doc.path}")
-                break
-        if not ctx.have_interactive_matching and not content_matches_in_doc:
-            log(ctx, Verbosity.WARN, f"no content matches for document: {doc.path}")
-        if not ctx.document.interactive and di < ctx.dimax and not document_matches_in_doc and ctx.have_multidocs:
-            log(ctx, Verbosity.WARN, f"no document matches for document: {doc.path}")
-        if di < ctx.dimax :
-            final_document_matches = [d for d in final_document_matches if handle_document_match(ctx, doc, d.path)]
-            if ctx.documents_bfs:
-                docs.extend(final_document_matches)
-            else:
-                docs.extendleft(final_document_matches)
-        di += 1
+                    for mc in interactive_chains:
+                        mc.satisfied = True
+                        unsatisfied_chains -= 1
+                        if mc.have_xpath_matching: have_xpath_matching -= 1
 
-    if di <= ctx.dimax and ctx.dimax != float("inf") :
-        log(ctx, Verbosity.WARN, "exiting! all documents handled before dimax was reached")
+        for mc in doc.match_chains:
+            accept_for_match_chain(mc, doc)
 
 
 def begins(string, begin):
@@ -1346,15 +1405,22 @@ def verify_encoding(encoding):
 
 def apply_doc_arg(ctx, argname, doctype, arg):
     success, mcs, value = parse_mc_arg(ctx, argname, arg)
-    if success:
-        doc = Document(
-            doctype,
-            normalize_link(ctx, None, Document(doctype.url_handling_type(), None, None), value),
-            None,
-            list(mcs)
-        )
-        ctx.docs.append(doc)
-    return success
+    if not success: return False
+    mcs = list(mcs)
+    if ctx.origin_mc in mcs:
+        mcs.remove(ctx.origin_mc)
+        extend_chains_above = len(ctx.match_chains)
+    else:
+        extend_chains_above = None
+    doc = Document(
+        doctype,
+        normalize_link(ctx, None, Document(doctype.url_handling_type(), None, None), value),
+        None,
+        mcs,
+        extend_chains_above
+    )
+    ctx.docs.append(doc)
+    return True
 
 def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, support_blank=False, blank_val=""):
     if not begins(arg, f"{optname}"): return False
@@ -1394,7 +1460,7 @@ def main():
         if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg): continue
         if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg): continue
 
-        if apply_mc_arg(ctx, "cipf", ["content_print_format"], arg, parse_bool_arg): continue
+        if apply_mc_arg(ctx, "cpf", ["content_print_format"], arg): continue
         if apply_mc_arg(ctx, "cwf", ["content_write_format"], arg): continue
         if apply_mc_arg(ctx, "csf", ["content_save_format"], arg): continue
         if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg): continue
@@ -1449,9 +1515,9 @@ def main():
 
         if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)): continue
         if apply_ctx_arg(ctx, "tbdir", "tor_browser_dir", arg): continue # implies sel=t
-        if apply_ctx_arg(ctx, "dbfs", "documents_bfs", arg, parse_bool_arg, True): continue
+        if apply_ctx_arg(ctx, "bfs", "documents_bfs", arg, parse_bool_arg, True): continue
         if apply_ctx_arg(ctx, "ua", "user_agent", arg): continue
-        if apply_ctx_arg(ctx, "ua", "user_agent_random", parse_bool_arg, True): continue
+        if apply_ctx_arg(ctx, "ua", "user_agent_random", arg, parse_bool_arg, True): continue
         if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)): continue
 
         if "=" not in arg:
