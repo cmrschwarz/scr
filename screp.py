@@ -29,12 +29,21 @@ def prefixes(str):
 yes_indicating_strings = prefixes("yes") + prefixes("true") + ["1", "+"]
 no_indicating_strings = prefixes("no") + prefixes("false") + ["0", "-"]
 skip_indicating_strings = prefixes("skip")
-next_doc_indicating_strings = prefixes("nextdoc")
+chain_skip_indicating_strings = prefixes("chainskip")
+doc_skip_indicating_strings = prefixes("docskip")
 edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
 
 DEFAULT_CPF="{content}\\n"
 DEFAULT_CWF="{content}"
+
+class InteractiveResult(Enum):
+    ACCEPT = 0
+    REJECT = 1
+    EDIT = 2
+    INSPECT = 3
+    SKIP_CHAIN = 4
+    SKIP_DOC = 5
 
 class DocumentType(Enum):
     URL = 1
@@ -689,7 +698,7 @@ def prompt(prompt_text, options, default=None):
     while True:
         res = parse_prompt_option(input(prompt_text), options, default)
         if res is None:
-            option_names = [o[1][0] for o in options]
+            option_names = [matchings[0] for _opt, matchings in options]
             print("please answer with " + ", ".join(option_names[:-1]) + " or " + option_names[-1])
             continue
         return res
@@ -847,14 +856,18 @@ def handle_content_match(mc, doc, content_match):
 
         if mc.content.interactive:
             res = prompt(
-                f'accept {context} (label "{label}") [Yes/edit/skip/nextdoc]? ',
-                [(1, yes_indicating_strings), (2, edit_indicating_strings), (3, skip_indicating_strings), (4, next_doc_indicating_strings)],
-                1
+                f'accept {context} (label "{label}") [Yes/no/edit/chainskip/docskip]? ',
+                [
+                    (InteractiveResult.ACCEPT, yes_indicating_strings),
+                    (InteractiveResult.REJECT, no_indicating_strings),
+                    (InteractiveResult.EDIT, edit_indicating_strings),
+                    (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                    (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                ],
+                InteractiveResult.ACCEPT
             )
-            if res == 1: break
-            if res == 3: return False
-            if res == 4: return None
-            assert res == 2
+            if res is InteractiveResult.ACCEPT: break
+            if res is not InteractiveResult.EDIT: return res
             if not mc.content_raw:
                 content_link = input("enter new content link:\n")
             else:
@@ -874,24 +887,22 @@ def handle_content_match(mc, doc, content_match):
                 sys.stderr.write(f'"{doc.path}": labels cannot contain a slash ("{label}")')
             else:
                 res = prompt(
-                    f'{context}: accept label "{label}" [Yes/edit/inspect/skip/nextdoc]? ',
+                    f'{context}: accept label "{label}" [Yes/no/edit/inspect/chainskip/docskip]? ',
                     [
-                        (1, yes_indicating_strings),
-                        (2, edit_indicating_strings),
-                        (3, inspect_indicating_strings),
-                        (4, skip_indicating_strings),
-                        (5, next_doc_indicating_strings)
+                        (InteractiveResult.ACCEPT, yes_indicating_strings),
+                        (InteractiveResult.REJECT, no_indicating_strings),
+                        (InteractiveResult.INSPECT, inspect_indicating_strings),
+                        (InteractiveResult.EDIT, edit_indicating_strings),
+                        (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                        (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
                     ],
-                    1
+                    InteractiveResult.ACCEPT
                 )
-                if res == 1: break
-                if res == 5: return None
-                if res == 3:
+                if res == InteractiveResult.ACCEPT: break
+                if res == InteractiveResult.INSPECT:
                     print(f'"{doc.path}": content for "{label}":\n' + content_txt)
                     continue
-                if res == 4:
-                    return False
-                assert res == 2
+                if res != InteractiveResult.EDIT: return res
             label = input("enter new label: ")
 
     if not mc.content_raw:
@@ -959,19 +970,18 @@ def handle_content_match(mc, doc, content_match):
                 break
             if save_path:
                 res = prompt(
-                    f'{context}: accept save path "{save_path}" [Yes/edit/skip/nextdoc]? ',
+                    f'{context}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
                     [
-                        (1, yes_indicating_strings),
-                        (2, edit_indicating_strings),
-                        (3, skip_indicating_strings),
-                        (4, next_doc_indicating_strings)
+                        (InteractiveResult.ACCEPT, yes_indicating_strings),
+                        (InteractiveResult.REJECT, no_indicating_strings),
+                        (InteractiveResult.EDIT, edit_indicating_strings),
+                        (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                        (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
                     ],
-                    1
+                    InteractiveResult.ACCEPT
                 )
-                if res == 1: break
-                if res == 4: return None
-                if res == 3: return False
-                assert res == 2
+                if res == InteractiveResult.ACCEPT: break
+                if res != InteractiveResult.EDIT: return res
             save_path = input("enter new save path: ")
         try:
             f = open(save_path, "wb")
@@ -995,21 +1005,27 @@ def handle_content_match(mc, doc, content_match):
         f.close()
         log(mc.ctx, Verbosity.INFO, f"wrote content into {save_path} for {context}")
     mc.ci += 1
-    return True
+    return InteractiveResult.ACCEPT
 
-def handle_document_match(ctx, doc, matched_path):
-    if not ctx.document.interactive: return True
-    res = prompt(
-        f'accept matched document "{matched_path}" [Yes/no/edit]? ',
-        [(1, yes_indicating_strings), (2, no_indicating_strings), (3, edit_indicating_strings)],
-        1
-    )
-    if res == 1:
-        return matched_path
-    if res == 2:
-        return None
-    if res == 3:
-        return input("enter new document: ")
+def handle_document_match(ctx, doc):
+    if not ctx.document.interactive: return InteractiveResult.ACCEPT
+    while True:
+        res = prompt(
+            f'accept matched document "{doc.path}" [Yes/no/edit]? ',
+            [
+                (InteractiveResult.ACCEPT, yes_indicating_strings),
+                (InteractiveResult.REJECT, no_indicating_strings),
+                (InteractiveResult.EDIT, edit_indicating_strings),
+                (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
+                (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+            ],
+            InteractiveResult.ACCEPT
+        )
+        if res == InteractiveResult.EDIT:
+            doc.path = input("enter new document: ")
+            continue
+        return res
+       
 
 def gen_content_matches(mc, doc, src, src_xml):
     content_matches = []
@@ -1187,28 +1203,48 @@ def handle_match_chain(mc, doc, src, src_xml):
 
     return waiting, interactive
 
-def accept_for_match_chain(mc, doc):
+def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
     if not mc.ci_continuous:
         mc.ci = mc.cimin
-    for i, cm in enumerate(mc.content_matches):
-        if not mc.have_label_matching or cm.label_regex_match is not None:
-            accept = handle_content_match(mc, doc, cm)
-            if accept is None:
+    if not content_skip_doc:
+        for i, cm in enumerate(mc.content_matches):
+            if not mc.have_label_matching or cm.label_regex_match is not None:
+                if mc.ci > mc.cimax: 
+                    break
+                res = handle_content_match(mc, doc, cm)
+                if res == InteractiveResult.SKIP_CHAIN: break
+                if res == InteractiveResult.SKIP_DOC:
+                    content_skip_doc = True
+                    break 
+            else:
+                log(
+                    mc.ctx,
+                    Verbosity.WARN,
+                    f"no labels! skipping remaining {len(mc.content_matches) - i}"
+                    + " content element(s) in document:\n    {doc.path}"
+                )
                 break
-            if mc.ci > mc.cimax: break
+    if not documents_skip_doc:
+        accepted_document_matches = []
+        for d in mc.document_matches:
+            res = handle_document_match(mc, d)
+            if res == InteractiveResult.SKIP_CHAIN: break
+            if res == InteractiveResult.SKIP_DOC:
+                documents_skip_doc = True
+                break 
+            if res == InteractiveResult.ACCEPT:
+                accepted_document_matches.append(d)
+
+        if mc.ctx.documents_bfs:
+            mc.ctx.docs.extend(accepted_document_matches)
         else:
-            log(mc.ctx, Verbosity.WARN, f"no labels! skipping remaining {len(mc.content_matches) - i} content element(s) in document:\n    {doc.path}")
-            break
-    accepted_document_matches = [d for d in mc.document_matches if handle_document_match(mc, doc, d.path)]
-    if mc.ctx.documents_bfs:
-        mc.ctx.docs.extend(accepted_document_matches)
-    else:
-        mc.ctx.docs.extendleft(accepted_document_matches)
+            mc.ctx.docs.extendleft(accepted_document_matches)
     mc.document_matches.clear()
     mc.content_matches.clear()
     mc.handled_document_matches.clear()
     mc.handled_content_matches.clear()
     mc.di += 1
+    return content_skip_doc, documents_skip_doc
 
 def dl(ctx):
     while ctx.docs:
@@ -1267,9 +1303,11 @@ def dl(ctx):
                         mc.satisfied = True
                         unsatisfied_chains -= 1
                         if mc.have_xpath_matching: have_xpath_matching -= 1
-
+        content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
-            accept_for_match_chain(mc, doc)
+            content_skip_doc, doc_skip_doc = accept_for_match_chain(
+                mc, doc, content_skip_doc, doc_skip_doc
+            )
 
 
 def begins(string, begin):
