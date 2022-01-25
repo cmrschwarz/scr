@@ -13,22 +13,22 @@ screp url=google.com cx='//p/text()'
 
 ### Get absolute links to all images on a website:
 ```bash 
-screp url=google.com cx='//img/@src' cl=1 cpf='{link}\n'
+screp url=google.com cx='//img/@src' cl cpf='{link}\n'
 ```
 
 ### Scroll through top reddit posts:
 ```bash 
-screp url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din=1 dimax=3
+screp url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3
 ```
 
-### Downloading first 3 pdfs and from a site:
+### Downloading first 3 pdfs from a site:
 ```bash 
-screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl=1 csf='{ci:02}_{name}' v=info 
+screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl csf='{ci:02}_{name}' v=info cimax=3 
 ```
 
 ### Downloading first 3 pdfs and gifs from a site interactively:
 ```bash 
-screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr1='.*?(?P<name>[^/]*\.pdf$)' cr2='.*?(?P<name>[^/]*\.gif$)' cin=1 cl=1 csf='{ci:02}_{name}' v=info 
+screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr1='.*?(?P<name>[^/]*\.pdf$)' cr2='.*?(?P<name>[^/]*\.gif$)' csf='{ci:02}_{name}' v=info cin cl cimax=3   
 ```
 
 ## Setup

@@ -660,11 +660,12 @@ def setup(ctx):
         ctx.user_agent = "dl.py/0.0.1"
     
     # if no chains are specified, use the origin chain as chain 0
+    chain_zero_enabled = True in (d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs)
     if not ctx.match_chains:
         ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
+        chain_zero_enabled = True
         
-    chain_zero_enabled = True in (d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs)
     for d in ctx.docs:
         if d.expand_match_chains_above is not None:
             if not chain_zero_enabled and d.expand_match_chains_above == 0:
