@@ -260,7 +260,7 @@ class Document:
         if not target_mcs:
             self.target_mcs = []
         else:
-            self.target_mcs = target_mcs
+            self.target_mcs = sorted(target_mcs)
 
     def __key(self):
         return (self.document_type, self.path, self.encoding, self.output_enciding)
@@ -272,10 +272,10 @@ class Document:
         return hash(self.__key())
 
 class MatchChain:
-    def __init__(self, ctx, blank=False):
+    def __init__(self, ctx, chain_id, blank=False):
         self.cimin = 1
         self.content_escape_sequence = "<END>"
-        self.ci = self.cimin
+      
         self.cimax = float("inf")
         self.ci_continuous = False
         self.content_save_format = ""
@@ -294,7 +294,6 @@ class MatchChain:
 
         self.documents_bfs = False
         self.dimin = 1
-        self.di = self.dimin
         self.dimax = float("inf")
         self.default_document_encoding = "utf-8"
         self.forced_document_encoding = None
@@ -303,7 +302,6 @@ class MatchChain:
         self.prefer_parent_document_scheme = True
         self.forced_document_scheme = None
 
-
         self.selenium_strategy = SeleniumStrategy.FIRST
 
         if blank:
@@ -311,9 +309,19 @@ class MatchChain:
                 self.__dict__[k] = None
 
         self.ctx = ctx
+        self.chain_id = chain_id
         self.content = Locator("content", ["di", "ci"])
         self.label = Locator("label", ["di", "ci"])
         self.document = Locator("document", ["di", "ci"])
+
+        self.di = None
+        self.ci = None
+        self.have_xpath_matching = None
+        self.have_label_matching = None
+        self.have_content_xpaths = None
+        self.have_multidocs = None
+        self.have_interactive_matching = None
+        self.need_content_enc = None
 
     def apply_defaults(self, defaults):
         for k, v in self.__dict__.items():
@@ -343,8 +351,8 @@ class DlContext:
 
         self.fallback_document_scheme = "https"
 
-        self.defaults_mc = MatchChain(self)
-        self.origin_mc = MatchChain(self, blank=True)
+        self.defaults_mc = MatchChain(self, None)
+        self.origin_mc = MatchChain(self, None, blank=True)
         
        
 
@@ -546,6 +554,8 @@ def setup_match_chain(mc):
 
     if mc.dimin > mc.dimax: error(f"dimin can't exceed dimax")
     if mc.cimin > mc.cimax: error(f"cimin can't exceed cimax")
+    mc.ci = mc.cimin
+    mc.di = mc.dimin
 
     if not mc.content_print_format and not mc.content_save_format:
         mc.content_print_format = DEFAULT_CPF
@@ -621,6 +631,11 @@ def setup(ctx):
         ctx.user_agent = user_agent_rotator.get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
         ctx.user_agent = "dl.py/0.0.1"
+    
+    # if no chains are specified, use the origin chain as chain 0
+    if not ctx.match_chains:
+        ctx.match_chains.append(ctx.origin_mc)
+        ctx.origin_mc.chain_id = 0
 
     for mc in ctx.match_chains:
         setup_match_chain(mc)
@@ -1035,14 +1050,17 @@ def gen_document_matches(ctx, doc, src, src_xml):
 
 def dl(ctx):
     docs = deque(ctx.docs)
-    di = ctx.dimin
-    ci = ctx.cimin
     handled_content_matches = {}
     handled_document_matches = {}
-    while di <= ctx.dimax and docs:
+    doc = None
+    while docs:
         content_matches_in_doc = False
         document_matches_in_doc = False
+        if doc:
+            for mc in doc.target_mcs:
+                mc.di += 1
         doc = docs.popleft()
+        match_chains = list(doc.target_mcs)
         try_number = 0
         final_document_matches = []
         final_content_matches = []
@@ -1196,10 +1214,11 @@ def parse_mc_range_int(ctx, v, arg):
         error(f"failed to parse '{v}' as an integer for match chain specification of '{arg}'")
 
 def extend_match_chain_list(ctx, needed_id):
-     if len(ctx.match_chains) < needed_id:
-        ctx.match_chains.extend(
-            (copy.deepcopy(ctx.origin_mc) for _ in range(len(ctx.match_chains), needed_id+1))
-        )
+    if len(ctx.match_chains) > needed_id: return
+    for i in range(len(ctx.match_chains), needed_id+1):
+        mc = copy.deepcopy(ctx.origin_mc)
+        mc.chain_id = i
+        ctx.match_chains.append(mc)
 
 def parse_simple_mc_range(ctx, mc_spec, arg):
     sections = mc_spec.split(",")
