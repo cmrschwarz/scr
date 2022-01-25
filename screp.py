@@ -1574,6 +1574,9 @@ def main():
 
 
 if __name__ == "__main__":
-    # to silence: "Setting a profile has been deprecated" on launching tor
-    warnings.filterwarnings("ignore", module=".*selenium.*", category=DeprecationWarning)
-    exit(main())
+    try:
+        # to silence: "Setting a profile has been deprecated" on launching tor
+        warnings.filterwarnings("ignore", module=".*selenium.*", category=DeprecationWarning)
+        exit(main())
+    except KeyboardInterrupt:
+        exit(1)
