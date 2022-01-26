@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-from audioop import minmax
-from code import interact
-from multiprocessing.sharedctypes import Value
-from sqlite3 import DataError
 import lxml
 import lxml.html
 import requests
@@ -365,8 +361,8 @@ class MatchChain:
         self.has_xpath_matching = None
         self.has_label_matching = None
         self.has_content_xpaths = None
-        self.has_document_matching = None
-        self.has_content_matching = None
+        self.has_document_matching = False
+        self.has_content_matching = False
         self.has_interactive_matching = None
         self.need_content_enc = None
         self.content_download_required = False
@@ -669,8 +665,8 @@ def setup_match_chain(mc):
     mc.has_xpath_matching = max([l.xpath is not None for l in locators])
     mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
     mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
-    mc.has_document_matching = mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
-    mc.has_content_matching = mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
+    mc.has_document_matching = mc.has_document_matching or mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
+    mc.has_content_matching = mc.has_content_matching or mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
     mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
 
     if not mc.has_label_matching:
@@ -736,7 +732,11 @@ def setup(ctx):
     if not ctx.match_chains:
         ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
+        # this allows for screp url=... to be used as curl
+        # it is slightly inconsistent with the regular chains though
+        ctx.origin_mc.has_content_matching = True
         chain_zero_enabled = True
+
 
     for d in ctx.docs:
         if d.expand_match_chains_above is not None:
