@@ -344,7 +344,7 @@ class MatchChain:
         self.prefer_parent_document_scheme = True
         self.forced_document_scheme = None
 
-        self.selenium_strategy = SeleniumStrategy.INTERACTIVE
+        self.selenium_strategy = SeleniumStrategy.FIRST
 
         if blank:
             for k in self.__dict__:
@@ -518,7 +518,7 @@ def help(err=False):
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
         sel=<browser>       use selenium to load urls into an interactive browser session
                             (default: disabled, values: tor, chrome, firefox, disabled)
-        selstrat=<browser>  matching strategy for selenium (default: interactive values: interactive, deduplicate, first)
+        selstrat=<browser>  matching strategy for selenium (default: first, values: first, interactive, deduplicate)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
         """.strip()
