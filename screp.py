@@ -17,6 +17,8 @@ from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
 from selenium import webdriver
+import selenium.webdriver.chrome.service
+import selenium.webdriver.firefox.service
 from collections import deque
 from enum import Enum, IntEnum
 import time
@@ -418,6 +420,7 @@ class DlContext:
 
         # stuff that can't be reconfigured (yet)
         self.selenium_timeout_secs = 10
+        self.selenium_log_path = os.path.devnull
         self.selenium_poll_frequency_secs = 0.3
         self.selenium_content_count_pad_length = 6
 
@@ -448,9 +451,9 @@ def help(err=False):
     global DEFAULT_CPF
     global DEFAULT_CWF
     text = f"""{sys.argv[0]} [OPTIONS]
-    Extract content from urls or files by specifying content matching chains 
-    (xpath -> regex -> python format string).   
-     
+    Extract content from urls or files by specifying content matching chains
+    (xpath -> regex -> python format string).
+
     Content to Write out:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
@@ -556,7 +559,7 @@ def setup_selenium_tor(ctx):
             # otherwise the user agent is not applied
             options.set_preference("privacy.resistFingerprinting", False)
         ctx.selenium_driver = TorBrowserDriver(
-            ctx.tor_browser_dir, tbb_logfile_path=os.devnull, options=options)
+            ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
     except Exception as ex:
         error(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
@@ -569,7 +572,8 @@ def setup_selenium_firefox(ctx):
     if ctx.user_agent != None:
         options.set_preference("general.useragent.override", ctx.user_agent)
     try:
-        ctx.selenium_driver = webdriver.Firefox(options=options)
+
+        ctx.selenium_driver = webdriver.Firefox(options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
         error(f"failed to start geckodriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
@@ -583,7 +587,7 @@ def setup_selenium_chrome(ctx):
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
     try:
-        ctx.selenium_driver = webdriver.Chrome(options=options)
+        ctx.selenium_driver = webdriver.Chrome(options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
