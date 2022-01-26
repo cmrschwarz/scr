@@ -360,11 +360,12 @@ class MatchChain:
 
         self.di = None
         self.ci = None
-        self.have_xpath_matching = None
-        self.have_label_matching = None
-        self.have_content_xpaths = None
-        self.have_multidocs = None
-        self.have_interactive_matching = None
+        self.has_xpath_matching = None
+        self.has_label_matching = None
+        self.has_content_xpaths = None
+        self.has_document_matching = None
+        self.has_content_matching = None
+        self.has_interactive_matching = None
         self.need_content_enc = None
         self.content_download_required = False
         self.content_matches = []
@@ -379,14 +380,17 @@ class MatchChain:
             if v is None:
                 self.__dict__[k] = defaults.__dict__[k]
 
-    def need_matches(self):
-        return self.need_document_matches() or self.need_content_matches()
+    def accepts_content_matches(self):
+        return self.di <= self.dimax
 
-    def need_document_matches(self):
-        return self.have_multidocs and self.di <= self.dimax
+    def need_document_matches(self, current_di_used):
+        return (
+            self.has_document_matching
+            and self.di <= (self.dimax - 1 if current_di_used else 0)
+        )
 
     def need_content_matches(self):
-        return self.ci <= self.cimax
+        return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
 
     def is_valid_label(self, label):
         if self.allow_slashes_in_labels:
@@ -637,18 +641,18 @@ def setup_match_chain(mc):
         error(f"cimin can't exceed cimax")
     mc.ci = mc.cimin
     mc.di = mc.dimin
-    if not mc.content.multimatch and not mc.ci_continuous:
-        mc.cimax = mc.ci
-    if not mc.document.multimatch:
-        mc.dimax = mc.di
 
-    if not mc.content_print_format and not mc.content_save_format:
-        mc.content_print_format = DEFAULT_CPF
     if mc.content_write_format and not mc.content_save_format:
         error(f"cannot specify cwf without csf")
 
+    if mc.save_path_interactive and not mc.content_save_format:
+        error(f"cannot specify csin without csf")
+
     if not mc.content_write_format:
         mc.content_write_format = DEFAULT_CWF
+
+    if not mc.content_print_format and not mc.content_save_format:
+        mc.content_print_format = DEFAULT_CPF
 
     if mc.content_print_format:
         mc.content_print_format = unescape_string(
@@ -658,13 +662,14 @@ def setup_match_chain(mc):
         mc.content_write_format = unescape_string(
             mc.content_write_format, "cwf")
 
-    mc.have_xpath_matching = max([l.xpath is not None for l in locators])
-    mc.have_label_matching = mc.label.xpath is not None or mc.label.regex is not None
-    mc.have_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
-    mc.have_multidocs = mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
-    mc.have_interactive_matching = mc.label.interactive or mc.content.interactive
+    mc.has_xpath_matching = max([l.xpath is not None for l in locators])
+    mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
+    mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
+    mc.has_document_matching = mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
+    mc.has_content_matching = mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
+    mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
 
-    if not mc.have_label_matching:
+    if not mc.has_label_matching:
         mc.label_allow_missing = True
         if mc.labels_inside_content:
             error(f"cannot specify lic without lx or lr")
@@ -677,12 +682,12 @@ def setup_match_chain(mc):
         if mc.ci_continuous:
             form += f"{{ci:0{cidigits}}}"
         elif mc.content.multimatch:
-            if mc.have_multidocs:
+            if mc.has_document_matching:
                 form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
             else:
                 form += f"{{ci:0{cidigits}}}"
 
-        elif mc.have_multidocs:
+        elif mc.has_document_matching:
             form += f"{{di:0{didigits}}}"
 
         mc.label_default_format = form
@@ -912,7 +917,7 @@ def handle_content_match(mc, doc, content_match):
             label_regex_match, [di, ci], ["di", "ci"])
 
     di_ci_context = ""
-    if mc.have_multidocs:
+    if mc.has_document_matching:
         if mc.content.multimatch:
             di_ci_context = f" (di={di}, ci={ci})"
         else:
@@ -920,7 +925,7 @@ def handle_content_match(mc, doc, content_match):
     elif mc.content.multimatch:
         di_ci_context = f" (ci={ci})"
 
-    if mc.have_label_matching:
+    if mc.has_label_matching:
         label_context = f' (label "{label}")'
     else:
         label_context = ""
@@ -1055,6 +1060,7 @@ def handle_content_match(mc, doc, content_match):
             doc
         )
         sys.stdout.buffer.write(print_data)
+        sys.stdout.flush()
 
     if mc.content_save_format:
         if not mc.is_valid_label(label):
@@ -1149,14 +1155,14 @@ def handle_document_match(ctx, doc):
 def gen_content_matches(mc, doc, src, src_xml):
     content_matches = []
 
-    if mc.have_content_xpaths:
+    if mc.has_content_xpaths:
         contents, contents_xml = mc.content.match_xpath(
             src_xml, doc.path, ([doc.src], [src_xml]), True)
     else:
         contents = mc.content.match_xpath(src_xml, doc.path, [src])
 
     labels = []
-    if mc.have_label_matching and not mc.labels_inside_content:
+    if mc.has_label_matching and not mc.labels_inside_content:
         for lx in mc.label.match_xpath(src_xml, doc.path, [src]):
             labels.extend(mc.label.match_regex(
                 src, doc.path, [RegexMatch(lx)]))
@@ -1166,7 +1172,7 @@ def gen_content_matches(mc, doc, src, src_xml):
         content_regex_matches = mc.content.match_regex(
             content, doc.path, [RegexMatch(content)])
         if mc.labels_inside_content and mc.label.xpath:
-            content_xml = contents_xml[match_index] if mc.have_content_xpaths else None
+            content_xml = contents_xml[match_index] if mc.has_content_xpaths else None
             labels = []
             for lx in mc.label.match_xpath(content_xml, doc.path, [src]):
                 labels.extend(mc.label.match_regex(
@@ -1234,26 +1240,33 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
     content_count = 0
     docs_count = 0
     labels_none_for_n = 0
-    have_multidocs = False
+    have_document_matching = False
+    have_content_matching = False
     for mc in interactive_chains:
         content_count += len(mc.content_matches)
         docs_count += len(mc.document_matches)
         labels_none_for_n += mc.labels_none_for_n
-        if mc.have_multidocs and mc.need_document_matches():
-            have_multidocs = True
-    msg = ""
-    lpad, rpad = make_padding(ctx, content_count)
-    msg += f'"{doc.path}": accept {lpad}< {content_count} >{rpad} potential content'
-    if content_count != 1:
-        msg += "s"
-    else:
-        msg += " "
+        if mc.need_document_matches(True):
+            have_document_matching = True
+        if mc.need_content_matches():
+            have_content_matching = True
+
+    msg = f'"{doc.path}": use page with potentially'
+    if have_content_matching:
+        lpad, rpad = make_padding(ctx, content_count)
+        msg += f'{lpad}< {content_count} >{rpad} content'
+        if content_count != 1:
+            msg += "s"
+        else:
+            msg += " "
 
     if labels_none_for_n != 0:
         msg += f" (missing {labels_none_for_n} labels)"
-    if have_multidocs:
+    if have_document_matching:
         lpad, rpad = make_padding(mc.ctx, docs_count)
-        msg += f" and {lpad}< {docs_count} >{rpad} document"
+        if have_content_matching:
+            msg += " and"
+        msg += f"{lpad}< {docs_count} >{rpad} document"
         if docs_count != 1:
             msg += "s"
         else:
@@ -1303,7 +1316,7 @@ def handle_match_chain(mc, doc, src, src_xml):
     else:
         content_matches = []
 
-    if mc.need_document_matches():
+    if mc.need_document_matches(True):
         document_matches = gen_document_matches(mc, doc, src, src_xml)
     else:
         document_matches = []
@@ -1330,7 +1343,10 @@ def handle_match_chain(mc, doc, src, src_xml):
         waiting = False
     elif mc.selenium_strategy == SeleniumStrategy.FIRST:
         contents_missing = not content_matches and mc.need_content_matches()
-        documents_missing = not mc.document_matches and mc.need_document_matches()
+        documents_missing = (
+            not mc.document_matches
+            and mc.need_document_matches(True)
+        )
         if not contents_missing and not documents_missing:
             waiting = False
     else:
@@ -1346,7 +1362,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
         mc.ci = mc.cimin
     if not content_skip_doc:
         for i, cm in enumerate(mc.content_matches):
-            if not mc.have_label_matching or cm.label_regex_match is not None:
+            if not mc.has_label_matching or cm.label_regex_match is not None:
                 if mc.ci > mc.cimax:
                     break
                 res = handle_content_match(mc, doc, cm)
@@ -1393,10 +1409,10 @@ def dl(ctx):
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
-            if mc.need_matches():
+            if mc.need_document_matches(False) or mc.need_content_matches():
                 unsatisfied_chains += 1
                 mc.satisfied = False
-                if mc.have_xpath_matching:
+                if mc.has_xpath_matching:
                     have_xpath_matching += 1
 
         try_number = 0
@@ -1437,7 +1453,7 @@ def dl(ctx):
                     if not waiting:
                         mc.satisfied = True
                         unsatisfied_chains -= 1
-                        if mc.have_xpath_matching:
+                        if mc.has_xpath_matching:
                             have_xpath_matching -= 1
                     elif interactive:
                         interactive_chains.append(mc)
@@ -1449,7 +1465,7 @@ def dl(ctx):
                     for mc in interactive_chains:
                         mc.satisfied = True
                         unsatisfied_chains -= 1
-                        if mc.have_xpath_matching:
+                        if mc.has_xpath_matching:
                             have_xpath_matching -= 1
 
             if unsatisfied_chains and not interactive_chains:
