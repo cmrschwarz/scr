@@ -424,6 +424,8 @@ class DlContext:
 
         self.defaults_mc = MatchChain(self, None)
         self.origin_mc = MatchChain(self, None, blank=True)
+        # turn ctx to none temporarily for origin so it can be deepcopied
+        self.origin_mc.ctx = None
 
 
 def error(text):
@@ -569,7 +571,8 @@ def setup_selenium_firefox(ctx):
         options.set_preference("general.useragent.override", ctx.user_agent)
     try:
 
-        ctx.selenium_driver = webdriver.Firefox(options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
+        ctx.selenium_driver = webdriver.Firefox(
+            options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
         error(f"failed to start geckodriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
@@ -583,7 +586,8 @@ def setup_selenium_chrome(ctx):
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
     try:
-        ctx.selenium_driver = webdriver.Chrome(options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
+        ctx.selenium_driver = webdriver.Chrome(
+            options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
@@ -629,8 +633,9 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
 
 
-def setup_match_chain(mc):
-    mc.apply_defaults(mc.ctx.defaults_mc)
+def setup_match_chain(mc, ctx):
+    # we meed ctx because mc.ctx is stil None before we apply_defaults
+    mc.apply_defaults(ctx.defaults_mc)
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
@@ -737,7 +742,6 @@ def setup(ctx):
         ctx.origin_mc.has_content_matching = True
         chain_zero_enabled = True
 
-
     for d in ctx.docs:
         if d.expand_match_chains_above is not None:
             if not chain_zero_enabled and d.expand_match_chains_above == 0:
@@ -746,7 +750,7 @@ def setup(ctx):
                 ctx.match_chains[d.expand_match_chains_above:])
 
     for mc in ctx.match_chains:
-        setup_match_chain(mc)
+        setup_match_chain(mc, ctx)
 
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -1070,6 +1074,7 @@ def handle_content_match(mc, doc, content_match):
         if not mc.is_valid_label(label):
             log(mc.ctx, Verbosity.WARN,
                 f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
+        context = f"{doc.path}{di_ci_context}"
         save_path = gen_final_content_format(
             mc, mc.content_save_format, label, di, ci, content_link,
             content_bytes, content_enc,
@@ -1130,7 +1135,7 @@ def handle_content_match(mc, doc, content_match):
         f.write(write_data)
         f.close()
         log(mc.ctx, Verbosity.INFO,
-            f"wrote content into {save_path} for {context}")
+            f"{context}: wrote content into {save_path}")
     mc.ci += 1
     return InteractiveResult.ACCEPT
 
