@@ -1686,7 +1686,7 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
-        mcs=[]
+        mcs=list(ctx.match_chains)
     elif ctx.origin_mc in mcs:
         mcs.remove(ctx.origin_mc)
         extend_chains_above = len(ctx.match_chains)
