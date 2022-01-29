@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from ctypes import sizeof
 import lxml
 import lxml.html
 import requests
@@ -315,6 +316,12 @@ class Document:
     def __hash__(self):
         return hash(self.__key())
 
+def obj_apply_defaults(obj, defaults):
+    for k, v in obj.__dict__.items():
+        if v is None:
+            obj.__dict__[k] = defaults.__dict__[k]
+        elif hasattr(v, "__dict__"):
+            obj_apply_defaults(v, defaults.__dict__[k])
 
 class MatchChain:
     def __init__(self, ctx, chain_id, blank=False):
@@ -375,11 +382,6 @@ class MatchChain:
         self.satisfied = True
         self.labels_none_for_n = 0
 
-    def apply_defaults(self, defaults):
-        for k, v in self.__dict__.items():
-            if v is None:
-                self.__dict__[k] = defaults.__dict__[k]
-
     def accepts_content_matches(self):
         return self.di <= self.dimax
 
@@ -428,6 +430,7 @@ class DlContext:
         self.origin_mc = MatchChain(self, None, blank=True)
         # turn ctx to none temporarily for origin so it can be deepcopied
         self.origin_mc.ctx = None
+        self.origin_mc_final_values = {}
 
 
 def error(text):
@@ -637,7 +640,7 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 def setup_match_chain(mc, ctx):
     # we meed ctx because mc.ctx is stil None before we apply_defaults
-    mc.apply_defaults(ctx.defaults_mc)
+    obj_apply_defaults(mc, ctx.defaults_mc)
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
@@ -1533,6 +1536,7 @@ def parse_simple_mc_range(ctx, mc_spec, arg):
             else:
                 fst = parse_mc_range_int(ctx, lhs, arg)
             if rhs == "":
+                extend_match_chain_list(ctx, fst)
                 snd = len(ctx.match_chains) - 1
                 ranges.append([ctx.origin_mc])
             else:
@@ -1541,13 +1545,13 @@ def parse_simple_mc_range(ctx, mc_spec, arg):
                     error(
                         f"second value must be larger than first for range {s} in match chain specification of '{arg}'")
                 extend_match_chain_list(ctx, snd)
-            ranges.append((ctx.match_chains[i] for i in range(fst, snd + 1)))
+            ranges.append(ctx.match_chains[fst: snd + 1])
     return itertools.chain(*ranges)
 
 
 def parse_mc_range(ctx, mc_spec, arg):
     if mc_spec == "":
-        return itertools.chain(ctx.match_chains, [ctx.origin_mc])
+        return [ctx.defaults_mc]
 
     esc_split = [x.strip() for x in mc_spec.split("^")]
     if len(esc_split) > 2:
@@ -1557,10 +1561,16 @@ def parse_mc_range(ctx, mc_spec, arg):
         return parse_simple_mc_range(ctx, mc_spec, arg)
     lhs, rhs = esc_split
     if lhs == "":
+        exclude = parse_simple_mc_range(ctx, rhs, arg)
         include = itertools.chain(ctx.match_chains, [ctx.origin_mc])
     else:
+        exclude = parse_simple_mc_range(ctx, rhs, arg)
+        chain_count = len(ctx.match_chains)
         include = parse_simple_mc_range(ctx, lhs, arg)
-    return ({*include} - {*parse_simple_mc_range(ctx, rhs, arg)})
+        # hack: parse exclude again so the newly generated chains form include are respected
+        if chain_count != len(ctx.match_chains):
+            exclude = parse_simple_mc_range(ctx, rhs, arg)
+    return ({*include} - {*exclude})
 
 
 def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
@@ -1580,19 +1590,36 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
         value = arg[eq_pos+1:]
     return True, parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
-
+def follow_attribute_path_spec(obj, spec):
+    for s in spec:
+        obj = obj.__dict__[s]
+    return obj
 def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg: x, support_blank=False, blank_value=""):
     success, mcs, value = parse_mc_arg(
         ctx, argname, arg, support_blank, blank_value)
     if not success:
         return False
     value = value_cast(value, arg)
+    mcs = list(mcs)
+    # so the lowest possible chain generates potential errors
+    mcs.sort(key=lambda mc: mc.chain_id if mc.chain_id else float("inf"))
     for mc in mcs:
-        t = mc
-        for n in config_opt_names[:-1]:
-            t = t.__dict__[n]
-        # TODO: somehow check for multiple specification but respect origin_mc deepcopys
-        t.__dict__[config_opt_names[-1]] = value
+        t = follow_attribute_path_spec(mc, config_opt_names[:-1])
+        ident = config_opt_names[-1]
+        if not "_final_values" in t.__dict__:
+            t._final_values = {ident: arg}
+        else:
+            if ident in t._final_values:
+                if mc is ctx.origin_mc:
+                    chainid = max(len(ctx.match_chains), 1)
+                elif mc is ctx.defaults_mc:
+                    chainid = ""
+                else:
+                    chainid = mc.chain_id
+                error(f"{argname}{chainid} specified twice in: '{t._final_values[ident]}' and '{arg}'")
+            t._final_values[ident] = arg
+        t.__dict__[ident] = value
+
     return True
 
 
@@ -1657,7 +1684,10 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     if not success:
         return False
     mcs = list(mcs)
-    if ctx.origin_mc in mcs:
+    if mcs == [ctx.defaults_mc]:
+        extend_chains_above = len(ctx.match_chains)
+        mcs=[]
+    elif ctx.origin_mc in mcs:
         mcs.remove(ctx.origin_mc)
         extend_chains_above = len(ctx.match_chains)
     else:
