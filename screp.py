@@ -148,7 +148,7 @@ def empty_string_to_none(string):
 
 
 class Locator:
-    def __init__(self, name, additional_format_keys=[]):
+    def __init__(self, name, additional_format_keys=[], blank=False):
         self.name = name
         self.xpath = None
         self.regex = None
@@ -157,6 +157,10 @@ class Locator:
         self.interactive = False
         self.content_capture_group = None
         self.additional_format_keys = additional_format_keys
+        if blank:
+            for k in self.__dict__:
+                self.__dict__[k] = None
+
 
     def compile_regex(self):
         if self.regex is None:
@@ -316,19 +320,14 @@ class Document:
     def __hash__(self):
         return hash(self.__key())
 
-def obj_apply_defaults(obj, defaults, exceptions=[]):
+def obj_apply_defaults(obj, defaults, recurse_on={}):
     if obj is defaults: return
     for k in defaults.__dict__:
-        if k in exceptions: continue
         def_val = defaults.__dict__[k]
-        if k not in obj.__dict__:
+        if k not in obj.__dict__ or obj.__dict__[k] is None:
             obj.__dict__[k] = def_val
-        elif obj.__dict__[k] is None:
-            obj.__dict__[k] = def_val
-        elif hasattr(obj.__dict__[k], "__dict__"):
-            if (isinstance(obj.__dict__[k], type)):
-                return
-            obj_apply_defaults(obj.__dict__[k], def_val)
+        elif k in recurse_on:
+            obj_apply_defaults(obj.__dict__[k], def_val, recurse_on)
 
 class MatchChain:
     def __init__(self, ctx, chain_id, blank=False):
@@ -368,9 +367,9 @@ class MatchChain:
 
         self.ctx = ctx
         self.chain_id = chain_id
-        self.content = Locator("content", ["ci", "di", "chain"])
-        self.label = Locator("label", ["ci", "di", "chain"])
-        self.document = Locator("document", ["ci", "di", "chain"])
+        self.content = Locator("content", ["ci", "di", "chain"], blank)
+        self.label = Locator("label", ["ci", "di", "chain"], blank)
+        self.document = Locator("document", ["ci", "di", "chain"], blank)
 
         self.di = None
         self.ci = None
@@ -650,8 +649,7 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 def setup_match_chain(mc, ctx):
     # we meed ctx because mc.ctx is stil None before we apply_defaults
-    obj_apply_defaults(mc, ctx.defaults_mc, ["ctx"])
-    mc.ctx = ctx
+    obj_apply_defaults(mc, ctx.defaults_mc, {"content": {}, "label": {}, "document":{}})
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
@@ -729,7 +727,7 @@ def setup_match_chain(mc, ctx):
 
 def setup(ctx):
     global DEFAULT_CPF
-    obj_apply_defaults(ctx, DlContext(blank=False), ["defaults_mc", "origin_mc"])
+    obj_apply_defaults(ctx, DlContext(blank=False))
     if len(ctx.docs) == 0:
         error("must specify at least one url or (r)file")
 
