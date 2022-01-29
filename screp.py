@@ -34,6 +34,7 @@ chain_skip_indicating_strings = prefixes("chainskip")
 doc_skip_indicating_strings = prefixes("docskip")
 edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
+accept_chain_indicating_strings = prefixes("acceptchain")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
@@ -46,6 +47,7 @@ class InteractiveResult(Enum):
     INSPECT = 3
     SKIP_CHAIN = 4
     SKIP_DOC = 5
+    ACCEPT_CHAIN = 6
 
 
 class DocumentType(Enum):
@@ -352,9 +354,9 @@ class MatchChain:
 
         self.ctx = ctx
         self.chain_id = chain_id
-        self.content = Locator("content", ["di", "ci"])
-        self.label = Locator("label", ["di", "ci"])
-        self.document = Locator("document", ["di", "ci"])
+        self.content = Locator("content", ["ci", "di", "chain"])
+        self.label = Locator("label", ["ci", "di", "chain"])
+        self.document = Locator("document", ["ci", "di", "chain"])
 
         self.di = None
         self.ci = None
@@ -1223,6 +1225,7 @@ def gen_content_matches(mc, doc, src, src_xml):
 
 
 def gen_document_matches(mc, doc, src, src_xml):
+    # TODO: fix interactive matching for docs and give ci di chain to regex
     new_paths = mc.document.apply(src, src_xml, doc.path)
     return [
         Document(
@@ -1588,6 +1591,7 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
         t = mc
         for n in config_opt_names[:-1]:
             t = t.__dict__[n]
+        # TODO: somehow check for multiple specification but respect origin_mc deepcopys
         t.__dict__[config_opt_names[-1]] = value
     return True
 
@@ -1686,6 +1690,8 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
         if nc != "=":
             error(f"unknown option '{arg}'")
         val = get_arg_val(arg)
+    if ctx.__dict__[argname] is not None:
+        error(f"error: {argname} specied twice")
     ctx.__dict__[argname] = value_parse(val, arg)
     return True
 
