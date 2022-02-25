@@ -364,6 +364,7 @@ class MatchChain:
         self.default_document_scheme = ctx.fallback_document_scheme
         self.prefer_parent_document_scheme = True
         self.forced_document_scheme = None
+        self.document_output_chains = [self]
 
         self.selenium_strategy = SeleniumStrategy.FIRST
 
@@ -400,7 +401,7 @@ class MatchChain:
     def need_document_matches(self, current_di_used):
         return (
             self.has_document_matching
-            and self.di <= (self.dimax - 1 if current_di_used else 0)
+            and self.di <= (self.dimax - (1 if current_di_used else 0))
         )
 
     def need_content_matches(self):
@@ -520,6 +521,7 @@ def help(err=False):
         dsch=<scheme>       default scheme for urls derived from following documents, defaults to "https"
         dpsch=<bool>        use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>      force this scheme for urls derived from following documents
+        doc=<chain spec>    chains that matched documents should apply to, default is the same chain    
 
     Initial Documents:
         url=<url>           fetch a document from a url, derived document matches are (relative) urls
@@ -667,7 +669,6 @@ def selenium_add_cookies(ctx):
     if not ctx.cookie_jar:
         return
     sel_cookies = ctx.selenium_driver.get_cookies()
-    ctx.selenium_driver.delete_all_cookies()
     sel_domains = set()
     for sc in sel_cookies:
         sel_domains.add(sc["domain"])
@@ -675,6 +676,7 @@ def selenium_add_cookies(ctx):
         if domain in ctx.cookie_dict:
             for ck in ctx.cookie_dict[domain]:
                 ctx.selenium_driver.add_cookie(ck)
+    return True
 
 
 def get_format_string_keys(fmt_string):
@@ -868,8 +870,9 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
                 if ctx.cookie_jar:
                     selenium_add_cookies(ctx)
                     ctx.selenium_driver.get(doc.path)
-                    selenium_add_cookies(ctx)
-                    ctx.selenium_driver.refresh()
+                    changed = selenium_add_cookies(ctx)
+                    if changed:
+                        ctx.selenium_driver.refresh()
                 else:
                     ctx.selenium_driver.get(doc.path)
                 data_enc = ctx.selenium_driver.page_source
@@ -1304,7 +1307,7 @@ def gen_document_matches(mc, doc, src, src_xml):
             doc.document_type.derived_type(),
             path,
             mc,
-            doc.match_chains
+            mc.document_output_chains
         )
         for path in new_paths
     ]
@@ -1490,6 +1493,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
 
 
 def dl(ctx):
+    closed = False
     while ctx.docs:
         doc = ctx.docs.popleft()
         unsatisfied_chains = 0
@@ -1504,6 +1508,12 @@ def dl(ctx):
         try_number = 0
         try:
             src = fetch_doc(ctx, doc)
+        except (
+            selenium.common.exceptions.InvalidSessionIdException,
+            selenium.common.exceptions.NoSuchWindowException
+        ):
+            closed = True
+            break
         except Exception as ex:
             log(ctx, Verbosity.ERROR,
                 f"Failed to fetch {doc.path}\n    {str(ex)}")
@@ -1511,7 +1521,6 @@ def dl(ctx):
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
-        closed = False
         while unsatisfied_chains > 0:
             try_number += 1
             same_content = static_content and try_number > 1
@@ -1680,6 +1689,10 @@ def follow_attribute_path_spec(obj, spec):
     for s in spec:
         obj = obj.__dict__[s]
     return obj
+
+
+def parse_mc_range_as_arg(ctx, argname, argval):
+    return list(parse_mc_range(ctx, argval, argname))
 
 
 def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg: x, support_blank=False, blank_value=""):
@@ -1888,6 +1901,8 @@ def main():
         if apply_mc_arg(ctx, "dr", ["document", "regex"], arg):
             continue
         if apply_mc_arg(ctx, "df", ["document", "format"], arg):
+            continue
+        if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_range_as_arg(ctx, arg, v)):
             continue
         if apply_mc_arg(ctx, "dm", ["document", "multimatch"], arg, parse_bool_arg, True):
             continue
