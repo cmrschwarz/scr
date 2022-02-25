@@ -675,7 +675,6 @@ def selenium_add_cookies(ctx):
         if domain in ctx.cookie_dict:
             for ck in ctx.cookie_dict[domain]:
                 ctx.selenium_driver.add_cookie(ck)
-    ctx.selenium_driver.refresh()
 
 
 def get_format_string_keys(fmt_string):
@@ -866,8 +865,13 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
         assert doc.document_type == DocumentType.URL
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
             if not raw:
-                ctx.selenium_driver.get(doc.path)
-                selenium_add_cookies(ctx)
+                if ctx.cookie_jar:
+                    selenium_add_cookies(ctx)
+                    ctx.selenium_driver.get(doc.path)
+                    selenium_add_cookies(ctx)
+                    ctx.selenium_driver.refresh()
+                else:
+                    ctx.selenium_driver.get(doc.path)
                 data_enc = ctx.selenium_driver.page_source
             else:
                 error("downloading content in selenium mode is not supported yet")
@@ -1507,18 +1511,22 @@ def dl(ctx):
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
+        closed = False
         while unsatisfied_chains > 0:
             try_number += 1
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
                 try:
+                    # throws an exception if the session died which we want
+                    # to detect
+                    _ = ctx.selenium_driver.window_handles
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == src)
                     src = src_new
-                except Exception:
-                    same_content = False
-                    src = ""
+                except Exception as e:
+                    closed = True
+                    break
 
             if not same_content:
                 interactive_chains = []
@@ -1562,8 +1570,11 @@ def dl(ctx):
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
                 mc, doc, content_skip_doc, doc_skip_doc
             )
-    if ctx.selenium_variant != SeleniumVariant.DISABLED:
-        ctx.selenium_driver.close()
+    if ctx.selenium_variant != SeleniumVariant.DISABLED and not closed:
+        try:
+            ctx.selenium_driver.close()
+        except Exception:
+            pass
 
 
 def begins(string, begin):
