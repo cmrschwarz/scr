@@ -660,23 +660,47 @@ def setup_selenium(ctx):
             if cookie.path_specified:
                 ck['path'] = cookie.path
             if cookie.domain in ctx.cookie_dict:
-                ctx.cookie_dict[cookie.domain].append(ck)
+                ctx.cookie_dict[cookie.domain][cookie.name] = ck
             else:
-                ctx.cookie_dict[cookie.domain] = [ck]
+                ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
 
 
 def selenium_add_cookies(ctx):
+    changes = False
     if not ctx.cookie_jar:
         return
     sel_cookies = ctx.selenium_driver.get_cookies()
+    added_cookies = {}
     sel_domains = set()
     for sc in sel_cookies:
-        sel_domains.add(sc["domain"])
-    for domain in sel_domains:
+        domain = sc["domain"]
         if domain in ctx.cookie_dict:
-            for ck in ctx.cookie_dict[domain]:
-                ctx.selenium_driver.add_cookie(ck)
-    return True
+            if domain not in sel_domains:
+                added_cookies[domain] = set()
+                sel_domains.add(domain)
+            name = sc["name"]
+            if name in ctx.cookie_dict[domain]:
+                stored_cookie = ctx.cookie_dict[domain][name]
+                added_cookies[domain].add(name)
+                if sc["value"] != stored_cookie["value"]:
+                    changes = True
+                    ctx.selenium_driver.delete_cookie(name)
+                    # the domain parameter here is probalby not being used,
+                    # since selenium sessions seem to only allow one domain
+                    # but it seems cleaner to pass it anyways
+                    ctx.selenium_driver.execute(
+                        selenium.webdriver.remote.command.Command.DELETE_COOKIE,
+                        {'domain': domain, 'name': name}
+                    )
+                    ctx.selenium_driver.add_cookie(stored_cookie)
+
+    for domain in sel_domains:
+        added = added_cookies[domain]
+        for stored_cookie in ctx.cookie_dict[domain].values():
+            if stored_cookie["name"] not in added:
+                ctx.selenium_driver.add_cookie(stored_cookie)
+                changes = True
+    return changes
 
 
 def get_format_string_keys(fmt_string):
