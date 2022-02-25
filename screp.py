@@ -235,12 +235,16 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(f"aborting! {self.name[0]}x is not a valid xpath")
+            error(f"aborting! invalid xpath: '{self.xpath}'")
         except Exception as ex:
             error(
-                f"aborting! failed to apply {self.name[0]}x to {path}: "
+                f"aborting! failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
             )
+        if not isinstance(xpath_matches, list):
+            error(
+                f"aborting! invalid xpath: '{self.xpath}'")
+
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
         res = []
@@ -846,6 +850,17 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
+
+        mc = doc.src_mc
+        if mc is None:
+            mc = ctx.match_chains[0]
+        if mc.forced_document_encoding:
+            enc = mc.forced_document_encoding
+        elif doc.encoding:
+            enc = doc.encoding
+        else:
+            enc = mc.default_document_encoding
+        doc.encoding = enc
         data_enc = str(data, encoding=doc.encoding)
     else:
         assert doc.document_type == DocumentType.URL
