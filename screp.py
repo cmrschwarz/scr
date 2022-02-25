@@ -1547,6 +1547,8 @@ def dl(ctx):
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
                 mc, doc, content_skip_doc, doc_skip_doc
             )
+    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+        ctx.selenium_driver.close()
 
 
 def begins(string, begin):
