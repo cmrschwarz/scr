@@ -161,7 +161,6 @@ class Locator:
             for k in self.__dict__:
                 self.__dict__[k] = None
 
-
     def compile_regex(self):
         if self.regex is None:
             return
@@ -320,14 +319,17 @@ class Document:
     def __hash__(self):
         return hash(self.__key())
 
+
 def obj_apply_defaults(obj, defaults, recurse_on={}):
-    if obj is defaults: return
+    if obj is defaults:
+        return
     for k in defaults.__dict__:
         def_val = defaults.__dict__[k]
         if k not in obj.__dict__ or obj.__dict__[k] is None:
             obj.__dict__[k] = def_val
         elif k in recurse_on:
             obj_apply_defaults(obj.__dict__[k], def_val, recurse_on)
+
 
 class MatchChain:
     def __init__(self, ctx, chain_id, blank=False):
@@ -412,6 +414,7 @@ class DlContext:
     def __init__(self, blank=False):
         self.cookie_file = None
         self.cookie_jar = None
+        self.cookie_dict = {}
 
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
@@ -605,6 +608,23 @@ def setup_selenium_chrome(ctx):
     except Exception as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
+    if not ctx.cookie_jar:
+        return
+    file_cookies = {}
+    for cookie in ctx.cookie_jar:
+        cookie_dict = {
+            'domain': cookie.domain,
+            'name': cookie.name,
+            'value': cookie.value,
+            'secure': cookie.secure
+        }
+        if cookie.expires:
+            cookie_dict['expiry'] = cookie.expires
+        if cookie.path_specified:
+            cookie_dict['path'] = cookie.path
+        if cookie.domain not in file_cookies:
+            file_cookies[cookie.domain] = []
+        file_cookies[cookie.domain].append(cookie_dict)
 
 
 def setup_selenium(ctx):
@@ -623,17 +643,35 @@ def setup_selenium(ctx):
 
     if ctx.cookie_jar:
         for cookie in ctx.cookie_jar:
-            cookie_dict = {
+            ck = {
                 'domain': cookie.domain,
                 'name': cookie.name,
                 'value': cookie.value,
                 'secure': cookie.secure
             }
             if cookie.expires:
-                cookie_dict['expiry'] = cookie.expires
+                ck['expiry'] = cookie.expires
             if cookie.path_specified:
-                cookie_dict['path'] = cookie.path
-            ctx.selenium_driver.add_cookie(cookie_dict)
+                ck['path'] = cookie.path
+            if cookie.domain in ctx.cookie_dict:
+                ctx.cookie_dict[cookie.domain].append(ck)
+            else:
+                ctx.cookie_dict[cookie.domain] = [ck]
+
+
+def selenium_add_cookies(ctx):
+    if not ctx.cookie_jar:
+        return
+    sel_cookies = ctx.selenium_driver.get_cookies()
+    ctx.selenium_driver.delete_all_cookies()
+    sel_domains = set()
+    for sc in sel_cookies:
+        sel_domains.add(sc["domain"])
+    for domain in sel_domains:
+        if domain in ctx.cookie_dict:
+            for ck in ctx.cookie_dict[domain]:
+                ctx.selenium_driver.add_cookie(ck)
+    ctx.selenium_driver.refresh()
 
 
 def get_format_string_keys(fmt_string):
@@ -649,7 +687,8 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 def setup_match_chain(mc, ctx):
     # we meed ctx because mc.ctx is stil None before we apply_defaults
-    obj_apply_defaults(mc, ctx.defaults_mc, {"content": {}, "label": {}, "document":{}})
+    obj_apply_defaults(mc, ctx.defaults_mc, {
+                       "content": {}, "label": {}, "document": {}})
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
@@ -813,6 +852,7 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
             if not raw:
                 ctx.selenium_driver.get(doc.path)
+                selenium_add_cookies(ctx)
                 data_enc = ctx.selenium_driver.page_source
             else:
                 error("downloading content in selenium mode is not supported yet")
@@ -1318,6 +1358,7 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
     if not rlist:
         rlist, _, _ = select.select(
             [sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
+    result = None
     if rlist:
         result = parse_prompt_option(
             sys.stdin.readline(),
@@ -1325,13 +1366,14 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
              (InteractiveResult.SKIP_DOC, skip_indicating_strings + no_indicating_strings)],
             InteractiveResult.ACCEPT
         )
-        if result == InteractiveResult.ACCEPT:
-            return True, msg
         if result is None:
             print('please answer with "yes" or "skip"')
             sys.stdout.write(msg)
             sys.stdout.flush()
-    return False, msg
+    if result:
+        return result, msg
+    else:
+        return result, msg
 
 
 def handle_match_chain(mc, doc, src, src_xml):
@@ -1444,7 +1486,8 @@ def dl(ctx):
         try:
             src = fetch_doc(ctx, doc)
         except Exception as ex:
-            log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}")
+            log(ctx, Verbosity.ERROR,
+                f"Failed to fetch {doc.path}\n    {str(ex)}")
             continue
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
@@ -1486,9 +1529,10 @@ def dl(ctx):
             if interactive_chains and not static_content:
                 accept, last_msg = handle_interactive_chains(
                     ctx, interactive_chains, doc, try_number, last_msg)
+                sat = (accept == InteractiveResult.ACCEPT)
                 if accept:
                     for mc in interactive_chains:
-                        mc.satisfied = True
+                        mc.satisfied = sat
                         unsatisfied_chains -= 1
                         if mc.has_xpath_matching:
                             have_xpath_matching -= 1
@@ -1497,6 +1541,9 @@ def dl(ctx):
                 time.sleep(ctx.selenium_poll_frequency_secs)
         content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
+            if not mc.satisfied:
+                # ignore skipped chains
+                continue
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
                 mc, doc, content_skip_doc, doc_skip_doc
             )
@@ -1600,10 +1647,13 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
         value = arg[eq_pos+1:]
     return True, parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
+
 def follow_attribute_path_spec(obj, spec):
     for s in spec:
         obj = obj.__dict__[s]
     return obj
+
+
 def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg: x, support_blank=False, blank_value=""):
     success, mcs, value = parse_mc_arg(
         ctx, argname, arg, support_blank, blank_value)
@@ -1626,7 +1676,8 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
                     chainid = ""
                 else:
                     chainid = mc.chain_id
-                error(f"{argname}{chainid} specified twice in: '{t._final_values[ident]}' and '{arg}'")
+                error(
+                    f"{argname}{chainid} specified twice in: '{t._final_values[ident]}' and '{arg}'")
             t._final_values[ident] = arg
         t.__dict__[ident] = value
 
@@ -1696,7 +1747,7 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
-        mcs=list(ctx.match_chains)
+        mcs = list(ctx.match_chains)
     elif ctx.origin_mc in mcs:
         mcs.remove(ctx.origin_mc)
         extend_chains_above = len(ctx.match_chains)
