@@ -364,7 +364,6 @@ class MatchChain:
         self.default_document_scheme = ctx.fallback_document_scheme
         self.prefer_parent_document_scheme = True
         self.forced_document_scheme = None
-        self.document_output_chains = [self]
 
         self.selenium_strategy = SeleniumStrategy.FIRST
 
@@ -377,6 +376,7 @@ class MatchChain:
         self.content = Locator("content", ["ci", "di", "chain"], blank)
         self.label = Locator("label", ["ci", "di", "chain"], blank)
         self.document = Locator("document", ["ci", "di", "chain"], blank)
+        self.document_output_chains = [self]
 
         self.di = None
         self.ci = None
