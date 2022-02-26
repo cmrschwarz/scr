@@ -100,12 +100,21 @@ class Verbosity(IntEnum):
     ERROR = 1
     WARN = 2
     INFO = 3
+    DEBUG = 4
 
 
 verbosities_dict = {
-    "info": Verbosity.INFO,
-    "warn": Verbosity.WARN,
     "error": Verbosity.ERROR,
+    "warn": Verbosity.WARN,
+    "info": Verbosity.INFO,
+    "debug": Verbosity.DEBUG,
+}
+
+verbosities_display_dict = {
+    Verbosity.ERROR: "[ERROR]: ",
+    Verbosity.WARN:  "[WARN]:  ",
+    Verbosity.INFO:  "[INFO]:  ",
+    Verbosity.DEBUG: "[DEBUG]:  ",
 }
 
 
@@ -229,7 +238,7 @@ class Locator:
                 error(
                     f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
 
-    def match_xpath(self, src_xml, path, default=[], return_xml_tuple=False):
+    def match_xpath(self, ctx, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None:
             return default
         try:
@@ -264,7 +273,8 @@ class Locator:
                     if return_xml_tuple:
                         res_xml.append(xm)
                 except Exception as ex1:
-                    warn(f"{path}: encoding fail: {str(ex1)}")
+                    log(ctx, Verbosity.WARN,
+                        f"{path}: xpath match encoding failed: {str(ex1)}")
 
         if return_xml_tuple:
             return res, res_xml
@@ -295,11 +305,11 @@ class Locator:
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
-    def apply(self, src, src_xml, path, default=[], values=[], keys=[]):
+    def apply(self, ctx, src, src_xml, path, default=[], values=[], keys=[]):
         if self.is_unset():
             return default
         res = []
-        for x in self.match_xpath(src_xml, path, [src]):
+        for x in self.match_xpath(ctx, src_xml, path, [src]):
             for m in self.match_regex(x, path, [RegexMatch(x)]):
                 res.append(self.apply_format(m, values, keys))
         return res
@@ -454,12 +464,8 @@ class DlContext:
         self.origin_mc.ctx = None
 
 
-def warn(text):
-    sys.stderr.write(text + "\n")
-
-
 def error(text):
-    sys.stderr.write(text + "\n")
+    sys.stderr.write(verbosities_display_dict[Verbosity.ERROR] + text + "\n")
     exit(1)
 
 
@@ -472,7 +478,7 @@ def unescape_string(txt, context):
 
 def log(ctx, verbosity, msg):
     if ctx.verbosity >= verbosity:
-        print(msg)
+        print(verbosities_display_dict[verbosity] + msg)
 
 
 def help(err=False):
@@ -1242,13 +1248,13 @@ def gen_content_matches(mc, doc, src, src_xml):
 
     if mc.has_content_xpaths:
         contents, contents_xml = mc.content.match_xpath(
-            src_xml, doc.path, ([doc.src], [src_xml]), True)
+            mc.ctx, src_xml, doc.path, ([doc.src], [src_xml]), True)
     else:
-        contents = mc.content.match_xpath(src_xml, doc.path, [src])
+        contents = mc.content.match_xpath(mc.ctx, src_xml, doc.path, [src])
 
     labels = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        for lx in mc.label.match_xpath(src_xml, doc.path, [src]):
+        for lx in mc.label.match_xpath(mc.ctx, src_xml, doc.path, [src]):
             labels.extend(mc.label.match_regex(
                 src, doc.path, [RegexMatch(lx)]))
     match_index = 0
@@ -1259,7 +1265,7 @@ def gen_content_matches(mc, doc, src, src_xml):
         if mc.labels_inside_content and mc.label.xpath:
             content_xml = contents_xml[match_index] if mc.has_content_xpaths else None
             labels = []
-            for lx in mc.label.match_xpath(content_xml, doc.path, [src]):
+            for lx in mc.label.match_xpath(mc.ctx, content_xml, doc.path, [src]):
                 labels.extend(mc.label.match_regex(
                     src, doc.path, [RegexMatch(lx)]))
             if len(labels) == 0:
@@ -1300,7 +1306,7 @@ def gen_content_matches(mc, doc, src, src_xml):
 
 def gen_document_matches(mc, doc, src, src_xml):
     # TODO: fix interactive matching for docs and give ci di chain to regex
-    new_paths = mc.document.apply(src, src_xml, doc.path)
+    new_paths = mc.document.apply(mc.ctx, src, src_xml, doc.path)
     return [
         Document(
             doc.document_type.derived_type(),
@@ -1559,7 +1565,8 @@ def dl(ctx):
                 if have_xpath_matching:
                     try:
                         if forced_enc:
-                            src_xml = lxml.html.fromstring(src, parser=lxml.html.HTMLParser(encoding=enc))
+                            src_xml = lxml.html.fromstring(
+                                src, parser=lxml.html.HTMLParser(encoding=enc))
                         else:
                             src_xml = lxml.html.fromstring(src)
                     except Exception as ex:
@@ -1977,12 +1984,7 @@ def main():
             continue
         if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)): continue
 
-        if "=" not in arg:
-            error(
-                f"unrecognized option: '{arg}', are you missing an equals sign?")
-        else:
-            error(
-                f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
+        error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
     dl(ctx)
     return 0
