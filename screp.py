@@ -259,9 +259,13 @@ class Locator:
                     except Exception:
                         pass
             else:
-                res.append(lxml.html.tostring(xm, encoding="unicode"))
-                if return_xml_tuple:
-                    res_xml.append(xm)
+                try:
+                    res.append(lxml.html.tostring(xm, encoding="unicode"))
+                    if return_xml_tuple:
+                        res_xml.append(xm)
+                except Exception as ex1:
+                    warn(f"{path}: encoding fail: {str(ex1)}")
+
         if return_xml_tuple:
             return res, res_xml
         return res
@@ -448,6 +452,10 @@ class DlContext:
         self.origin_mc = MatchChain(self, None, blank=True)
         # turn ctx to none temporarily for origin so it can be deepcopied
         self.origin_mc.ctx = None
+
+
+def warn(text):
+    sys.stderr.write(text + "\n")
 
 
 def error(text):
@@ -871,26 +879,14 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
+def fetch_doc(ctx, doc, for_content):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
-
-        mc = doc.src_mc
-        if mc is None:
-            mc = ctx.match_chains[0]
-        if mc.forced_document_encoding:
-            enc = mc.forced_document_encoding
-        elif doc.encoding:
-            enc = doc.encoding
-        else:
-            enc = mc.default_document_encoding
-        doc.encoding = enc
-        data_enc = str(data, encoding=doc.encoding)
     else:
         assert doc.document_type == DocumentType.URL
         if ctx.selenium_variant != SeleniumVariant.DISABLED:
-            if not raw:
+            if not for_content:
                 if ctx.cookie_jar:
                     selenium_add_cookies(ctx)
                     ctx.selenium_driver.get(doc.path)
@@ -905,29 +901,10 @@ def fetch_doc(ctx, doc, raw=False, enc=True, nosingle=False):
         else:
             res = download_url(ctx, doc.path)
             data = res.content
-            if enc:
-                if doc.src_mc and doc.src_mc.forced_document_encoding:
-                    try:
-                        data_enc = str(
-                            data, encoding=doc.src_mc.forced_document_encoding)
-                    except Exception:
-                        data_enc = res.text
-                else:
-                    data_enc = res.text
-                    if res.encoding is not None:
-                        doc.encoding = res.encoding
-
             res.close()
             if data is None:
                 raise ValueError("empty response")
-    result = []
-    if raw:
-        result.append(data)
-    if enc:
-        result.append(data_enc)
-    if not nosingle and len(result) == 1:
-        return result[0]
-    return tuple(result)
+    return data
 
 
 def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
@@ -1132,15 +1109,13 @@ def handle_content_match(mc, doc, content_match):
     if not mc.content_raw:
         try:
             if mc.content_download_required:
-                res = fetch_doc(
+                content_bytes = fetch_doc(
                     mc.ctx,
                     Document(
                         doc.document_type.derived_type(),
                         content_link, mc, doc.match_chains
                     ),
-                    raw=True,
-                    enc=mc.need_content_enc,
-                    nosingle=True
+                    for_content=True
                 )
                 if res is None:
                     return False
@@ -1516,6 +1491,22 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
     return content_skip_doc, documents_skip_doc
 
 
+def decide_document_encoding(ctx, src_bytes, doc):
+    forced = False
+    mc = doc.src_mc
+    if not mc:
+        mc = ctx.match_chains[0]
+    if mc.forced_document_encoding:
+        enc = mc.forced_document_encoding
+        forced = True
+    elif doc.encoding:
+        enc = doc.encoding
+    else:
+        enc = mc.default_document_encoding
+    doc.encoding = enc
+    return enc, forced
+
+
 def dl(ctx):
     closed = False
     while ctx.docs:
@@ -1531,7 +1522,7 @@ def dl(ctx):
 
         try_number = 0
         try:
-            src = fetch_doc(ctx, doc)
+            src = fetch_doc(ctx, doc, for_content=False)
         except (
             selenium.common.exceptions.InvalidSessionIdException,
             selenium.common.exceptions.NoSuchWindowException
@@ -1542,6 +1533,7 @@ def dl(ctx):
             log(ctx, Verbosity.ERROR,
                 f"Failed to fetch {doc.path}\n    {str(ex)}")
             continue
+        enc, forced_enc = decide_document_encoding(ctx, src, doc)
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
@@ -1563,11 +1555,15 @@ def dl(ctx):
 
             if not same_content:
                 interactive_chains = []
-                try:
-                    src_xml = lxml.html.fromstring(
-                        src) if have_xpath_matching else None
-                except Exception:
-                    src_xml = None
+                src_xml = None
+                if have_xpath_matching:
+                    try:
+                        if forced_enc:
+                            src_xml = lxml.html.fromstring(src, parser=lxml.html.HTMLParser(encoding=enc))
+                        else:
+                            src_xml = lxml.html.fromstring(src)
+                    except Exception as ex:
+                        error(f"{doc.path}: failed to parse as xml: {str(ex)}")
 
                 for mc in doc.match_chains:
                     if mc.satisfied:
@@ -1697,11 +1693,15 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
     argname_len = len(argname)
     eq_pos = arg.find("=")
     if eq_pos == -1:
+        if arg != argname:
+            return False, None, None
         if not support_blank:
             error("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
         value = blank_value
         mc_spec = arg[argname_len:]
+    elif eq_pos != argname_len:
+        return False, None, None
     else:
         pre_eq_arg = arg[:eq_pos]
         mc_spec = arg[argname_len: eq_pos]
