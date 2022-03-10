@@ -813,6 +813,10 @@ def setup(ctx):
     if len(ctx.docs) == 0:
         error("must specify at least one url or (r)file")
 
+    if ctx.tor_browser_dir:
+        if ctx.selenium_variant == SeleniumVariant.DISABLED:
+            ctx.selenium_variant = SeleniumVariant.TORBROWSER
+
     if ctx.cookie_file is not None:
         try:
             ctx.cookie_jar = MozillaCookieJar()
@@ -826,7 +830,7 @@ def setup(ctx):
         user_agent_rotator = UserAgent()
         ctx.user_agent = user_agent_rotator.get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
-        ctx.user_agent = "dl.py/0.0.1"
+        ctx.user_agent = "screp/0.2.0"
 
     # if no chains are specified, use the origin chain as chain 0
     chain_zero_enabled = True in (
@@ -849,9 +853,6 @@ def setup(ctx):
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
 
-    if ctx.tor_browser_dir:
-        if ctx.selenium_variant == SeleniumVariant.DISABLED:
-            ctx.selenium_variant = SeleniumVariant.TORBROWSER
     setup_selenium(ctx)
 
 
