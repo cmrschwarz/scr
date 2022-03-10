@@ -535,7 +535,7 @@ def help(err=False):
         dsch=<scheme>       default scheme for urls derived from following documents, defaults to "https"
         dpsch=<bool>        use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>      force this scheme for urls derived from following documents
-        doc=<chain spec>    chains that matched documents should apply to, default is the same chain    
+        doc=<chain spec>    chains that matched documents should apply to, default is the same chain
 
     Initial Documents:
         url=<url>           fetch a document from a url, derived document matches are (relative) urls
@@ -901,7 +901,7 @@ def fetch_doc(ctx, doc, for_content):
                         ctx.selenium_driver.refresh()
                 else:
                     ctx.selenium_driver.get(doc.path)
-                data_enc = ctx.selenium_driver.page_source
+                data = ctx.selenium_driver.page_source.encode("utf-8")
             else:
                 error("downloading content in selenium mode is not supported yet")
         else:
