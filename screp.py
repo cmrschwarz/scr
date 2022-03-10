@@ -174,29 +174,11 @@ class Locator:
         if self.regex is None:
             return
         try:
-            regex_comp = re.compile(self.regex)
+            regex_comp = re.compile(self.regex, re.MULTILINE)
         except re.error as err:
             error(f"{self.name[0]}r is not a valid regex: {err.msg}")
-        if regex_comp.groups == 0:
-            self.content_capture_group = 0
-        elif self.name in regex_comp.groupindex:
+        if self.name in regex_comp.groupindex:
             self.content_capture_group = self.name
-        elif regex_comp.groups == 1 + len(regex_comp.groupindex):
-            named_indices = list(regex_comp.groupindex.values())
-            # find the group index that is not part of named_indices
-            # algorithm: put each index value at it's array index
-            # the array index that does not contain the right value at the end
-            # is not present
-            named_indices.append(0)
-            for i in range(0, len(named_indices)):
-                v = named_indices[i] - 1
-                if v != i and v != -1:
-                    named_indices[i], named_indices[v] = named_indices[v], named_indices[i]
-
-            for i in range(1, regex_comp.groups):
-                if named_indices[i] != i + 1:
-                    self.content_capture_group = i + 1
-                    break
         else:
             self.content_capture_group = 0
         self.regex = regex_comp
