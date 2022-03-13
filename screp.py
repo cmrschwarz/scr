@@ -869,31 +869,40 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, for_content):
+def fetch_doc(ctx, doc, for_content, need_bytes, need_str):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
-    else:
-        assert doc.document_type == DocumentType.URL
-        if ctx.selenium_variant != SeleniumVariant.DISABLED:
-            if not for_content:
-                if ctx.cookie_jar:
-                    selenium_add_cookies(ctx)
-                    ctx.selenium_driver.get(doc.path)
-                    changed = selenium_add_cookies(ctx)
-                    if changed:
-                        ctx.selenium_driver.refresh()
-                else:
-                    ctx.selenium_driver.get(doc.path)
-                data = ctx.selenium_driver.page_source.encode("utf-8")
+        enc, forced_enc = decide_document_encoding(ctx, doc)
+        ds = data.decode(enc) if need_str else None
+        return data, ds, enc, forced_enc
+    assert doc.document_type == DocumentType.URL
+    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+        if not for_content:
+            if ctx.cookie_jar:
+                selenium_add_cookies(ctx)
+                ctx.selenium_driver.get(doc.path)
+                changed = selenium_add_cookies(ctx)
+                if changed:
+                    ctx.selenium_driver.refresh()
             else:
-                error("downloading content in selenium mode is not supported yet")
+                ctx.selenium_driver.get(doc.path)
+            enc, forced_enc = decide_document_encoding(ctx, doc)
+            ds = ctx.selenium_driver.page_source
+            data = ds.encode(enc) if need_bytes else None
+            return data, ds, enc, forced_enc
         else:
-            res = download_url(ctx, doc.path)
-            data = res.content
-            res.close()
-            if data is None:
-                raise ValueError("empty response")
+            error("downloading content in selenium mode is not supported yet")
+    else:
+        res = download_url(ctx, doc.path)
+        data = res.content
+        res.close()
+        if data is None:
+            raise ValueError("empty response")
+        doc.encoding = res.encoding
+        enc, forced_enc = decide_document_encoding(ctx, doc)
+        ds = data.decode(enc) if need_str else None
+        return data, ds, enc, forced_enc
     return data
 
 
@@ -1099,25 +1108,21 @@ def handle_content_match(mc, doc, content_match):
     if not mc.content_raw:
         try:
             if mc.content_download_required:
-                content_bytes = fetch_doc(
+                content_bytes, content_txt, _enc, _forced_enc = fetch_doc(
                     mc.ctx,
                     Document(
                         doc.document_type.derived_type(),
                         content_link, mc, doc.match_chains
                     ),
-                    for_content=True
+                    True, True, mc.need_content_enc
                 )
-                if res is None:
-                    return False
-                content_bytes = res[0]
-                content_txt = res[1] if mc.need_content_enc else None
             else:
                 content_bytes = None
                 content_txt = None
         except Exception as ex:
             log(mc.ctx, Verbosity.ERROR,
                 f'{doc.path}{di_ci_context}: failed to fetch content from "{content_link}"\n')
-            return False
+            return InteractiveResult.ACCEPT
     else:
         content_bytes = content_txt
 
@@ -1481,7 +1486,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
     return content_skip_doc, documents_skip_doc
 
 
-def decide_document_encoding(ctx, src_bytes, doc):
+def decide_document_encoding(ctx, doc):
     forced = False
     mc = doc.src_mc
     if not mc:
@@ -1512,7 +1517,8 @@ def dl(ctx):
 
         try_number = 0
         try:
-            src = fetch_doc(ctx, doc, for_content=False)
+            src, src_enc, enc, forced_enc = fetch_doc(
+                ctx, doc, False, True, False)
         except (
             selenium.common.exceptions.InvalidSessionIdException,
             selenium.common.exceptions.NoSuchWindowException
@@ -1523,7 +1529,6 @@ def dl(ctx):
             log(ctx, Verbosity.ERROR,
                 f"Failed to fetch {doc.path}\n    {str(ex)}")
             continue
-        enc, forced_enc = decide_document_encoding(ctx, src, doc)
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
