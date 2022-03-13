@@ -36,6 +36,7 @@ doc_skip_indicating_strings = prefixes("docskip")
 edit_indicating_strings = prefixes("edit")
 inspect_indicating_strings = prefixes("inspect")
 accept_chain_indicating_strings = prefixes("acceptchain")
+chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
@@ -1690,11 +1691,11 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
         pre_eq_arg = arg
         value = blank_value
         mc_spec = arg[argname_len:]
-    elif eq_pos != argname_len:
-        return False, None, None
     else:
-        pre_eq_arg = arg[:eq_pos]
         mc_spec = arg[argname_len: eq_pos]
+        if not chain_regex.match(mc_spec):
+            return False, None, None
+        pre_eq_arg = arg[:eq_pos]
         value = arg[eq_pos+1:]
     return True, parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
