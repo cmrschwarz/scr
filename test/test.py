@@ -3,6 +3,7 @@ import os
 import textwrap
 import json
 import glob
+import shellescape
 import sys
 
 import subprocess
@@ -26,39 +27,50 @@ def get_key_with_default(obj, key, default=""):
 fails = 0
 successes = 0
 
+
+def get_cmd_string(tc):
+    cmd = "screp"
+    for arg in tc["args"]:
+        cmd += " " + shellescape.quote(arg)
+    return cmd
+
+
 for tf in glob.glob("./test/cases/*.json"):
     with open(tf, "r") as f:
         tc = json.load(f)
     name = tf
     ec = tc.get("ec", 0)
-    args = tc["args"]
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
     expected_stderr = tc.get("stderr", "")
 
     proc = subprocess.Popen(
-        ["bash", "-c", "screp " + args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+        ["screp"] + tc["args"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
     )
     output = proc.communicate(input=stdin)
     success = False
     stdout = output[0]
     stderr = output[1]
     if stderr != expected_stderr:
-        print(
-            f"{ANSI_RED}FAILED {name}:{ANSI_CLEAR} wrong stderr:\n{stderr}{DASH_BAR}")
+        reason = f"wrong stderr:\n{get_cmd_string(tc)}\n{stderr}{DASH_BAR}"
     elif stdout != expected_stdout:
-        print(
-            f"{ANSI_RED}FAILED {name}:{ANSI_CLEAR} wrong stdout:\n{stdout}{DASH_BAR}")
+        reason = f"wrong stdout:\n{get_cmd_string(tc)}\n{stdout}{DASH_BAR}"
     elif ec != proc.returncode:
-        print(
-            f"{ANSI_RED}FAILED {name}:{ANSI_CLEAR} wrong exitcode: {proc.returncode} (expected {ec})")
+        reason = f"wrong exitcode: {proc.returncode} (expected {ec})\n{get_cmd_string(tc)}"
     else:
-        print(
-            f"{ANSI_GREEN}PASSED {name}{ANSI_CLEAR}")
         success = True
+
     if success:
+        print(f"{ANSI_GREEN}PASSED {name}{ANSI_CLEAR}")
         successes += 1
     else:
+        nl = reason.find("\n")
+        if nl == -1:
+            reason += ANSI_CLEAR
+        else:
+            reason = reason[:nl] + ANSI_CLEAR + reason[nl:]
+
+        print(f"{ANSI_RED}FAILED {name}: {reason}")
         fails += 1
 
 
