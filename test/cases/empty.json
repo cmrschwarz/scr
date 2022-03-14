@@ -1,0 +1,4 @@
+{
+    "cmd": "screp rfile=./test/res/empty.html",
+    "stdout": "\n"
+}
