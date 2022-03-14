@@ -1,4 +1,4 @@
 {
-    "cmd": "screp rfile=./test/res/basic.html 'cx=//ul/li/text()'",
+    "args": "rfile=./test/res/basic.html 'cx=//ul/li/text()'",
     "stdout": "Foo\nBar\nBaz\n"
 }

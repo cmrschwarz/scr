@@ -3,11 +3,14 @@ import os
 import textwrap
 import json
 import glob
+import sys
 
 import subprocess
 
 # cd into parent of scriptdir
 os.chdir(os.path.dirname(os.path.abspath(os.path.realpath(__file__))) + "/..")
+# prepend to path so we can call 'screp ...'
+sys.path = [os.getcwd()] + sys.path
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
@@ -28,12 +31,13 @@ for tf in glob.glob("./test/cases/*.json"):
         tc = json.load(f)
     name = tf
     ec = tc.get("ec", 0)
-    cmd = tc["cmd"]
+    args = tc["args"]
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
     expected_stderr = tc.get("stderr", "")
+
     proc = subprocess.Popen(
-        ["bash", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+        ["bash", "-c", "screp " + args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
     )
     output = proc.communicate(input=stdin)
     success = False
