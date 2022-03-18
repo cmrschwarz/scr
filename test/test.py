@@ -61,7 +61,7 @@ for tf in glob.glob("./test/cases/*.json"):
         success = True
 
     if success:
-        print(f"{ANSI_GREEN}PASSED {name}{ANSI_CLEAR}")
+        print(f"PASSED {name}")
         successes += 1
     else:
         nl = reason.find("\n")
@@ -78,4 +78,4 @@ if fails:
     print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{ANSI_CLEAR}")
 else:
     print(
-        f"{ANSI_GREEN}{fails} test(s) failed, {successes} test(s) passed{ANSI_CLEAR}")
+        f"{ANSI_GREEN}{successes} test(s) passed{ANSI_CLEAR}")
