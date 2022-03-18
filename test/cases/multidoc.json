@@ -1,0 +1,7 @@
+{
+    "args": [
+        "file=./test/res/multidoc.html",
+        "dx1=//img/@src"
+    ],
+    "stdout": ""
+}

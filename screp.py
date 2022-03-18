@@ -1296,6 +1296,12 @@ def gen_content_matches(mc, doc, src, src_xml):
 def gen_document_matches(mc, doc, src, src_xml):
     # TODO: fix interactive matching for docs and give ci di chain to regex
     new_paths = mc.document.apply(mc.ctx, src, src_xml, doc.path)
+    if doc.document_type == DocumentType.FILE:
+        base = os.path.dirname(doc.path)
+        for i, p in enumerate(new_paths):
+            if not os.path.isabs(p):
+                os.path.abspath
+                new_paths[i] = os.path.normpath(os.path.join(base, p))
     return [
         Document(
             doc.document_type.derived_type(),
@@ -1553,13 +1559,16 @@ def dl(ctx):
                 src_xml = None
                 if have_xpath_matching:
                     try:
-                        if forced_enc:
+                        if src.strip() == b'':
+                            src_xml = lxml.etree.Element("html")
+                        elif forced_enc:
                             src_xml = lxml.html.fromstring(
                                 src, parser=lxml.html.HTMLParser(encoding=enc))
                         else:
                             src_xml = lxml.html.fromstring(src)
                     except Exception as ex:
-                        error(f"{doc.path}: failed to parse as xml: {str(ex)}")
+                        log(ctx, Verbosity.ERROR, f"{doc.path}: failed to parse as xml: {str(ex)}")
+                        continue
 
                 for mc in doc.match_chains:
                     if mc.satisfied:
