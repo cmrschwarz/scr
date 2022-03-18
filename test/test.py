@@ -11,7 +11,7 @@ import subprocess
 # cd into parent of scriptdir
 os.chdir(os.path.dirname(os.path.abspath(os.path.realpath(__file__))) + "/..")
 # prepend to path so we can call 'screp ...'
-sys.path = [os.getcwd()] + sys.path
+os.environ["PATH"] = "." + ":" + os.environ["PATH"]
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
@@ -45,7 +45,7 @@ for tf in glob.glob("./test/cases/*.json"):
     expected_stderr = tc.get("stderr", "")
 
     proc = subprocess.Popen(
-        ["screp"] + tc["args"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+        ["screp"] + tc["args"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=os.environ
     )
     output = proc.communicate(input=stdin)
     success = False

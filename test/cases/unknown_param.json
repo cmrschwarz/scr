@@ -4,5 +4,5 @@
         "xxx=3"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: unrecognized option: 'xxx=3'. Consider /opt/tools/screp --help\n"
+    "stderr": "[ERROR]: unrecognized option: 'xxx=3'. Consider ./screp --help\n"
 }
