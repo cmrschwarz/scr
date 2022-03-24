@@ -4,7 +4,9 @@
         "cx=//img/@src",
         "sel=c",
         "cl=t",
-        "cpf={content}"
+        "cpf={content}",
+        "seldl1=j",
+        "seldl2=i"
     ],
-    "stdout": "a\nb\n"
+    "stdout": "a\nb\na\nb\n"
 }

@@ -1,12 +1,12 @@
 {
     "args": [
-        "file=./test/res/resources.html",
-        "cx=//img/@src",
+        "rfile=./test/res/cross_origin.html",
+        "cx=//embed/@src",
         "sel=f",
         "cl=t",
         "cpf={content}",
         "seldl1=j",
         "seldl2=i"
     ],
-    "stdout": "a\nb\na\nb\n"
+    "stdout": "foobar\nfoobar\n"
 }
