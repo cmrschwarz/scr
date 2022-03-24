@@ -913,29 +913,40 @@ def selenium_has_died(ctx):
         return True
 
 
+def selenium_setup_cors_tab(ctx, doc_url, link, dl_index):
+    doc_url = urllib.parse.urlparse(doc_url)
+    link_url = urllib.parse.urlparse(link)
+    if doc_url.netloc == link_url.netloc:
+        return None
+    prev_window_handle = ctx.selenium_driver.current_window_handle
+    host_link = link_url._replace(
+        path="", params="", query="", fragment="").geturl()
+    cors_tab_name = f"screp_cors_tab_{dl_index}"
+    ctx.selenium_driver.execute_script(
+        "window.open('about:blank', arguments[0]);",
+        cors_tab_name
+    )
+    ctx.selenium_driver.switch_to.window(cors_tab_name)
+    selenium_driver_get_with_cookies(ctx, host_link)
+    return prev_window_handle
+
+
+def selenium_close_cors_tab(ctx, cors_prev_tab):
+    if cors_prev_tab is not None:
+        ctx.selenium_driver.close()
+        ctx.selenium_driver.switch_to.window(cors_prev_tab)
+
+
 def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
-    tmp_filename = f"dl{mc.ctx.selenium_dl_index}"
+    dl_index = mc.ctx.selenium_dl_index
+    mc.ctx.selenium_dl_index += 1
+    tmp_filename = f"dl{dl_index}"
     if filepath is not None:
         tmp_filename += "_" + filepath
     else:
         tmp_filename += ".bin"
-    mc.ctx.selenium_dl_index += 1
+
     tmp_path = os.path.join(mc.ctx.selenium_download_dir, tmp_filename)
-    cors = False
-
-    doc_url = urllib.parse.urlparse(doc_url)
-    link_url = urllib.parse.urlparse(link)
-    if doc_url.netloc != link_url.netloc:
-        cors = True
-        prev_window_handle = mc.ctx.selenium_driver.current_window_handle
-        host_link = link_url._replace(path="", params="", query="", fragment="").geturl()
-        mc.ctx.selenium_driver.execute_script(
-            "window.open('about:blank', arguments[0]);",
-            tmp_filename
-        )
-        mc.ctx.selenium_driver.switch_to.window(tmp_filename)
-        selenium_driver_get_with_cookies(mc.ctx, host_link)
-
     script_source = """
         url = arguments[0];
         filename = arguments[1];
@@ -946,12 +957,11 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
         a.click();
         document.body.removeChild(a);
     """
+    cors_prev_tab = selenium_setup_cors_tab(mc.ctx, doc_url, link, dl_index)
     try:
         mc.ctx.selenium_driver.execute_script(
             script_source, link, tmp_filename)
-        if cors:
-            mc.ctx.selenium_driver.close()
-            mc.ctx.selenium_driver.switch_to.window(prev_window_handle)
+        selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     except Exception as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
@@ -979,6 +989,8 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
 
 
 def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
+    dl_index = mc.ctx.selenium_dl_index
+    mc.ctx.selenium_dl_index += 1
     script_source = """
         url = arguments[0];
         return (async () => {
@@ -1004,9 +1016,11 @@ def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
             });
         })();
     """
+    cors_prev_tab = selenium_setup_cors_tab(mc.ctx, doc_url, link, dl_index)
     try:
         res = mc.ctx.selenium_driver.execute_script(
             script_source, link)
+        selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     except Exception as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
@@ -1100,6 +1114,7 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
         log(mc.ctx, Verbosity.INFO,
             f"{doc.path}{di_ci_context}: wrote content into {save_path}")
 
+
 def selenium_driver_get_with_cookies(ctx, path):
     if ctx.cookie_jar:
         selenium_add_cookies(ctx)
@@ -1109,6 +1124,7 @@ def selenium_driver_get_with_cookies(ctx, path):
             ctx.selenium_driver.refresh()
     else:
         ctx.selenium_driver.get(path)
+
 
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
