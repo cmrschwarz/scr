@@ -23,6 +23,7 @@ import tempfile
 import itertools
 import warnings
 import copy
+import binascii
 
 
 def prefixes(str):
@@ -890,6 +891,15 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
+def check_selenium_alive(ctx):
+    try:
+        # throws an exception if the session died
+        return len(ctx.selenium_driver.window_handles) > 0
+        return True
+    except Exception as e:
+        return False
+
+
 def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     ctx = mc.ctx
     tmp_filename = f"dl{ctx.selenium_dl_index}"
@@ -913,52 +923,46 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
 
     ctx.selenium_dl_index += 1
     tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
-    # while this has the nicer user experience (browser shows download progress bar)
-    # it does not work if the http response specifies a filename since that overwrites
-    # what we set here
-    # script_source_v1 = """
-    #     const a = document.createElement('a');
-    #     a.href = arguments[0];
-    #     a.download = arguments[1];
-    #     document.body.appendChild(a);
-    #     a.click();
-    #     document.body.removeChild(a);
-    # """
 
     script_source = """
         url = arguments[0];
         filename = arguments[1];
-        mimetype = arguments[2]; 
-        fetch(url, {
-            method: 'GET',
-        })
-        .then(response => response.blob())
-        .then(blob => {
-            const blob_fixed_mimetype = blob.slice(0, blob.size, mimetype);
-            const url = window.URL.createObjectURL(blob_fixed_mimetype);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();    
-            a.remove();        
-        });
+        mimetype = arguments[2];
+        return (async () => {
+            return await fetch(url, {
+                method: 'GET',
+            })
+            .then(response => response.blob())
+            .then(blob => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onload = () => resolve(reader.result.substr(reader.result.indexOf(',') + 1));
+                reader.onerror = error => reject(error);
+            }))
+            .then(result => {
+                return {
+                    "ok": result
+                };
+            })
+            .catch(ex => {
+                return {
+                    "error": ex.message
+                };
+            });
+        })();
     """
-    ctx.selenium_driver.execute_script(
-        script_source, link, tmp_filename, DUMMY_MIMETYPE)
-    i = 0
-    while True:
-        if os.path.exists(tmp_path):
-            break
-        if i < 10:
-            time.sleep(0.01)
-        else:
-            time.sleep(0.1)
-            i = 10
-    with open(tmp_path, "rb") as f:
-        data = f.read()
-    os.remove(tmp_path)
-    return data
+    try:
+        res = ctx.selenium_driver.execute_script(
+            script_source, link, tmp_filename, DUMMY_MIMETYPE)
+    except Exception as ex:
+        log(ctx, Verbosity.ERROR,
+            f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
+        return None
+    if "error" in res:
+        log(ctx, Verbosity.ERROR,
+            f"{link}{di_ci_context}: selenium download failed: {res['error']}")
+        return None
+    return binascii.a2b_base64(res["ok"])
 
 
 def requests_dl(ctx, path):
@@ -1649,15 +1653,17 @@ def dl(ctx):
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
+                if not check_selenium_alive(ctx):
+                    closed = True
+                    break
+
                 try:
-                    # throws an exception if the session died which we want
-                    # to detect
-                    _ = ctx.selenium_driver.window_handles
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == src)
                     src = src_new
                 except Exception as e:
-                    closed = True
+                    log(ctx, Verbosity.ERROR,
+                        "selenium error: failed to fetch page source")
                     break
 
             if not same_content:
