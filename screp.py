@@ -624,10 +624,12 @@ def setup_selenium_chrome(ctx):
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
 
-    options.add_argument(
-        f"download.default_directory={ctx.selenium_download_dir}")
-    options.add_argument(f"download.prompt_for_download={False}")
-    options.add_argument(f"download.directory_upgrade={True}")
+    prefs = {
+        "download.default_directory": ctx.selenium_download_dir,
+        "download.prompt_for_download": False,
+        "profile.default_content_setting_values.automatic_downloads": 1,
+    }
+    options.add_experimental_option("prefs", prefs)
 
     try:
         ctx.selenium_driver = webdriver.Chrome(
