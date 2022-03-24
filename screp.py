@@ -19,9 +19,11 @@ import selenium.webdriver.firefox.service
 from collections import deque
 from enum import Enum, IntEnum
 import time
+import tempfile
 import itertools
 import warnings
 import copy
+import mimetypes
 
 
 def prefixes(str):
@@ -351,6 +353,7 @@ class MatchChain:
         self.labels_inside_content = None
         self.label_allow_missing = False
         self.allow_slashes_in_labels = False
+        self.overwrite_files = True
 
         self.dimin = 1
         self.dimax = float("inf")
@@ -436,6 +439,8 @@ class DlContext:
         self.selenium_log_path = os.path.devnull
         self.selenium_poll_frequency_secs = 0.3
         self.selenium_content_count_pad_length = 6
+        self.selenium_download_dir = None
+        self.selenium_dl_index = 0
 
         self.fallback_document_scheme = "https"
 
@@ -486,6 +491,7 @@ def help(err=False):
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+        owf=<bool>           allow to overwrite existing files, defaults to true
         cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
@@ -557,6 +563,27 @@ def add_cwd_to_path():
     return cwd
 
 
+def selenium_apply_firefox_options(ctx, ff_options):
+    if ctx.user_agent != None:
+        ff_options.set_preference("general.useragent.override", ctx.user_agent)
+        if ctx.selenium_variant == SeleniumVariant.TOR:
+            # otherwise the user agent is not applied
+            ff_options.set_preference("privacy.resistFingerprinting", False)
+
+    # setup download dir and disable save path popup
+    ff_options.set_preference("browser.download.dir",
+                              ctx.selenium_download_dir)
+    ff_options.set_preference("browser.download.useDownloadDir", True)
+    ff_options.set_preference("browser.download.folderList", 2)
+    ff_options.set_preference(
+        "browser.download.manager.showWhenStarting", False)
+
+    mimetypes.init()
+    all_mimetypes = ";".join(set(mimetypes.types_map.values()))
+    ff_options.set_preference(
+        "browser.helperApps.neverAsk.saveToDisk", all_mimetypes)
+
+
 def setup_selenium_tor(ctx):
     # use bundled geckodriver if available
     cwd = add_cwd_to_path()
@@ -568,11 +595,7 @@ def setup_selenium_tor(ctx):
             error(f"error! no tbdir specified, check --help")
     try:
         options = webdriver.firefox.options.Options()
-        if ctx.user_agent != None:
-            options.set_preference(
-                "general.useragent.override", ctx.user_agent)
-            # otherwise the user agent is not applied
-            options.set_preference("privacy.resistFingerprinting", False)
+        selenium_apply_firefox_options(ctx, options)
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
     except Exception as ex:
@@ -584,10 +607,8 @@ def setup_selenium_firefox(ctx):
     # use bundled geckodriver if available
     add_cwd_to_path()
     options = webdriver.FirefoxOptions()
-    if ctx.user_agent != None:
-        options.set_preference("general.useragent.override", ctx.user_agent)
+    selenium_apply_firefox_options(ctx, options)
     try:
-
         ctx.selenium_driver = webdriver.Firefox(
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
@@ -602,29 +623,18 @@ def setup_selenium_chrome(ctx):
     options.add_argument("--incognito")
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
+
+    options.add_argument(
+        f"download.default_directory={ctx.selenium_download_dir}")
+    options.add_argument(f"download.prompt_for_download={False}")
+    options.add_argument(f"download.directory_upgrade={True}")
+
     try:
         ctx.selenium_driver = webdriver.Chrome(
             options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
     except Exception as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
-    if not ctx.cookie_jar:
-        return
-    file_cookies = {}
-    for cookie in ctx.cookie_jar:
-        cookie_dict = {
-            'domain': cookie.domain,
-            'name': cookie.name,
-            'value': cookie.value,
-            'secure': cookie.secure
-        }
-        if cookie.expires:
-            cookie_dict['expiry'] = cookie.expires
-        if cookie.path_specified:
-            cookie_dict['path'] = cookie.path
-        if cookie.domain not in file_cookies:
-            file_cookies[cookie.domain] = []
-        file_cookies[cookie.domain].append(cookie_dict)
 
 
 def setup_selenium(ctx):
@@ -632,7 +642,11 @@ def setup_selenium(ctx):
         for mc in ctx.match_chains:
             mc.selenium_strategy = SeleniumStrategy.DISABLED
         return
-    elif ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+
+    ctx.selenium_download_dir = tempfile.mkdtemp(
+        prefix="screp_selenium_downloads_")
+
+    if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
     elif ctx.selenium_variant == SeleniumVariant.CHROME:
         setup_selenium_chrome(ctx)
@@ -783,7 +797,9 @@ def setup_match_chain(mc, ctx):
             mc.content_print_format
         ]
         mc.content_download_required = max(
-            output_formats, lambda of: format_string_uses_arg(of, None, "content"))
+            map(lambda of: format_string_uses_arg(
+                of, None, "content"), output_formats)
+        )
 
 
 def setup(ctx):
@@ -865,30 +881,67 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def selenium_download(ctx, doc, path, filename):
-    error("downloading content in selenium mode is not supported yet")
+def selenium_download(mc, doc, di_ci_context, link, filepath):
+    ctx = mc.ctx
+    tmp_filename = f"dl{ctx.selenium_dl_index}_{os.path.basename(filepath)}"
+    tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
+    script_source = f"""
+        const a = document.createElement('a');
+        a.href = arguments[0];
+        a.download = arguments[1];
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    """
+    ctx.selenium_driver.execute_script(script_source, link, tmp_filename)
+    done = False
+    for i in range(0, 10):
+        if done:
+            break
+        done = os.path.exists(tmp_path)
+        time.sleep(0.01)
+
+    while True:
+        if done:
+            break
+        done = os.path.exists(tmp_path)
+        time.sleep(0.1)
+
+    assert done
+    with open(tmp_path, "rb") as f:
+        data = f.read()
+    os.unlink(tmp_path)
+    return data
 
 
-def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_link, save_path):
+def requests_dl(ctx, path):
+    return requests.get(path, cookies=ctx.cookie_jar,
+                        headers={'User-Agent': ctx.user_agent})
+
+
+def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
     if not mc.content_raw:
         try:
             if mc.content_download_required:
-                content, _enc, _forced_enc = fetch_doc(
-                    mc.ctx,
-                    Document(
-                        doc.document_type.derived_type(),
-                        content_link, mc, doc.match_chains
-                    ),
-                    False
-                )
+                if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
+                    content = selenium_download(
+                        mc, doc, di_ci_context, content_path, save_path)
+                    if content is None:
+                        return InteractiveResult.ACCEPT
+                else:
+                    if doc.document_type.derived_type() is DocumentType.FILE:
+                        with open(content_path, "rb") as f:
+                            content = f.read()
+                    else:
+                        content = requests_dl(mc.ctx, content_path).data
         except Exception as ex:
-            error(
-                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_link}"\n')
+            log(mc.ctx, Verbosity.ERROR,
+                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}"')
             return InteractiveResult.ACCEPT
 
     if mc.content_print_format:
         print_data = gen_final_content_format(
-            mc, mc.content_print_format, label, di, ci, content_link,
+            mc, mc.content_print_format, label, di, ci, content_path,
             content, content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
@@ -897,13 +950,18 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
 
     if save_path:
         try:
-            f = open(save_path, "wb")
+            f = open(save_path, ("w" if mc.overwrite_files else "x") + "b")
+        except FileExistsError:
+            log(mc.ctx, Verbosity.ERROR,
+                f"{doc.path}{di_ci_context}: file already exists: {save_path}")
+            return InteractiveResult.ACCEPT
         except Exception as ex:
-            error(
-                f"{doc.path}{di_ci_context}: aborting! failed to write to file '{save_path}': {ex.msg}")
+            log(mc.ctx, Verbosity.ERROR,
+                f"{doc.path}{di_ci_context}: failed to write to file '{save_path}': {ex.msg}")
+            return InteractiveResult.ACCEPT
 
         write_data = gen_final_content_format(
-            mc, mc.content_write_format, label, di, ci, content_link,
+            mc, mc.content_write_format, label, di, ci, content_path,
             content, content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
@@ -911,44 +969,36 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
         f.close()
         log(mc.ctx, Verbosity.INFO,
             f"{doc.path}{di_ci_context}: wrote content into {save_path}")
-    # fxProfile.setPreference("browser.download.folderList", 2)
-    # fxProfile.setPreference("browser.download.manager.showWhenStarting", false)
-    # fxProfile.setPreference("browser.download.dir", "c:\\mydownloads")
-    # fxProfile.setPreference("browser.helperApps.neverAsk.saveToDisk", "text/csv")
 
 
-def fetch_doc(ctx, doc, for_content):
+def fetch_doc(ctx, doc):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
         enc, forced_enc = decide_document_encoding(ctx, doc)
-        data = data.decode(enc, "surrogateescape")
+        data = data.decode(enc, errors="surrogateescape")
         return data, enc, forced_enc
     assert doc.document_type == DocumentType.URL
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
-        if not for_content:
-            if ctx.cookie_jar:
-                selenium_add_cookies(ctx)
-                ctx.selenium_driver.get(doc.path)
-                changed = selenium_add_cookies(ctx)
-                if changed:
-                    ctx.selenium_driver.refresh()
-            else:
-                ctx.selenium_driver.get(doc.path)
-            enc, forced_enc = decide_document_encoding(ctx, doc)
-            data = ctx.selenium_driver.page_source
-            return data, enc, forced_enc
+        if ctx.cookie_jar:
+            selenium_add_cookies(ctx)
+            ctx.selenium_driver.get(doc.path)
+            changed = selenium_add_cookies(ctx)
+            if changed:
+                ctx.selenium_driver.refresh()
         else:
-            error("downloading content in selenium mode is not supported yet")
-    res = requests.get(doc.path, cookies=ctx.cookie_jar,
-                       headers={'User-Agent': ctx.user_agent})
+            ctx.selenium_driver.get(doc.path)
+        enc, forced_enc = decide_document_encoding(ctx, doc)
+        data = ctx.selenium_driver.page_source
+        return data, enc, forced_enc
+    res = requests_dl(ctx, doc.path)
     data = res.content
     res.close()
     if data is None:
         raise ValueError("empty response")
     doc.encoding = res.encoding
     enc, forced_enc = decide_document_encoding(ctx, doc)
-    data = data.decode(enc, "surrogateescape")
+    data = data.decode(enc, errors="surrogateescape")
     return data, enc, forced_enc
 
 
@@ -999,7 +1049,8 @@ def gen_final_content_format(mc, format_str, label, di, ci, content_link, conten
             if type(val) is bytes:
                 res += val
             else:
-                res += format(val, format_args).encode("utf-8")
+                res += format(val, format_args).encode("utf-8",
+                                                       errors="surrogateescape")
     return res
 
 
@@ -1500,7 +1551,7 @@ def parse_xml(ctx, doc, src, enc, forced_enc):
             src_xml = lxml.etree.Element("html")
         elif forced_enc:
             src_xml = lxml.html.fromstring(
-                src.encode(enc, "surrogateescape"),
+                src.encode(enc, errors="surrogateescape"),
                 parser=lxml.html.HTMLParser(encoding=enc)
             )
         else:
@@ -1527,7 +1578,7 @@ def dl(ctx):
 
         try_number = 0
         try:
-            src, enc, forced_enc = fetch_doc(ctx, doc, False)
+            src, enc, forced_enc = fetch_doc(ctx, doc)
         except (
             selenium.common.exceptions.InvalidSessionIdException,
             selenium.common.exceptions.NoSuchWindowException
@@ -1604,6 +1655,11 @@ def dl(ctx):
             ctx.selenium_driver.close()
         except Exception:
             pass
+
+
+def finalize(ctx):
+    if ctx.selenium_download_dir:
+        os.remove(ctx.selenium_download_dir)
 
 
 def begins(string, begin):
