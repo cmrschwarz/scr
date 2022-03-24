@@ -23,7 +23,6 @@ import tempfile
 import itertools
 import warnings
 import copy
-import mimetypes
 
 
 def prefixes(str):
@@ -42,6 +41,8 @@ chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
+# mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
+DUMMY_MIMETYPE = "application/zip"
 
 
 class InteractiveResult(Enum):
@@ -501,7 +502,7 @@ def help(err=False):
         cenc=<encoding>      default encoding to assume that content is in
         cfenc=<encoding>     encoding to always assume that content is in, even if http(s) says differently
 
-    Labels to give each matched content (becomes the filename):
+    Labels to give each matched content (useful e.g. for the filename in csf):
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string (args: <lr capture groups>, label, di, ci)
@@ -571,17 +572,23 @@ def selenium_apply_firefox_options(ctx, ff_options):
             ff_options.set_preference("privacy.resistFingerprinting", False)
 
     # setup download dir and disable save path popup
-    ff_options.set_preference("browser.download.dir",
-                              ctx.selenium_download_dir)
-    ff_options.set_preference("browser.download.useDownloadDir", True)
-    ff_options.set_preference("browser.download.folderList", 2)
-    ff_options.set_preference(
-        "browser.download.manager.showWhenStarting", False)
 
-    mimetypes.init()
-    all_mimetypes = ";".join(set(mimetypes.types_map.values()))
-    ff_options.set_preference(
-        "browser.helperApps.neverAsk.saveToDisk", all_mimetypes)
+    # this is no longer needed since we now use fetch and DUMMY_MIMETYPE
+    # import mimetypes
+    # mimetypes.init()
+    # all_mimetypes = ";".join(set(mimetypes.types_map.values()))
+    prefs = {
+        "browser.download.dir": ctx.selenium_download_dir,
+        "browser.download.useDownloadDir": True,
+        "browser.download.folderList": 2,
+        "browser.download.manager.showWhenStarting": False,
+        "browser.helperApps.neverAsk.saveToDisk": DUMMY_MIMETYPE,
+        # "browser.helperApps.neverAsk.saveToDisk": all_mimetypes,
+        # "pdfjs.disabled": True,
+    }
+
+    for pk, pv in prefs.items():
+        ff_options.set_preference(pk, pv)
 
 
 def setup_selenium_tor(ctx):
@@ -886,16 +893,38 @@ def prompt_yes_no(prompt_text, default=None):
 def selenium_download(mc, doc, di_ci_context, link, filepath):
     ctx = mc.ctx
     tmp_filename = f"dl{ctx.selenium_dl_index}_{os.path.basename(filepath)}"
+    ctx.selenium_dl_index += 1
     tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
-    script_source = f"""
-        const a = document.createElement('a');
-        a.href = arguments[0];
-        a.download = arguments[1];
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+    # while this has the nicer user experience (browser shows download progress bar)
+    # it does not work if the http response specifies a filename since that overwrites
+    # what we set here
+    # script_source_v1 = """
+    #     const a = document.createElement('a');
+    #     a.href = arguments[0];
+    #     a.download = arguments[1];
+    #     document.body.appendChild(a);
+    #     a.click();
+    #     document.body.removeChild(a);
+    # """
+
+    script_source = """
+        fetch(arguments[0], {
+            method: 'GET',
+        })
+        .then(response => response.blob())
+        .then(blob => {
+            const blob_fixed_mimetype = blob.slice(0, blob.size, arguments[2]);
+            const url = window.URL.createObjectURL(blob_fixed_mimetype);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = arguments[1];
+            document.body.appendChild(a);
+            a.click();    
+            a.remove();        
+        });
     """
-    ctx.selenium_driver.execute_script(script_source, link, tmp_filename)
+    ctx.selenium_driver.execute_script(
+        script_source, link, tmp_filename, DUMMY_MIMETYPE)
     done = False
     for i in range(0, 10):
         if done:
@@ -903,7 +932,7 @@ def selenium_download(mc, doc, di_ci_context, link, filepath):
         done = os.path.exists(tmp_path)
         time.sleep(0.01)
 
-    while True:
+    for i in range(0, 10):
         if done:
             break
         done = os.path.exists(tmp_path)
@@ -935,7 +964,9 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                         with open(content_path, "rb") as f:
                             content = f.read()
                     else:
-                        content = requests_dl(mc.ctx, content_path).data
+                        res = requests_dl(mc.ctx, content_path)
+                        content = res.content
+                        res.close()
         except Exception as ex:
             log(mc.ctx, Verbosity.ERROR,
                 f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}"')
@@ -1902,7 +1933,8 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
     else:
         nc = arg[len(optname):]
         if chain_regex.match(nc):
-            error("option '{optname}' does not support match chain specification")
+            error(
+                "option '{optname}' does not support match chain specification")
         if nc[0] != "=":
             return False
         val = get_arg_val(arg)
