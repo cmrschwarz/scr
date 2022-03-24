@@ -1681,7 +1681,7 @@ def dl(ctx):
                     elif interactive:
                         interactive_chains.append(mc)
 
-            if interactive_chains and (not same_content):
+            if interactive_chains:
                 accept, last_msg = handle_interactive_chains(
                     ctx, interactive_chains, doc, try_number, last_msg)
                 sat = (accept == InteractiveResult.ACCEPT)
@@ -1693,6 +1693,8 @@ def dl(ctx):
                             have_xpath_matching -= 1
 
             if unsatisfied_chains and not interactive_chains:
+                if static_content:
+                    break
                 time.sleep(ctx.selenium_poll_frequency_secs)
         content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
