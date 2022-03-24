@@ -1754,12 +1754,15 @@ def get_arg_val(arg):
 
 
 def parse_bool_arg(v, arg, blank_val=True):
+    v = v.strip().lower()
     if v == "" and blank_val is not None:
         return blank_val
-    try:
-        return bool(v)
-    except ValueError:
-        error(f"cannot parse '{v}' as a boolean in '{arg}'")
+
+    if v in yes_indicating_strings:
+        return True
+    if v in no_indicating_strings:
+        return False
+    error(f"cannot parse '{v}' as a boolean in '{arg}'")
 
 
 def parse_int_arg(v, arg):
