@@ -890,9 +890,17 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def selenium_download(mc, doc, di_ci_context, link, filepath):
+def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     ctx = mc.ctx
-    tmp_filename = f"dl{ctx.selenium_dl_index}_{os.path.basename(filepath)}"
+    tmp_filename = f"dl{ctx.selenium_dl_index}"
+    if filepath is not None:
+        tmp_filename += "_" + filepath
+    else:
+        tmp_filename += ".bin"
+
+    if doc.document_type == DocumentType.FILE:
+        link = "file:" + link
+
     ctx.selenium_dl_index += 1
     tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
     # while this has the nicer user experience (browser shows download progress bar)
@@ -908,16 +916,19 @@ def selenium_download(mc, doc, di_ci_context, link, filepath):
     # """
 
     script_source = """
-        fetch(arguments[0], {
+        url = arguments[0];
+        filename = arguments[1];
+        mimetype = arguments[2]; 
+        fetch(url, {
             method: 'GET',
         })
         .then(response => response.blob())
         .then(blob => {
-            const blob_fixed_mimetype = blob.slice(0, blob.size, arguments[2]);
+            const blob_fixed_mimetype = blob.slice(0, blob.size, mimetype);
             const url = window.URL.createObjectURL(blob_fixed_mimetype);
             var a = document.createElement('a');
             a.href = url;
-            a.download = arguments[1];
+            a.download = filename;
             document.body.appendChild(a);
             a.click();    
             a.remove();        
@@ -1005,6 +1016,21 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
 
 
 def fetch_doc(ctx, doc):
+    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+        selpath = doc.path
+        if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
+            selpath = "file:" + os.path.realpath(selpath)
+        if ctx.cookie_jar:
+            selenium_add_cookies(ctx)
+            ctx.selenium_driver.get(selpath)
+            changed = selenium_add_cookies(ctx)
+            if changed:
+                ctx.selenium_driver.refresh()
+        else:
+            ctx.selenium_driver.get(selpath)
+        enc, forced_enc = decide_document_encoding(ctx, doc)
+        data = ctx.selenium_driver.page_source
+        return data, enc, forced_enc
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
@@ -1012,18 +1038,6 @@ def fetch_doc(ctx, doc):
         data = data.decode(enc, errors="surrogateescape")
         return data, enc, forced_enc
     assert doc.document_type == DocumentType.URL
-    if ctx.selenium_variant != SeleniumVariant.DISABLED:
-        if ctx.cookie_jar:
-            selenium_add_cookies(ctx)
-            ctx.selenium_driver.get(doc.path)
-            changed = selenium_add_cookies(ctx)
-            if changed:
-                ctx.selenium_driver.refresh()
-        else:
-            ctx.selenium_driver.get(doc.path)
-        enc, forced_enc = decide_document_encoding(ctx, doc)
-        data = ctx.selenium_driver.page_source
-        return data, enc, forced_enc
     res = requests_dl(ctx, doc.path)
     data = res.content
     res.close()
@@ -1662,7 +1676,7 @@ def dl(ctx):
                     elif interactive:
                         interactive_chains.append(mc)
 
-            if interactive_chains and not static_content:
+            if interactive_chains and (not same_content):
                 accept, last_msg = handle_interactive_chains(
                     ctx, interactive_chains, doc, try_number, last_msg)
                 sat = (accept == InteractiveResult.ACCEPT)

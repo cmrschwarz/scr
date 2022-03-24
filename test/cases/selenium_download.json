@@ -1,0 +1,10 @@
+{
+    "args": [
+        "file=./test/res/resources.html",
+        "cx=//img/@src",
+        "sel=f",
+        "cl=t",
+        "cpf={content}"
+    ],
+    "stdout": "a\nb\n"
+}
