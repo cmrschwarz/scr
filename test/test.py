@@ -15,6 +15,7 @@ os.environ["PATH"] = "." + ":" + os.environ["PATH"]
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
+ANSI_YELLOW = "\033[0;33m"
 ANSI_CLEAR = "\033[0m"
 
 DASH_BAR = "-" * 80
@@ -43,7 +44,9 @@ for tf in glob.glob("./test/cases/*.json"):
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
     expected_stderr = tc.get("stderr", "")
-
+    msg_inprogress = f"{ANSI_YELLOW}RUNNING {name}{ANSI_CLEAR}"
+    sys.stdout.write(msg_inprogress)
+    sys.stdout.flush()
     proc = subprocess.Popen(
         ["screp"] + tc["args"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=os.environ
     )
@@ -61,7 +64,7 @@ for tf in glob.glob("./test/cases/*.json"):
         success = True
 
     if success:
-        print(f"PASSED {name}")
+        msg_result = f"PASSED {name}"
         successes += 1
     else:
         nl = reason.find("\n")
@@ -70,9 +73,11 @@ for tf in glob.glob("./test/cases/*.json"):
         else:
             reason = reason[:nl] + ANSI_CLEAR + reason[nl:]
 
-        print(f"{ANSI_RED}FAILED {name}: {reason}")
+        msg_result = f"{ANSI_RED}FAILED {name}: {reason}"
         fails += 1
-
+    if len(msg_result) < len(msg_inprogress):
+        sys.stdout.write("\r" + " " * len(msg_inprogress))
+    sys.stdout.write("\r" + msg_result + "\n")
 
 if fails:
     print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{ANSI_CLEAR}")
