@@ -1494,6 +1494,24 @@ def decide_document_encoding(ctx, doc):
     return enc, forced
 
 
+def parse_xml(ctx, doc, src, enc, forced_enc):
+    try:
+        if src.strip() == "":
+            src_xml = lxml.etree.Element("html")
+        elif forced_enc:
+            src_xml = lxml.html.fromstring(
+                src.encode(enc, "surrogateescape"),
+                parser=lxml.html.HTMLParser(encoding=enc)
+            )
+        else:
+            src_xml = lxml.html.fromstring(src)
+        return src_xml
+    except Exception as ex:
+        log(ctx, Verbosity.ERROR,
+            f"{doc.path}: failed to parse as xml: {str(ex)}")
+        return None
+
+
 def dl(ctx):
     closed = False
     while ctx.docs:
@@ -1543,19 +1561,8 @@ def dl(ctx):
                 interactive_chains = []
                 src_xml = None
                 if have_xpath_matching:
-                    try:
-                        if src.strip() == "":
-                            src_xml = lxml.etree.Element("html")
-                        elif forced_enc:
-                            src_xml = lxml.html.fromstring(
-                                src.encode(enc, "surrogateescape"),
-                                parser=lxml.html.HTMLParser(encoding=enc)
-                            )
-                        else:
-                            src_xml = lxml.html.fromstring(src)
-                    except Exception as ex:
-                        log(ctx, Verbosity.ERROR,
-                            f"{doc.path}: failed to parse as xml: {str(ex)}")
+                    src_xml = parse_xml(ctx, doc, src, enc, forced_enc)
+                    if src_xml is None:
                         break
 
                 for mc in doc.match_chains:
