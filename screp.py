@@ -821,7 +821,7 @@ def setup(ctx):
                 ctx.cookie_file, ignore_discard=True, ignore_expires=True)
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
-    if ctx.user_agent is None and ctx.user_agent_random:
+    if ctx.user_agent is not None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
         user_agent_rotator = UserAgent()
@@ -1900,12 +1900,11 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
         else:
             error("missing '=' and value for option {optname}")
     else:
-        nc = arg[len(optname)]
-        if nc == "-" or nc in range(0, 10):
-            error(
-                "option '{optname}' does not support match chain specification")
-        if nc != "=":
-            error(f"unknown option '{arg}'")
+        nc = arg[len(optname):]
+        if chain_regex.match(nc):
+            error("option '{optname}' does not support match chain specification")
+        if nc[0] != "=":
+            return False
         val = get_arg_val(arg)
     if ctx.__dict__[argname] is not None:
         error(f"error: {argname} specified twice")
