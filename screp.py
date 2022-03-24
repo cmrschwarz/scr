@@ -910,7 +910,6 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
                     return f.read()
             else:
                 link = "file:" + link
-                
 
     ctx.selenium_dl_index += 1
     tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
@@ -947,23 +946,18 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     """
     ctx.selenium_driver.execute_script(
         script_source, link, tmp_filename, DUMMY_MIMETYPE)
-    done = False
-    for i in range(0, 10):
-        if done:
+    i = 0
+    while True:
+        if os.path.exists(tmp_path):
             break
-        done = os.path.exists(tmp_path)
-        time.sleep(0.01)
-
-    for i in range(0, 10):
-        if done:
-            break
-        done = os.path.exists(tmp_path)
-        time.sleep(0.1)
-
-    assert done
+        if i < 10:
+            time.sleep(0.01)
+        else:
+            time.sleep(0.1)
+            i = 10
     with open(tmp_path, "rb") as f:
         data = f.read()
-    os.unlink(tmp_path)
+    os.remove(tmp_path)
     return data
 
 
