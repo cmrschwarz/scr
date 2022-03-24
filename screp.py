@@ -345,7 +345,6 @@ class MatchChain:
         self.content_raw = True
         self.content_input_encoding = "utf-8"
         self.content_forced_input_encoding = None
-        self.content_encoding = "utf-8"
         self.save_path_interactive = False
 
         self.label_default_format = None
@@ -383,7 +382,6 @@ class MatchChain:
         self.has_document_matching = False
         self.has_content_matching = False
         self.has_interactive_matching = None
-        self.need_content_enc = None
         self.content_download_required = False
         self.content_matches = []
         self.document_matches = []
@@ -447,8 +445,12 @@ class DlContext:
         self.origin_mc.ctx = None
 
 
-def error(text):
-    sys.stderr.write(verbosities_display_dict[Verbosity.ERROR] + text + "\n")
+def log_raw(msg, verbosity):
+    sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
+
+
+def error(msg):
+    log_raw(msg, Verbosity.ERROR)
     exit(1)
 
 
@@ -461,7 +463,7 @@ def unescape_string(txt, context):
 
 def log(ctx, verbosity, msg):
     if ctx.verbosity >= verbosity:
-        print(verbosities_display_dict[verbosity] + msg)
+        log_raw(msg, verbosity)
 
 
 def help(err=False):
@@ -481,18 +483,17 @@ def help(err=False):
         cicont=<bool>        don't reset the content index for each document
         cpf=<format string>  print the result of this format string for each content, empty to disable
                              defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
-                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
-                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
-                             (args: content, label, content_enc, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
         cesc=<string>        escape sequence to terminate content in cin mode
-        cienc=<encoding>     default encoding to assume that content is in
-        cfienc=<encoding>    encoding to always assume that content is in, even if http(s) says differently
-        cenc=<encoding>      encoding to use for content_enc
+        cenc=<encoding>      default encoding to assume that content is in
+        cfenc=<encoding>     encoding to always assume that content is in, even if http(s) says differently
 
     Labels to give each matched content (becomes the filename):
         lx=<xpath>          xpath for label matching
@@ -554,10 +555,6 @@ def add_cwd_to_path():
     cwd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
     os.environ["PATH"] += ":" + cwd
     return cwd
-
-
-def download_url(ctx, url):
-    return requests.get(url, cookies=ctx.cookie_jar, headers={'User-Agent': ctx.user_agent})
 
 
 def setup_selenium_tor(ctx):
@@ -708,7 +705,11 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     if fmt_string is None:
         return False
     fmt_args = get_format_string_keys(fmt_string)
-    return (arg_name in fmt_args or fmt_args.count("") > arg_pos)
+    if arg_name is not None and arg_name in fmt_args:
+        return True
+    if arg_pos is not None and fmt_args.count("") > arg_pos:
+        return True
+    return False
 
 
 def setup_match_chain(mc, ctx):
@@ -775,19 +776,14 @@ def setup_match_chain(mc, ctx):
             form += f"{{di:0{didigits}}}"
 
         mc.label_default_format = form
-
-    mc.need_content_enc = (
-        format_string_uses_arg(mc.content_save_format, 3, "content_enc")
-        or format_string_uses_arg(mc.content_write_format, 3, "content_enc")
-        or format_string_uses_arg(mc.content_print_format, 3, "content_enc")
-    )
     if not mc.content_raw:
-        if mc.content_save_format:
-            mc.content_download_required = True
-
-        if mc.content_print_format and not mc.content_download_required:
-            mc.content_download_required = mc.need_content_enc or format_string_uses_arg(
-                mc.content_print_format, 2, "content")
+        output_formats = [
+            mc.content_save_format,
+            mc.content_write_format,
+            mc.content_print_format
+        ]
+        mc.content_download_required = max(
+            output_formats, lambda of: format_string_uses_arg(of, None, "content"))
 
 
 def setup(ctx):
@@ -869,13 +865,65 @@ def prompt_yes_no(prompt_text, default=None):
     return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
 
 
-def fetch_doc(ctx, doc, for_content, need_bytes, need_str):
+def selenium_download(ctx, doc, path, filename):
+    error("downloading content in selenium mode is not supported yet")
+
+
+def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_link, save_path):
+    if not mc.content_raw:
+        try:
+            if mc.content_download_required:
+                content, _enc, _forced_enc = fetch_doc(
+                    mc.ctx,
+                    Document(
+                        doc.document_type.derived_type(),
+                        content_link, mc, doc.match_chains
+                    ),
+                    False
+                )
+        except Exception as ex:
+            error(
+                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_link}"\n')
+            return InteractiveResult.ACCEPT
+
+    if mc.content_print_format:
+        print_data = gen_final_content_format(
+            mc, mc.content_print_format, label, di, ci, content_link,
+            content, content_match.label_regex_match, content_match.content_regex_match,
+            doc
+        )
+        sys.stdout.buffer.write(print_data)
+        sys.stdout.flush()
+
+    if save_path:
+        try:
+            f = open(save_path, "wb")
+        except Exception as ex:
+            error(
+                f"{doc.path}{di_ci_context}: aborting! failed to write to file '{save_path}': {ex.msg}")
+
+        write_data = gen_final_content_format(
+            mc, mc.content_write_format, label, di, ci, content_link,
+            content, content_match.label_regex_match, content_match.content_regex_match,
+            doc
+        )
+        f.write(write_data)
+        f.close()
+        log(mc.ctx, Verbosity.INFO,
+            f"{doc.path}{di_ci_context}: wrote content into {save_path}")
+    # fxProfile.setPreference("browser.download.folderList", 2)
+    # fxProfile.setPreference("browser.download.manager.showWhenStarting", false)
+    # fxProfile.setPreference("browser.download.dir", "c:\\mydownloads")
+    # fxProfile.setPreference("browser.helperApps.neverAsk.saveToDisk", "text/csv")
+
+
+def fetch_doc(ctx, doc, for_content):
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         with open(doc.path, "rb") as f:
             data = f.read()
         enc, forced_enc = decide_document_encoding(ctx, doc)
-        ds = data.decode(enc) if need_str else None
-        return data, ds, enc, forced_enc
+        data = data.decode(enc, "surrogateescape")
+        return data, enc, forced_enc
     assert doc.document_type == DocumentType.URL
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if not for_content:
@@ -888,25 +936,23 @@ def fetch_doc(ctx, doc, for_content, need_bytes, need_str):
             else:
                 ctx.selenium_driver.get(doc.path)
             enc, forced_enc = decide_document_encoding(ctx, doc)
-            ds = ctx.selenium_driver.page_source
-            data = ds.encode(enc) if need_bytes else None
-            return data, ds, enc, forced_enc
+            data = ctx.selenium_driver.page_source
+            return data, enc, forced_enc
         else:
             error("downloading content in selenium mode is not supported yet")
-    else:
-        res = download_url(ctx, doc.path)
-        data = res.content
-        res.close()
-        if data is None:
-            raise ValueError("empty response")
-        doc.encoding = res.encoding
-        enc, forced_enc = decide_document_encoding(ctx, doc)
-        ds = data.decode(enc) if need_str else None
-        return data, ds, enc, forced_enc
-    return data
+    res = requests.get(doc.path, cookies=ctx.cookie_jar,
+                       headers={'User-Agent': ctx.user_agent})
+    data = res.content
+    res.close()
+    if data is None:
+        raise ValueError("empty response")
+    doc.encoding = res.encoding
+    enc, forced_enc = decide_document_encoding(ctx, doc)
+    data = data.decode(enc, "surrogateescape")
+    return data, enc, forced_enc
 
 
-def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, content, content_enc, label_regex_match, content_regex_match, doc):
+def gen_final_content_format(mc, format_str, label, di, ci, content_link, content, label_regex_match, content_regex_match, doc):
     opts_list = []
     opts_dict = {}
     if mc.document.multimatch:
@@ -915,26 +961,25 @@ def gen_final_content_format(mc, format_str, label_txt, di, ci, content_link, co
     if mc.content.multimatch:
         opts_list.append(ci)
         opts_dict["ci"] = ci
-    if content_link:
+    if content_link is not None:
         opts_list.append(content_link)
         opts_dict["link"] = content_link
+    if content is not None:
+        opts_dict["content"] = content
 
     if label_regex_match is None:
         label_regex_match = RegexMatch(None)
     if content_regex_match is None:
         content_regex_match = RegexMatch(None)
-    # args: label, content, encoding, document, escape, [url], <lr capture groups>, <cr capture groups>
-    args_list = ([content, label_txt, content_enc, doc.encoding, doc.path, mc.content_escape_sequence]
-                 + opts_list + label_regex_match.group_list + content_regex_match.group_list)
+
+    args_list = label_regex_match.group_list + content_regex_match.group_list
     args_dict = dict(
         list(content_regex_match.group_dict.items())
         + list(label_regex_match.group_dict.items())
         + list(opts_dict.items())
         + list(
             {
-                "content": content,
-                "label": label_txt,
-                "content_enc": content_enc,
+                "label": label,
                 "encoding": doc.encoding,
                 "document": doc.path,
                 "escape": mc.content_escape_sequence
@@ -989,7 +1034,7 @@ def handle_content_match(mc, doc, content_match):
     ci = mc.ci
     di = mc.di
     label_regex_match = content_match.label_regex_match
-    content_txt = mc.content.apply_format(
+    content = mc.content.apply_format(
         content_match.content_regex_match,
         [di, ci],
         ["di", "ci"],
@@ -1015,15 +1060,11 @@ def handle_content_match(mc, doc, content_match):
     else:
         label_context = ""
 
-    if mc.content_raw:
-        content_link = None
-    else:
-        content_link = content_txt
+    content_link = None if mc.content_raw else content
 
     while True:
         if not mc.content_raw:
             content_link = normalize_link(mc.ctx, mc, doc, content_link)
-            context = f'content link "{content_link}"'
 
         if mc.content.interactive:
             prompt_options = [
@@ -1051,7 +1092,7 @@ def handle_content_match(mc, doc, content_match):
                 break
             if res == InteractiveResult.INSPECT:
                 print(
-                    f'content for "{doc.path}"{label_context}:\n' + content_txt)
+                    f'content for "{doc.path}"{label_context}:\n' + content)
                 continue
             if res is not InteractiveResult.EDIT:
                 return res
@@ -1060,12 +1101,12 @@ def handle_content_match(mc, doc, content_match):
             else:
                 print(
                     f'enter new content (terminate with a newline followed by the string "{mc.content_escape_sequence}"):\n')
-                content_txt = ""
+                content = ""
                 while True:
-                    content_txt += input() + "\n"
-                    i = content_txt.find("\n" + mc.content_escape_sequence)
+                    content += input() + "\n"
+                    i = content.find("\n" + mc.content_escape_sequence)
                     if i != -1:
-                        content_txt = content_txt[:i]
+                        content = content[:i]
                         break
         break
 
@@ -1099,69 +1140,32 @@ def handle_content_match(mc, doc, content_match):
                 if res == InteractiveResult.ACCEPT:
                     break
                 if res == InteractiveResult.INSPECT:
-                    print(f'"{doc.path}": content for "{label}":\n' + content_txt)
+                    print(f'"{doc.path}": content for "{label}":\n' + content)
                     continue
                 if res != InteractiveResult.EDIT:
                     return res
             label = input("enter new label: ")
 
-    if not mc.content_raw:
-        try:
-            if mc.content_download_required:
-                content_bytes, content_txt, _enc, _forced_enc = fetch_doc(
-                    mc.ctx,
-                    Document(
-                        doc.document_type.derived_type(),
-                        content_link, mc, doc.match_chains
-                    ),
-                    True, True, mc.need_content_enc
-                )
-            else:
-                content_bytes = None
-                content_txt = None
-        except Exception as ex:
-            log(mc.ctx, Verbosity.ERROR,
-                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_link}"\n')
-            return InteractiveResult.ACCEPT
-    else:
-        content_bytes = content_txt
-
-    if mc.need_content_enc:
-        content_enc = content_txt.encode(mc.content_encoding)
-    else:
-        content_enc = None
-
-    if mc.content_print_format:
-        print_data = gen_final_content_format(
-            mc, mc.content_print_format, label, di, ci, content_link,
-            content_bytes, content_enc,
-            content_match.label_regex_match, content_match.content_regex_match,
-            doc
-        )
-        sys.stdout.buffer.write(print_data)
-        sys.stdout.flush()
-
+    save_path = None
     if mc.content_save_format:
         if not mc.is_valid_label(label):
             log(mc.ctx, Verbosity.WARN,
                 f"matched label '{label}' would contain a slash, skipping this content from: {doc.path}")
-        context = f"{doc.path}{di_ci_context}"
         save_path = gen_final_content_format(
             mc, mc.content_save_format, label, di, ci, content_link,
-            content_bytes, content_enc,
-            content_match.label_regex_match, content_match.content_regex_match,
+            content, content_match.label_regex_match, content_match.content_regex_match,
             doc
         )
         try:
             save_path = save_path.decode("utf-8")
         except Exception:
             log(mc.ctx, Verbosity.ERROR,
-                f"{context}: generated save path is not valid utf-8")
+                f"{doc.path}{di_ci_context}: generated save path is not valid utf-8")
             save_path = None
         while True:
             if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
                 log(mc.ctx, Verbosity.ERROR,
-                    f"{context}: directory of generated save path does not exist")
+                    f"{doc.path}{di_ci_context}: directory of generated save path does not exist")
                 save_path = None
             if not save_path and not mc.save_path_interactive:
                 return False
@@ -1169,7 +1173,7 @@ def handle_content_match(mc, doc, content_match):
                 break
             if save_path:
                 res = prompt(
-                    f'{context}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
+                    f'{doc.path}{di_ci_context}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
                     [
                         (InteractiveResult.ACCEPT, yes_indicating_strings),
                         (InteractiveResult.REJECT, no_indicating_strings),
@@ -1185,28 +1189,10 @@ def handle_content_match(mc, doc, content_match):
                 if res != InteractiveResult.EDIT:
                     return res
             save_path = input("enter new save path: ")
-        try:
-            f = open(save_path, "wb")
-        except Exception as ex:
-            error(
-                f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
 
-        try:
-            f = open(save_path, "wb")
-        except Exception as ex:
-            error(
-                f"{context}: aborting! failed to write to file '{save_path}': {ex.msg}")
+    download_content(mc, doc, di_ci_context, content_match, di,
+                     ci, label, content, content_link, save_path)
 
-        write_data = gen_final_content_format(
-            mc, mc.content_write_format, label, di, ci, content_link,
-            content_bytes, content_enc,
-            content_match.label_regex_match, content_match.content_regex_match,
-            doc
-        )
-        f.write(write_data)
-        f.close()
-        log(mc.ctx, Verbosity.INFO,
-            f"{context}: wrote content into {save_path}")
     mc.ci += 1
     return InteractiveResult.ACCEPT
 
@@ -1523,8 +1509,7 @@ def dl(ctx):
 
         try_number = 0
         try:
-            src, src_enc, enc, forced_enc = fetch_doc(
-                ctx, doc, False, True, False)
+            src, enc, forced_enc = fetch_doc(ctx, doc, False)
         except (
             selenium.common.exceptions.InvalidSessionIdException,
             selenium.common.exceptions.NoSuchWindowException
@@ -1559,16 +1544,19 @@ def dl(ctx):
                 src_xml = None
                 if have_xpath_matching:
                     try:
-                        if src.strip() == b'':
+                        if src.strip() == "":
                             src_xml = lxml.etree.Element("html")
                         elif forced_enc:
                             src_xml = lxml.html.fromstring(
-                                src, parser=lxml.html.HTMLParser(encoding=enc))
+                                src.encode(enc, "surrogateescape"),
+                                parser=lxml.html.HTMLParser(encoding=enc)
+                            )
                         else:
                             src_xml = lxml.html.fromstring(src)
                     except Exception as ex:
-                        log(ctx, Verbosity.ERROR, f"{doc.path}: failed to parse as xml: {str(ex)}")
-                        continue
+                        log(ctx, Verbosity.ERROR,
+                            f"{doc.path}: failed to parse as xml: {str(ex)}")
+                        break
 
                 for mc in doc.match_chains:
                     if mc.satisfied:
@@ -1895,8 +1883,6 @@ def main():
         if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg, True):
             continue
 
-        if apply_mc_arg(ctx, "cenc", ["content_encoding"], arg, parse_encoding_arg):
-            continue
         if apply_mc_arg(ctx, "cienc", ["content_input_encoding"], arg, parse_encoding_arg):
             continue
         if apply_mc_arg(ctx, "cfienc", ["content_forced_input_encoding"], arg, parse_encoding_arg):
