@@ -899,7 +899,18 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
         tmp_filename += ".bin"
 
     if doc.document_type == DocumentType.FILE:
-        link = "file:" + link
+        cur_url = ctx.selenium_driver.current_url
+        if begins(cur_url, "file:"):
+            if ctx.selenium_variant == SeleniumVariant.CHROME:
+                if not os.path.isabs(link):
+                    cur_path = os.path.realpath(
+                        os.path.dirname(cur_url[len("file:"):]))
+                    filepath = os.path.join(cur_path, link)
+                with open(filepath, "rb") as f:
+                    return f.read()
+            else:
+                link = "file:" + link
+                
 
     ctx.selenium_dl_index += 1
     tmp_path = os.path.join(ctx.selenium_download_dir, tmp_filename)
