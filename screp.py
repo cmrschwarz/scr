@@ -552,7 +552,7 @@ def help(err=False):
     Other:
         selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
         seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
-    
+
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
         Use "-" for ranges, "," for multiple specifications, and "^" to except the following chains.
@@ -2271,5 +2271,11 @@ if __name__ == "__main__":
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning)
         exit(main())
-    except (KeyboardInterrupt, BrokenPipeError):
+    except BrokenPipeError:
+        # Python flushes standard streams on exit; redirect remaining output
+        # to devnull to avoid another BrokenPipeError at shutdown
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(1)
+    except (KeyboardInterrupt):
         exit(1)
