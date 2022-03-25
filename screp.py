@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from ctypes import sizeof
-from http import cookies
 import lxml
 import lxml.html
 import requests
@@ -17,6 +15,7 @@ from tbselenium.tbdriver import TorBrowserDriver
 from selenium import webdriver
 import selenium.webdriver.chrome.service
 import selenium.webdriver.firefox.service
+from selenium.common.exceptions import WebDriverException
 from collections import deque
 from enum import Enum, IntEnum
 import time
@@ -133,9 +132,9 @@ verbosities_dict = {
 
 verbosities_display_dict = {
     Verbosity.ERROR: "[ERROR]: ",
-    Verbosity.WARN:  "[WARN]:  ",
-    Verbosity.INFO:  "[INFO]:  ",
-    Verbosity.DEBUG: "[DEBUG]:  ",
+    Verbosity.WARN:  "[ WARN]: ",
+    Verbosity.INFO:  "[ INFO]: ",
+    Verbosity.DEBUG: "[DEBUG]: ",
 }
 
 
@@ -632,7 +631,7 @@ def setup_selenium_tor(ctx):
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
 
-    except selenium.WebDriverException as ex:
+    except WebDriverException as ex:
         error(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
@@ -645,7 +644,7 @@ def setup_selenium_firefox(ctx):
     try:
         ctx.selenium_driver = webdriver.Firefox(
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
-    except selenium.WebDriverException as ex:
+    except WebDriverException as ex:
         error(f"failed to start geckodriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
@@ -669,7 +668,7 @@ def setup_selenium_chrome(ctx):
     try:
         ctx.selenium_driver = webdriver.Chrome(
             options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
-    except selenium.WebDriverException as ex:
+    except WebDriverException as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
@@ -945,7 +944,7 @@ def selenium_has_died(ctx):
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except selenium.WebDriverException as e:
+    except WebDriverException as e:
         return True
 
 
@@ -1022,9 +1021,12 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
     try:
         mc.ctx.selenium_driver.execute_script(
             script_source, link, tmp_filename)
-    except selenium.WebDriverException as ex:
-        log(mc.ctx, Verbosity.ERROR,
-            f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
+    except WebDriverException as ex:
+        if selenium_has_died(mc.ctx):
+            warn_selenium_died(mc.ctx)
+        else:
+            log(mc.ctx, Verbosity.ERROR,
+                f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
         return None
     i = 0
     while True:
@@ -1079,7 +1081,10 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
     try:
         res = mc.ctx.selenium_driver.execute_script(
             script_source, link)
-    except selenium.WebDriverException as ex:
+    except WebDriverException as ex:
+        if selenium_has_died(mc.ctx):
+            warn_selenium_died(mc.ctx)
+            return None
         err = str(ex)
     if "error" in res:
         err = res["error"]
@@ -1113,6 +1118,14 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
 def requests_dl(ctx, path):
     return requests.get(path, cookies=ctx.cookie_jar,
                         headers={'User-Agent': ctx.user_agent}, allow_redirects=True)
+
+
+def warn_selenium_died(ctx):
+    log(ctx, Verbosity.WARN, "the selenium instance was closed unexpectedly")
+
+
+def report_selenium_error(ctx, ex):
+    log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
 def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
@@ -1189,8 +1202,12 @@ def fetch_doc(ctx, doc):
         data = ctx.selenium_driver.page_source
         return data, enc, forced_enc
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-        with open(doc.path, "rb") as f:
-            data = f.read()
+        try:
+            with open(doc.path, "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            raise ScrepFetchError("no such file or directory")
+
         enc, forced_enc = decide_document_encoding(ctx, doc)
         data = data.decode(enc, errors="surrogateescape")
         return data, enc, forced_enc
@@ -1324,8 +1341,12 @@ def handle_content_match(mc, doc, content_match):
             else:
                 try:
                     doc_url = mc.ctx.selenium_driver.current_url
-                except selenium.WebDriverException as ex:
+                except WebDriverException as ex:
                     # selenium died, abort
+                    if selenium_has_died(mc.ctx):
+                        warn_selenium_died(mc.ctx)
+                    else:
+                        report_selenium_error(mc.ctx, ex)
                     return InteractiveResult.REJECT
 
             content_link = normalize_link(
@@ -1793,15 +1814,17 @@ def dl(ctx):
         try_number = 0
         try:
             src, enc, forced_enc = fetch_doc(ctx, doc)
-        except (
-            selenium.common.exceptions.InvalidSessionIdException,
-            selenium.common.exceptions.NoSuchWindowException
-        ):
-            closed = True
+        except WebDriverException as ex:
+            if selenium_has_died(ctx):
+                warn_selenium_died(ctx)
+                closed = True
+            else:
+                log(ctx, Verbosity.ERROR,
+                    f"Failed to fetch {doc.path}: {str(ex)}")
             break
         except ScrepFetchError as ex:
             log(ctx, Verbosity.ERROR,
-                f"Failed to fetch {doc.path}\n    {str(ex)}")
+                f"Failed to fetch {doc.path}: {str(ex)}")
             continue
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
@@ -1811,17 +1834,17 @@ def dl(ctx):
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
-                if selenium_has_died(ctx):
-                    closed = True
-                    break
-
                 try:
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == src)
                     src = src_new
-                except selenium.WebDriverException as e:
-                    log(ctx, Verbosity.ERROR,
-                        "selenium error: failed to fetch page source")
+                except WebDriverException as e:
+                    if selenium_has_died(ctx):
+                        warn_selenium_died(ctx)
+                        closed = True
+                    else:
+                        log(ctx, Verbosity.ERROR,
+                            f"selenium failed to fetch page source: {str(ex)}")
                     break
 
             if not same_content:
@@ -1872,7 +1895,7 @@ def dl(ctx):
         if not ctx.selenium_keep_alive:
             try:
                 ctx.selenium_driver.close()
-            except selenium.WebDriverException:
+            except WebDriverException:
                 pass
 
 
