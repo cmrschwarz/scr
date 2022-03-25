@@ -25,8 +25,8 @@ def get_key_with_default(obj, key, default=""):
     return obj[key] if key in obj else default
 
 def get_cmd_string(tc):
-    cmd = "screp"
-    for arg in tc["args"]:
+    cmd = tc.get("command", "screp")
+    for arg in tc.get("args", []):
         cmd += " " + shellescape.quote(arg)
     return cmd
 
@@ -74,6 +74,7 @@ for name in glob.glob("./test/cases/*.json"):
         continue
 
     ec = tc.get("ec", 0)
+    command = tc.get("command", "screp")
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
     expected_stderr = tc.get("stderr", "")
@@ -81,7 +82,7 @@ for name in glob.glob("./test/cases/*.json"):
     sys.stdout.write(msg_inprogress)
     sys.stdout.flush()
     proc = subprocess.Popen(
-        ["screp"] + tc["args"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=os.environ
+        [command] + tc.get("args", []), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=os.environ
     )
     output = proc.communicate(input=stdin)
     success = False
