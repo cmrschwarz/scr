@@ -2138,7 +2138,7 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
         if support_blank:
             val = blank_val
         else:
-            error("missing '=' and value for option {optname}")
+            error(f"missing '=' and value for option '{optname}'")
     else:
         nc = arg[len(optname):]
         if chain_regex.match(nc):
