@@ -2102,7 +2102,7 @@ def select_variant(val, variants_dict):
 def parse_variant_arg(val, variants_dict, arg):
     res = select_variant(val, variants_dict)
     if res is None:
-        error(f"no matching selenium variant for '{arg}'")
+        error(f"illegal argument '{arg}', valid options for {arg[:len(arg)-len(val)-1]} are: {', '.join(sorted(variants_dict.keys()))}")
     return res
 
 
@@ -2285,7 +2285,8 @@ def main():
             continue
         if apply_ctx_arg(ctx, "uar", "user_agent_random", arg, parse_bool_arg, True):
             continue
-        if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)): continue
+        if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)):
+            continue
 
         error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)

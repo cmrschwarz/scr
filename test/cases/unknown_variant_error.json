@@ -1,0 +1,8 @@
+
+{
+    "args": [
+        "v="
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: illegal argument 'v=', valid options for v are: debug, error, info, warn\n"
+}
