@@ -6,8 +6,8 @@
         "sel=f",
         "cl=t",
         "cpf={content}",
-        "seldl1=e",
-        "seldl2=f"
+        "seldl2=f",
+        "seldl1=e"
     ],
     "stdout": "a\nb\na\nb\n"
 }

@@ -1757,15 +1757,16 @@ def decide_document_encoding(ctx, doc):
 
 def parse_xml(ctx, doc, src, enc, forced_enc):
     try:
+        src_bytes = src.encode(enc, errors="surrogateescape")
         if src.strip() == "":
             src_xml = lxml.etree.Element("html")
         elif forced_enc:
             src_xml = lxml.html.fromstring(
-                src.encode(enc, errors="surrogateescape"),
+                src_bytes,
                 parser=lxml.html.HTMLParser(encoding=enc)
             )
         else:
-            src_xml = lxml.html.fromstring(src)
+            src_xml = lxml.html.fromstring(src_bytes)
         return src_xml
     except Exception as ex:
         log(ctx, Verbosity.ERROR,
