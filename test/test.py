@@ -49,17 +49,22 @@ for tf in glob.glob("./test/cases/*.json"):
     with open(tf, "r") as f:
         tc = json.load(f)
     name = tf
-    tags = set(tc.get("tags", []))
+    tags = tc.get("tags", [])
+    tags.append(name)
     discard = False
-    for t in tags_need:
-        if t not in tags:
+    for tn in tags_need:
+        for t in tags:
+            if tn in t:
+                break
+        else:
             discard = True
             break
     else:
-        for t in tags_avoid:
-            if t in tags:
-                discard = True
-                break
+        for ta in tags_avoid:
+            for t in tags:
+                if ta in t:
+                    discard = True
+                    break
     if discard:
         skipped += 1
         # print(f"{ANSI_YELLOW}SKIPPED {name}{ANSI_CLEAR}")
