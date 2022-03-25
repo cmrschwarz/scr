@@ -913,8 +913,8 @@ def selenium_has_died(ctx):
         return True
 
 
-def selenium_setup_cors_tab(ctx, doc_url, link, dl_index):
-    doc_url = urllib.parse.urlparse(doc_url)
+def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
+    doc_url = urllib.parse.urlparse(doc_link)
     link_url = urllib.parse.urlparse(link)
     if doc_url.netloc == link_url.netloc:
         return None
@@ -948,8 +948,8 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
 
     tmp_path = os.path.join(mc.ctx.selenium_download_dir, tmp_filename)
     script_source = """
-        url = arguments[0];
-        filename = arguments[1];
+        const url = arguments[0];
+        const filename = arguments[1];
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
@@ -992,7 +992,7 @@ def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
     dl_index = mc.ctx.selenium_dl_index
     mc.ctx.selenium_dl_index += 1
     script_source = """
-        url = arguments[0];
+        const url = arguments[0];
         return (async () => {
             return await fetch(url, {
                 method: 'GET',
@@ -1042,14 +1042,9 @@ def selenium_download_from_local_file(mc, doc, di_ci_context, doc_url, link):
 
 def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     doc_url = mc.ctx.selenium_driver.current_url
-    if doc.document_type == DocumentType.FILE:
-        # chrome doesn't support CORS for file:// urls so we
-        # have a special case those
-        if begins(doc_url, "file:"):
-            if mc.ctx.selenium_variant == SeleniumVariant.CHROME:
-                return selenium_download_from_local_file(mc, doc, di_ci_context, doc_url, link)
-            else:
-                link = "file:" + link
+
+    if doc.document_type == DocumentType.FILE and urllib.parse.urlparse(link).scheme in ["", "file"]:
+        return selenium_download_from_local_file(mc, doc, di_ci_context, doc_url, link)
     if mc.selenium_download_strategy == SeleniumDownloadStrategy.JAVASCRIPT:
         return selenium_download_js(mc, di_ci_context, doc, doc_url, link)
     assert mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL
@@ -1221,14 +1216,15 @@ def normalize_link(ctx, mc, src_doc, doc_path, link):
     if (mc and mc.forced_document_scheme):
         url_parsed = url_parsed._replace(scheme=mc.forced_document_scheme)
     elif url_parsed.scheme == "":
-        if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme != "":
+        if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme not in ["", "file"]:
             scheme = doc_url_parsed.scheme
         elif mc and mc.default_document_scheme:
             scheme = mc.default_document_scheme
         else:
             scheme = ctx.fallback_document_scheme
         url_parsed = url_parsed._replace(scheme=scheme)
-    return url_parsed.geturl()
+    res = url_parsed.geturl()
+    return res
 
 
 def handle_content_match(mc, doc, content_match):
@@ -1268,7 +1264,12 @@ def handle_content_match(mc, doc, content_match):
             if mc.ctx.selenium_variant == SeleniumVariant.DISABLED:
                 doc_url = doc.path
             else:
-                doc_url = mc.ctx.selenium_driver.current_url
+                try:
+                    doc_url = mc.ctx.selenium_driver.current_url
+                except Exception as ex:
+                    # selenium died, abort
+                    return InteractiveResult.REJECT
+
             content_link = normalize_link(
                 mc.ctx, mc, doc, doc_url, content_link)
 

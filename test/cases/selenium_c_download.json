@@ -1,7 +1,7 @@
 {
     "args": [
         "file=./test/res/resources.html",
-        "cx=//img/@src",
+        "cx=//embed/@src",
         "sel=c",
         "cl=t",
         "cpf={content}",

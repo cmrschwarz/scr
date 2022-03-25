@@ -1,7 +1,8 @@
 {
     "args": [
         "file=./test/res/multidoc.html",
-        "dx1=//img/@src"
+        "dx=//iframe/@src",
+        "cx=//ul[@id='basic']/li/text()"
     ],
-    "stdout": ""
+    "stdout": "Foo\nBar\nBaz\n"
 }
