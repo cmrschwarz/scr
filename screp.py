@@ -439,6 +439,7 @@ class DlContext:
         self.user_agent = None
         self.verbosity = Verbosity.WARN
         self.documents_bfs = False
+        self.selenium_keep_alive = False
 
         if blank:
             for k in self.__dict__:
@@ -545,6 +546,10 @@ def help(err=False):
         file=<path>         fetch a document from a file, derived documents matches are (relative) file pathes
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
+    Other:
+        selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
+        seldl=<dl strategy> download strategy for selenium (default: javascript, values: javascript, internal)
+    
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
         Use "-" for ranges, "," for multiple specifications, and "^" to except the following chains.
@@ -557,11 +562,10 @@ def help(err=False):
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
         uar=<bool>          use a rangom user agent
+        selkeep=<bool>      keep selenium instance alive after the command finished
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
         sel=<browser>       use selenium to load urls into an interactive browser session
                             (default: disabled, values: tor, chrome, firefox, disabled)
-        selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
-        seldl=<dl strategy> download strategy for selenium (default: javascript, values: javascript, internal)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
         """.strip()
@@ -1024,7 +1028,6 @@ def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
     try:
         res = mc.ctx.selenium_driver.execute_script(
             script_source, link)
-        selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     except Exception as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
@@ -1032,7 +1035,10 @@ def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
     if "error" in res:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: selenium download failed: {res['error']}")
+        if not mc.ctx.selenium_keep_alive:
+            selenium_close_cors_tab(mc.ctx, cors_prev_tab)
         return None
+    selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     return binascii.a2b_base64(res["ok"])
 
 
@@ -1814,10 +1820,11 @@ def dl(ctx):
                 mc, doc, content_skip_doc, doc_skip_doc
             )
     if ctx.selenium_variant != SeleniumVariant.DISABLED and not closed:
-        try:
-            ctx.selenium_driver.close()
-        except Exception:
-            pass
+        if not ctx.selenium_keep_alive:
+            try:
+                ctx.selenium_driver.close()
+            except Exception:
+                pass
 
 
 def finalize(ctx):
@@ -2186,7 +2193,10 @@ def main():
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):
             continue
 
-        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)): continue
+        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)): 
+            continue
+        if apply_ctx_arg(ctx, "selkeep", "selenium_keep_alive", arg, parse_bool_arg, True):
+            continue
         if apply_ctx_arg(ctx, "tbdir", "tor_browser_dir", arg):
             continue
         if apply_ctx_arg(ctx, "bfs", "documents_bfs", arg, parse_bool_arg, True):
