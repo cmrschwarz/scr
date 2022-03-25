@@ -234,7 +234,7 @@ class Locator:
                     elif k not in known_keys:
                         error(
                             f"unknown key {{{k}}} in {self.name[0]}f={self.format}")
-            except Exception as ex:
+            except re.error as ex:
                 error(
                     f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
 
@@ -245,7 +245,7 @@ class Locator:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
             error(f"aborting! invalid xpath: '{self.xpath}'")
-        except Exception as ex:
+        except lxml.LxmlError as ex:
             error(
                 f"aborting! failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
@@ -265,14 +265,14 @@ class Locator:
                 if return_xml_tuple:
                     try:
                         res_xml.append(lxml.html.fromstring(string))
-                    except Exception:
+                    except lxml.LxmlError:
                         pass
             else:
                 try:
                     res.append(lxml.html.tostring(xm, encoding="unicode"))
                     if return_xml_tuple:
                         res_xml.append(xm)
-                except Exception as ex1:
+                except (lxml.LxmlError, UnicodeEncodeError) as ex1:
                     log(ctx, Verbosity.WARN,
                         f"{path}: xpath match encoding failed: {str(ex1)}")
 
@@ -479,7 +479,7 @@ def error(msg):
 def unescape_string(txt, context):
     try:
         return txt.encode("utf-8").decode("unicode_escape")
-    except Exception as ex:
+    except (UnicodeEncodeError, UnicodeDecodeError) as ex:
         error(f"failed to unescape {context}: {str(ex)}")
 
 
@@ -632,7 +632,7 @@ def setup_selenium_tor(ctx):
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
 
-    except Exception as ex:
+    except selenium.WebDriverException as ex:
         error(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
@@ -645,7 +645,7 @@ def setup_selenium_firefox(ctx):
     try:
         ctx.selenium_driver = webdriver.Firefox(
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
-    except Exception as ex:
+    except selenium.WebDriverException as ex:
         error(f"failed to start geckodriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
@@ -669,7 +669,7 @@ def setup_selenium_chrome(ctx):
     try:
         ctx.selenium_driver = webdriver.Chrome(
             options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
-    except Exception as ex:
+    except selenium.WebDriverException as ex:
         error(f"failed to start chromedriver: {str(ex)}")
     ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
@@ -869,6 +869,10 @@ def setup(ctx):
             ctx.cookie_jar = MozillaCookieJar()
             ctx.cookie_jar.load(
                 ctx.cookie_file, ignore_discard=True, ignore_expires=True)
+        # this exception handling is really ugly but this is how this library
+        # does it internally
+        except OSError:
+            raise
         except Exception as ex:
             error(f"failed to read cookie file: {str(ex)}")
     if ctx.user_agent is not None and ctx.user_agent_random:
@@ -941,7 +945,7 @@ def selenium_has_died(ctx):
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except Exception as e:
+    except selenium.WebDriverException as e:
         return True
 
 
@@ -1018,7 +1022,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
     try:
         mc.ctx.selenium_driver.execute_script(
             script_source, link, tmp_filename)
-    except Exception as ex:
+    except selenium.WebDriverException as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
         return None
@@ -1075,7 +1079,7 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
     try:
         res = mc.ctx.selenium_driver.execute_script(
             script_source, link)
-    except Exception as ex:
+    except selenium.WebDriverException as ex:
         err = str(ex)
     if "error" in res:
         err = res["error"]
@@ -1113,25 +1117,20 @@ def requests_dl(ctx, path):
 
 def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
     if not mc.content_raw:
-        try:
-            if mc.content_download_required:
-                if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
-                    content = selenium_download(
-                        mc, doc, di_ci_context, content_path, save_path)
-                    if content is None:
-                        return InteractiveResult.ACCEPT
+        if mc.content_download_required:
+            if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
+                content = selenium_download(
+                    mc, doc, di_ci_context, content_path, save_path)
+                if content is None:
+                    return InteractiveResult.ACCEPT
+            else:
+                if doc.document_type.derived_type() is DocumentType.FILE:
+                    with open(content_path, "rb") as f:
+                        content = f.read()
                 else:
-                    if doc.document_type.derived_type() is DocumentType.FILE:
-                        with open(content_path, "rb") as f:
-                            content = f.read()
-                    else:
-                        res = requests_dl(mc.ctx, content_path)
-                        content = res.content
-                        res.close()
-        except Exception as ex:
-            log(mc.ctx, Verbosity.ERROR,
-                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}": {str(ex)}"')
-            return InteractiveResult.ACCEPT
+                    res = requests_dl(mc.ctx, content_path)
+                    content = res.content
+                    res.close()
 
     if mc.content_print_format:
         print_data = gen_final_content_format(
@@ -1149,7 +1148,7 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
             log(mc.ctx, Verbosity.ERROR,
                 f"{doc.path}{di_ci_context}: file already exists: {save_path}")
             return InteractiveResult.ACCEPT
-        except Exception as ex:
+        except OSError as ex:
             log(mc.ctx, Verbosity.ERROR,
                 f"{doc.path}{di_ci_context}: failed to write to file '{save_path}': {ex.msg}")
             return InteractiveResult.ACCEPT
@@ -1176,6 +1175,10 @@ def selenium_driver_get_with_cookies(ctx, path):
         ctx.selenium_driver.get(path)
 
 
+class ScrepFetchError(Exception):
+    pass
+
+
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         selpath = doc.path
@@ -1196,7 +1199,7 @@ def fetch_doc(ctx, doc):
     data = res.content
     res.close()
     if data is None:
-        raise ValueError("empty response")
+        raise ScrepFetchError("empty response")
     doc.encoding = res.encoding
     enc, forced_enc = decide_document_encoding(ctx, doc)
     data = data.decode(enc, errors="surrogateescape")
@@ -1321,7 +1324,7 @@ def handle_content_match(mc, doc, content_match):
             else:
                 try:
                     doc_url = mc.ctx.selenium_driver.current_url
-                except Exception as ex:
+                except selenium.WebDriverException as ex:
                     # selenium died, abort
                     return InteractiveResult.REJECT
 
@@ -1419,8 +1422,8 @@ def handle_content_match(mc, doc, content_match):
             doc
         )
         try:
-            save_path = save_path.decode("utf-8")
-        except Exception:
+            save_path = save_path.decode("utf-8", error="surrogateescape")
+        except UnicodeDecodeError:
             log(mc.ctx, Verbosity.ERROR,
                 f"{doc.path}{di_ci_context}: generated save path is not valid utf-8")
             save_path = None
@@ -1768,7 +1771,7 @@ def parse_xml(ctx, doc, src, enc, forced_enc):
         else:
             src_xml = lxml.html.fromstring(src_bytes)
         return src_xml
-    except Exception as ex:
+    except (lxml.LxmlError, UnicodeEncodeError, UnicodeDecodeError) as ex:
         log(ctx, Verbosity.ERROR,
             f"{doc.path}: failed to parse as xml: {str(ex)}")
         return None
@@ -1796,7 +1799,7 @@ def dl(ctx):
         ):
             closed = True
             break
-        except Exception as ex:
+        except ScrepFetchError as ex:
             log(ctx, Verbosity.ERROR,
                 f"Failed to fetch {doc.path}\n    {str(ex)}")
             continue
@@ -1816,7 +1819,7 @@ def dl(ctx):
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == src)
                     src = src_new
-                except Exception as e:
+                except selenium.WebDriverException as e:
                     log(ctx, Verbosity.ERROR,
                         "selenium error: failed to fetch page source")
                     break
@@ -1869,7 +1872,7 @@ def dl(ctx):
         if not ctx.selenium_keep_alive:
             try:
                 ctx.selenium_driver.close()
-            except Exception:
+            except selenium.WebDriverException:
                 pass
 
 
@@ -2076,7 +2079,7 @@ def verify_encoding(encoding):
     try:
         "!".encode(encoding=encoding)
         return True
-    except Exception:
+    except UnicodeEncodeError:
         return False
 
 
@@ -2255,8 +2258,10 @@ def main():
 
         error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
     setup(ctx)
-    dl(ctx)
-    finalize(ctx)
+    try:
+        dl(ctx)
+    finally:
+        finalize(ctx)
     return 0
 
 
@@ -2266,5 +2271,5 @@ if __name__ == "__main__":
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning)
         exit(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, BrokenPipeError):
         exit(1)
