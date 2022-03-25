@@ -24,6 +24,7 @@ import itertools
 import warnings
 import copy
 import binascii
+import shutil
 import mimetypes
 
 
@@ -933,6 +934,9 @@ def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
 
 def selenium_close_cors_tab(ctx, cors_prev_tab):
     if cors_prev_tab is not None:
+        # make sure the page is loaded so the
+        # download is not aborted by closing the document early
+        _ = ctx.selenium_driver.page_source
         ctx.selenium_driver.close()
         ctx.selenium_driver.switch_to.window(cors_prev_tab)
 
@@ -1818,7 +1822,7 @@ def dl(ctx):
 
 def finalize(ctx):
     if ctx.selenium_download_dir:
-        os.rmdir(ctx.selenium_download_dir)
+        shutil.rmtree(ctx.selenium_download_dir)
 
 
 def begins(string, begin):
