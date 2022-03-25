@@ -2,7 +2,7 @@
     "args": [
         "file=./test/res/multidoc.html",
         "dx=//iframe/@src",
-        "cx=//ul[@id='basic']/li/text()"
+        "cx=//div[@id='basic']//li/text()"
     ],
     "stdout": "Foo\nBar\nBaz\n"
 }

@@ -1488,13 +1488,12 @@ def gen_content_matches(mc, doc, src, src_xml):
 
 def gen_document_matches(mc, doc, src, src_xml):
     # TODO: fix interactive matching for docs and give ci di chain to regex
-    new_paths = mc.document.apply(mc.ctx, src, src_xml, doc.path)
+    paths = mc.document.apply(mc.ctx, src, src_xml, doc.path)
     if doc.document_type == DocumentType.FILE:
         base = os.path.dirname(doc.path)
-        for i, p in enumerate(new_paths):
+        for i, p in enumerate(paths):
             if not os.path.isabs(p):
-                os.path.abspath
-                new_paths[i] = os.path.normpath(os.path.join(base, p))
+                paths[i] = os.path.normpath(os.path.join(base, p))
     return [
         Document(
             doc.document_type.derived_type(),
@@ -1502,7 +1501,7 @@ def gen_document_matches(mc, doc, src, src_xml):
             mc,
             mc.document_output_chains
         )
-        for path in new_paths
+        for path in paths
     ]
 
 
@@ -1629,7 +1628,7 @@ def handle_match_chain(mc, doc, src, src_xml):
             not mc.document_matches
             and mc.need_document_matches(True)
         )
-        if not contents_missing and not documents_missing:
+        if not contents_missing or not documents_missing:
             waiting = False
     else:
         assert mc.selenium_strategy in [
