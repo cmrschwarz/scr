@@ -963,10 +963,14 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
     # we absolutely don't want to use this for tor since it would
     # expose our real ip to the server
     assert mc.ctx.selenium_variant != SeleniumVariant.TORBROWSER
-    res = requests_dl(mc.ctx, link)
-    data = res.content
-    res.close()
-    return data
+    try:
+        res = requests_dl(mc.ctx, link)
+        data = res.content
+        res.close()
+        return data
+    except requests.exceptions.ConnectionError:
+        log(mc.ctx, Verbosity.ERROR,f"{doc.path}{di_ci_context}: failed to download '{link}': connection failed")
+        return None
 
 
 def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
@@ -1210,7 +1214,6 @@ def fetch_doc(ctx, doc):
                 data = f.read()
         except FileNotFoundError:
             raise ScrepFetchError("no such file or directory")
-
         enc, forced_enc = decide_document_encoding(ctx, doc)
         data = data.decode(enc, errors="surrogateescape")
         return data, enc, forced_enc
@@ -1826,8 +1829,10 @@ def dl(ctx):
                     f"Failed to fetch {doc.path}: {str(ex)}")
             break
         except ScrepFetchError as ex:
-            log(ctx, Verbosity.ERROR,
-                f"Failed to fetch {doc.path}: {str(ex)}")
+            log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: {str(ex)}")
+            continue
+        except requests.exceptions.ConnectionError as ex:
+            log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: connection failed")
             continue
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
