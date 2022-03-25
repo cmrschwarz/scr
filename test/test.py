@@ -24,22 +24,47 @@ DASH_BAR = "-" * 80
 def get_key_with_default(obj, key, default=""):
     return obj[key] if key in obj else default
 
-
-fails = 0
-successes = 0
-
-
 def get_cmd_string(tc):
     cmd = "screp"
     for arg in tc["args"]:
         cmd += " " + shellescape.quote(arg)
     return cmd
 
+fails = 0
+skipped = 0
+successes = 0
+
+tags_need = []
+tags_avoid = []
+
+for t in sys.argv[1:]:
+    if not t: continue
+    if t[0] == "-":
+        tags_avoid.append(t[1:])
+    else:
+        tags_need.append(t)
+
+
 
 for tf in glob.glob("./test/cases/*.json"):
     with open(tf, "r") as f:
         tc = json.load(f)
     name = tf
+    tags = set(tc.get("tags", []))
+    discard = False
+    for t in tags_need:
+        if t not in tags:
+            discard = True
+            break
+    if not discard:
+        for t in tags_avoid:
+            if t in tags:
+                discard = True
+                break
+    if discard:
+        skipped += 1
+        # print(f"{ANSI_YELLOW}SKIPPED {name}{ANSI_CLEAR}")
+        continue
     ec = tc.get("ec", 0)
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
@@ -79,8 +104,10 @@ for tf in glob.glob("./test/cases/*.json"):
         sys.stdout.write("\r" + " " * len(msg_inprogress))
     sys.stdout.write("\r" + msg_result + "\n")
 
+if skipped:
+    skip_notice = f", {skipped} test(s) skipped"
 if fails:
-    print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{ANSI_CLEAR}")
+    print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{skip_notice}{ANSI_CLEAR}")
 else:
     print(
-        f"{ANSI_GREEN}{successes} test(s) passed{ANSI_CLEAR}")
+        f"{ANSI_GREEN}{successes} test(s) passed{skip_notice}{ANSI_CLEAR}")

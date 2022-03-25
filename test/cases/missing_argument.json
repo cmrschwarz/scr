@@ -3,6 +3,7 @@
     "args": [
         "sel"
     ],
+    "tags": ["sel"],
     "ec": 1,
     "stderr": "[ERROR]: missing '=' and value for option 'sel'\n"
 }
