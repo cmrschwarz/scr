@@ -244,15 +244,15 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(f"aborting! invalid xpath: '{self.xpath}'")
+            error(f"invalid xpath: '{self.xpath}'")
         except lxml.LxmlError as ex:
             error(
-                f"aborting! failed to apply xpath '{self.xpath}' to {path}: "
+                f"failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
             )
         if not isinstance(xpath_matches, list):
             error(
-                f"aborting! invalid xpath: '{self.xpath}'")
+                f"invalid xpath: '{self.xpath}'")
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
@@ -625,7 +625,7 @@ def setup_selenium_tor(ctx):
         if tb_env_var in os.environ:
             ctx.tor_browser_dir = os.environ[tb_env_var]
         else:
-            error(f"error! no tbdir specified, check --help")
+            error(f"no tbdir specified, check --help")
     try:
         options = webdriver.firefox.options.Options()
         selenium_apply_firefox_options(ctx, options)
@@ -1714,7 +1714,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
                 log(
                     mc.ctx,
                     Verbosity.WARN,
-                    f"no labels! skipping remaining {len(mc.content_matches) - i}"
+                    f"no labels: skipping remaining {len(mc.content_matches) - i}"
                     + " content element(s) in document:\n    {doc.path}"
                 )
                 break
