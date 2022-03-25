@@ -602,6 +602,7 @@ def selenium_apply_firefox_options(ctx, ff_options):
             "browser.download.folderList": 2,
             "browser.download.manager.showWhenStarting": False,
             "browser.helperApps.neverAsk.saveToDisk": save_mimetypes,
+            "browser.helperApps.showOpenOptionForViewableInternally": False,
             "pdfjs.disabled": True,
         })
     # make sure new tabs don't open new windows
@@ -781,9 +782,9 @@ def setup_match_chain(mc, ctx):
 
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-            mc.selenium_download_variant = SeleniumDownloadStrategy.INTERNAL
+            mc.selenium_download_variant = SeleniumDownloadStrategy.FETCH
             log(ctx, Verbosity.WARN,
-                f"match chain {mc.id}: switching to internal download strategy since external is incompatible with sel=tor")
+                f"match chain {mc.id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
 
     if mc.dimin > mc.dimax:
         error(f"dimin can't exceed dimax")
@@ -898,7 +899,7 @@ def setup(ctx):
 
     # the default strategy changes if we are using tor
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-        ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.INTERNAL
+        ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.FETCH
 
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
@@ -944,33 +945,6 @@ def selenium_has_died(ctx):
         return True
 
 
-def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
-    doc_url = urllib.parse.urlparse(doc_link)
-    link_url = urllib.parse.urlparse(link)
-    if doc_url.netloc == link_url.netloc:
-        return None
-    prev_window_handle = ctx.selenium_driver.current_window_handle
-    host_link = link_url._replace(
-        path="", params="", query="", fragment="").geturl()
-    cors_tab = f"screp_cors_tab_{dl_index}"
-    ctx.selenium_driver.execute_script(
-        "window.open('about:blank', arguments[0]);",
-        cors_tab
-    )
-    ctx.selenium_driver.switch_to.window(cors_tab)
-    selenium_driver_get_with_cookies(ctx, host_link)
-    return prev_window_handle
-
-
-def selenium_close_cors_tab(ctx, cors_prev_tab):
-    if cors_prev_tab is not None:
-        # make sure the page is loaded so the
-        # download is not aborted by closing the document early
-        _ = ctx.selenium_driver.page_source
-        ctx.selenium_driver.close()
-        ctx.selenium_driver.switch_to.window(cors_prev_tab)
-
-
 def selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, filepath):
     if not os.path.isabs(link):
         cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
@@ -994,7 +968,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
     mc.ctx.selenium_dl_index += 1
     tmp_filename = f"dl{dl_index}"
     if filepath is not None:
-        tmp_filename += "_" + filepath
+        tmp_filename += "_" + os.path.basename(filepath)
     else:
         tmp_filename += ".bin"
 
@@ -1009,16 +983,15 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
         a.click();
         document.body.removeChild(a);
     """
-    cors_prev_tab = selenium_setup_cors_tab(mc.ctx, doc_url, link, dl_index)
     try:
         mc.ctx.selenium_driver.execute_script(
             script_source, link, tmp_filename)
-        selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     except Exception as ex:
+        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(link).netloc:
+            cors_warn = " (potential CORS issue)"
         log(mc.ctx, Verbosity.ERROR,
-            f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
+            f"{link}{di_ci_context}: selenium download failed{cors_warn}: {str(ex)}")
         return None
-
     i = 0
     while True:
         if os.path.exists(tmp_path):
@@ -1032,15 +1005,15 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
                 i = 10
                 if selenium_has_died(mc.ctx):
                     return None
-        i += 1
 
+        i += 1
     with open(tmp_path, "rb") as f:
         data = f.read()
     os.remove(tmp_path)
     return data
 
 
-def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link):
+def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None):
     dl_index = mc.ctx.selenium_dl_index
     mc.ctx.selenium_dl_index += 1
     script_source = """
@@ -1068,21 +1041,21 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link):
             });
         })();
     """
-    cors_prev_tab = selenium_setup_cors_tab(mc.ctx, doc_url, link, dl_index)
+    err = None
     try:
         res = mc.ctx.selenium_driver.execute_script(
             script_source, link)
     except Exception as ex:
-        log(mc.ctx, Verbosity.ERROR,
-            f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
-        return None
+        err = str(ex)
     if "error" in res:
+        err = res["error"]
+    if err is not None:
+        cors_warn = ""
+        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(link).netloc:
+            cors_warn = " (potential CORS issue)"
         log(mc.ctx, Verbosity.ERROR,
-            f"{link}{di_ci_context}: selenium download failed: {res['error']}")
-        if not mc.ctx.selenium_keep_alive:
-            selenium_close_cors_tab(mc.ctx, cors_prev_tab)
+            f"{doc.path}{di_ci_context}: selenium download of '{link}' failed{cors_warn}: {err}")
         return None
-    selenium_close_cors_tab(mc.ctx, cors_prev_tab)
     return binascii.a2b_base64(res["ok"])
 
 
