@@ -1,0 +1,10 @@
+{
+    "args": [
+        "file=./test/res/multidoc.html",
+        "dx1-2=//iframe/@src",
+        "cx1=//@src",
+        "cr1=.*\\.txt",
+        "cx2=//li/text()"
+    ],
+    "stdout": "Foo\nBar\nBaz\na.txt\n"
+}
