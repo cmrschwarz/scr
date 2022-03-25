@@ -464,6 +464,7 @@ class DlContext:
         self.origin_mc = MatchChain(self, None, blank=True)
         # turn ctx to none temporarily for origin so it can be deepcopied
         self.origin_mc.ctx = None
+        self.error_code = 0
 
 
 def log_raw(msg, verbosity):
@@ -483,6 +484,8 @@ def unescape_string(txt, context):
 
 
 def log(ctx, verbosity, msg):
+    if verbosity == Verbosity.ERROR:
+        ctx.error_code = 1
     if ctx.verbosity >= verbosity:
         log_raw(msg, verbosity)
 
@@ -2285,7 +2288,7 @@ def main():
         dl(ctx)
     finally:
         finalize(ctx)
-    return 0
+    return ctx.error_code
 
 
 if __name__ == "__main__":

@@ -45,7 +45,6 @@ for t in sys.argv[1:]:
         tags_need.append(t)
 
 
-
 for tf in glob.glob("./test/cases/*.json"):
     with open(tf, "r") as f:
         tc = json.load(f)
@@ -65,6 +64,7 @@ for tf in glob.glob("./test/cases/*.json"):
         skipped += 1
         # print(f"{ANSI_YELLOW}SKIPPED {name}{ANSI_CLEAR}")
         continue
+
     ec = tc.get("ec", 0)
     stdin = tc.get("stdin", "")
     expected_stdout = tc.get("stdout", "")
@@ -106,6 +106,9 @@ for tf in glob.glob("./test/cases/*.json"):
 
 if skipped:
     skip_notice = f", {skipped} test(s) skipped"
+else:
+    skip_notice = ""
+
 if fails:
     print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{skip_notice}{ANSI_CLEAR}")
 else:

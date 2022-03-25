@@ -8,6 +8,7 @@
         "seldl1=e",
         "seldl2=f"
     ],
+    "ec": 1,
     "stdout": "foobar\n",
     "tags": ["selenium", "firefox"],
     "stderr": "[ERROR]: ./test/res/cross_origin.html (ci=1): selenium download of 'https://echo.d.cmrs.io/?echo=foobar' failed (potential CORS issue): NetworkError when attempting to fetch resource.\n"

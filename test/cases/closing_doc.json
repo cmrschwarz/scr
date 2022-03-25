@@ -5,7 +5,6 @@
         "sel=f"
     ],
     "ec": 0,
-    "stdout": "",
     "tags": ["selenium", "firefox"],
     "stderr": "[ WARN]: the selenium instance was closed unexpectedly\n"
 }

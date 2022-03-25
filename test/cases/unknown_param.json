@@ -1,8 +1,8 @@
 {
     "args": [
         "rfile=./test/res/empty.html",
-        "xxx=3"
+        "cxx=3"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: unrecognized option: 'xxx=3'. Consider ./screp --help\n"
+    "stderr": "[ERROR]: unrecognized option: 'cxx=3'. Consider ./screp --help\n"
 }
