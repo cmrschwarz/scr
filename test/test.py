@@ -56,7 +56,7 @@ for tf in glob.glob("./test/cases/*.json"):
         if t not in tags:
             discard = True
             break
-    if not discard:
+    else:
         for t in tags_avoid:
             if t in tags:
                 discard = True
