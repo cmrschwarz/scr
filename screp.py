@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from ctypes import sizeof
+from http import cookies
 import lxml
 import lxml.html
 import requests
@@ -90,13 +91,15 @@ selenium_variants_dict = {
 
 
 class SeleniumDownloadStrategy(Enum):
-    JAVASCRIPT = 0
+    EXTERNAL = 0
     INTERNAL = 1
+    FETCH = 2
 
 
 selenium_download_strategies_dict = {
-    "javascript": SeleniumDownloadStrategy.JAVASCRIPT,
+    "external": SeleniumDownloadStrategy.EXTERNAL,
     "internal": SeleniumDownloadStrategy.INTERNAL,
+    "fetch": SeleniumDownloadStrategy.FETCH,
 }
 
 
@@ -377,7 +380,7 @@ class MatchChain:
         self.forced_document_scheme = None
 
         self.selenium_strategy = SeleniumStrategy.FIRST
-        self.selenium_download_strategy = SeleniumDownloadStrategy.JAVASCRIPT
+        self.selenium_download_strategy = SeleniumDownloadStrategy.EXTERNAL
 
         if blank:
             for k in self.__dict__:
@@ -548,7 +551,7 @@ def help(err=False):
 
     Other:
         selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
-        seldl=<dl strategy> download strategy for selenium (default: javascript, values: javascript, internal)
+        seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
     
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
@@ -582,26 +585,35 @@ def add_cwd_to_path():
 
 
 def selenium_apply_firefox_options(ctx, ff_options):
-    if ctx.user_agent != None:
+    if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
         if ctx.selenium_variant == SeleniumVariant.TOR:
             # otherwise the user agent is not applied
             ff_options.set_preference("privacy.resistFingerprinting", False)
 
+    prefs = {}
     # setup download dir and disable save path popup
     if ctx.selenium_download_dir is not None:
         mimetypes.init()
         save_mimetypes = ";".join(set(mimetypes.types_map.values()))
-        prefs = {
+        prefs.update({
             "browser.download.dir": ctx.selenium_download_dir,
             "browser.download.useDownloadDir": True,
             "browser.download.folderList": 2,
             "browser.download.manager.showWhenStarting": False,
             "browser.helperApps.neverAsk.saveToDisk": save_mimetypes,
             "pdfjs.disabled": True,
-        }
-        for pk, pv in prefs.items():
-            ff_options.set_preference(pk, pv)
+        })
+    # make sure new tabs don't open new windows
+    prefs.update({
+        "browser.link.open_newwindow": 3,
+        "browser.link.open_newwindow.restriction": 0,
+        "browser.link.open_newwindow.override.external": -1,
+    })
+
+    # apply prefs
+    for pk, pv in prefs.items():
+        ff_options.set_preference(pk, pv)
 
 
 def setup_selenium_tor(ctx):
@@ -618,6 +630,7 @@ def setup_selenium_tor(ctx):
         selenium_apply_firefox_options(ctx, options)
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
+
     except Exception as ex:
         error(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
@@ -683,6 +696,9 @@ def setup_selenium(ctx):
         setup_selenium_firefox(ctx)
     else:
         assert False
+    if ctx.user_agent is None:
+        ctx.user_agent = ctx.selenium_driver.execute_script(
+            "return navigator.userAgent;")
 
     if ctx.cookie_jar:
         for cookie in ctx.cookie_jar:
@@ -762,6 +778,12 @@ def setup_match_chain(mc, ctx):
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
+
+    if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+        if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
+            mc.selenium_download_variant = SeleniumDownloadStrategy.INTERNAL
+            log(ctx, Verbosity.WARN,
+                f"match chain {mc.id}: switching to internal download strategy since external is incompatible with sel=tor")
 
     if mc.dimin > mc.dimax:
         error(f"dimin can't exceed dimax")
@@ -874,6 +896,10 @@ def setup(ctx):
             d.match_chains.extend(
                 ctx.match_chains[d.expand_match_chains_above:])
 
+    # the default strategy changes if we are using tor
+    if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+        ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.INTERNAL
+
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
 
@@ -926,12 +952,12 @@ def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
     prev_window_handle = ctx.selenium_driver.current_window_handle
     host_link = link_url._replace(
         path="", params="", query="", fragment="").geturl()
-    cors_tab_name = f"screp_cors_tab_{dl_index}"
+    cors_tab = f"screp_cors_tab_{dl_index}"
     ctx.selenium_driver.execute_script(
         "window.open('about:blank', arguments[0]);",
-        cors_tab_name
+        cors_tab
     )
-    ctx.selenium_driver.switch_to.window(cors_tab_name)
+    ctx.selenium_driver.switch_to.window(cors_tab)
     selenium_driver_get_with_cookies(ctx, host_link)
     return prev_window_handle
 
@@ -943,6 +969,24 @@ def selenium_close_cors_tab(ctx, cors_prev_tab):
         _ = ctx.selenium_driver.page_source
         ctx.selenium_driver.close()
         ctx.selenium_driver.switch_to.window(cors_prev_tab)
+
+
+def selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, filepath):
+    if not os.path.isabs(link):
+        cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
+        filepath = os.path.join(cur_path, link)
+    with open(filepath, "rb") as f:
+        return f.read()
+
+
+def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
+    # we absolutely don't want to use this for tor since it would
+    # expose our real ip to the server
+    assert mc.ctx.selenium_variant != SeleniumVariant.TORBROWSER
+    res = requests_dl(mc.ctx, link)
+    data = res.content
+    res.close()
+    return data
 
 
 def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
@@ -996,7 +1040,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
     return data
 
 
-def selenium_download_js(mc, di_ci_context, doc, doc_url, link):
+def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link):
     dl_index = mc.ctx.selenium_dl_index
     mc.ctx.selenium_dl_index += 1
     script_source = """
@@ -1054,16 +1098,22 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     doc_url = mc.ctx.selenium_driver.current_url
 
     if doc.document_type == DocumentType.FILE and urllib.parse.urlparse(link).scheme in ["", "file"]:
-        return selenium_download_from_local_file(mc, doc, di_ci_context, doc_url, link)
-    if mc.selenium_download_strategy == SeleniumDownloadStrategy.JAVASCRIPT:
-        return selenium_download_js(mc, di_ci_context, doc, doc_url, link)
-    assert mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL
-    return selenium_download_internal(mc, di_ci_context, doc, doc_url, link)
+        return selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, filepath)
+
+    if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
+        return selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath)
+
+    if mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
+        return selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath)
+
+    assert mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
+
+    return selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath)
 
 
 def requests_dl(ctx, path):
     return requests.get(path, cookies=ctx.cookie_jar,
-                        headers={'User-Agent': ctx.user_agent})
+                        headers={'User-Agent': ctx.user_agent}, allow_redirects=True)
 
 
 def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
@@ -1085,7 +1135,7 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                         res.close()
         except Exception as ex:
             log(mc.ctx, Verbosity.ERROR,
-                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}"')
+                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}: {str(ex)}"')
             return InteractiveResult.ACCEPT
 
     if mc.content_print_format:
@@ -2193,7 +2243,7 @@ def main():
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):
             continue
 
-        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)): 
+        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)):
             continue
         if apply_ctx_arg(ctx, "selkeep", "selenium_keep_alive", arg, parse_bool_arg, True):
             continue
