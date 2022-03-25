@@ -45,10 +45,13 @@ for t in sys.argv[1:]:
         tags_need.append(t)
 
 
-for tf in glob.glob("./test/cases/*.json"):
-    with open(tf, "r") as f:
-        tc = json.load(f)
-    name = tf
+for name in glob.glob("./test/cases/*.json"):
+    with open(name, "r") as f:
+        try:
+            tc = json.load(f)
+        except json.JSONDecodeError as ex:
+            print(f"{ANSI_RED}JSON PARSE ERROR in {name}: {str(ex)}")
+            continue
     tags = tc.get("tags", [])
     tags.append(name)
     discard = False
