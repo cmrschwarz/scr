@@ -5,8 +5,9 @@
         "sel=f",
         "cl=t",
         "cpf={content}",
-        "seldl1=j",
-        "seldl2=i"
+        "seldl1=e",
+        "seldl2=f"
     ],
-    "stdout": "foobar\nfoobar\n"
+    "stdout": "foobar\n",
+    "stderr": "[ERROR]: ./test/res/cross_origin.html (ci=1): selenium download of 'https://echo.d.cmrs.io/?echo=foobar' failed (potential CORS issue): NetworkError when attempting to fetch resource.\n"
 }

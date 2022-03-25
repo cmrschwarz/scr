@@ -963,6 +963,30 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
     return data
 
 
+def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
+    doc_url = urllib.parse.urlparse(doc_link)
+    link_url = urllib.parse.urlparse(link)
+    if doc_url.netloc == link_url.netloc:
+        return None
+    prev_window_handle = ctx.selenium_driver.current_window_handle
+    host_link = link_url._replace(
+        path="", params="", query="", fragment="").geturl()
+    cors_tab = f"screp_cors_tab_{dl_index}"
+    ctx.selenium_driver.execute_script(
+        "window.open('about:blank', arguments[0]);",
+        cors_tab
+    )
+    ctx.selenium_driver.switch_to.window(cors_tab)
+    selenium_driver_get_with_cookies(ctx, host_link)
+    return prev_window_handle
+
+
+def selenium_close_cors_tab(ctx, cors_prev_tab):
+    if cors_prev_tab is not None:
+        ctx.selenium_driver.close()
+        ctx.selenium_driver.switch_to.window(cors_prev_tab)
+
+
 def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
     dl_index = mc.ctx.selenium_dl_index
     mc.ctx.selenium_dl_index += 1
@@ -973,6 +997,14 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
         tmp_filename += ".bin"
 
     tmp_path = os.path.join(mc.ctx.selenium_download_dir, tmp_filename)
+
+    link_url = urllib.parse.urlparse(link)
+    doc_url = urllib.parse.urlparse(doc_url)
+    if doc_url.netloc != link_url.netloc:
+        log(mc.ctx, Verbosity.ERROR,
+            f"{link}{di_ci_context}: failed to download: seldl=internal does not work across origins")
+        return None
+
     script_source = """
         const url = arguments[0];
         const filename = arguments[1];
@@ -987,10 +1019,8 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
         mc.ctx.selenium_driver.execute_script(
             script_source, link, tmp_filename)
     except Exception as ex:
-        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(link).netloc:
-            cors_warn = " (potential CORS issue)"
         log(mc.ctx, Verbosity.ERROR,
-            f"{link}{di_ci_context}: selenium download failed{cors_warn}: {str(ex)}")
+            f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
         return None
     i = 0
     while True:
@@ -1059,14 +1089,6 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
     return binascii.a2b_base64(res["ok"])
 
 
-def selenium_download_from_local_file(mc, doc, di_ci_context, doc_url, link):
-    if not os.path.isabs(link):
-        cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
-        filepath = os.path.join(cur_path, link)
-    with open(filepath, "rb") as f:
-        return f.read()
-
-
 def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     doc_url = mc.ctx.selenium_driver.current_url
 
@@ -1108,7 +1130,7 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                         res.close()
         except Exception as ex:
             log(mc.ctx, Verbosity.ERROR,
-                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}: {str(ex)}"')
+                f'{doc.path}{di_ci_context}: failed to fetch content from "{content_path}": {str(ex)}"')
             return InteractiveResult.ACCEPT
 
     if mc.content_print_format:
