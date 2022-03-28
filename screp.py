@@ -433,6 +433,7 @@ class DlContext:
         self.cookie_file = None
         self.cookie_jar = None
         self.cookie_dict = {}
+        self.cookie_list = []
 
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
@@ -844,6 +845,7 @@ def load_cookie_jar(ctx):
             ctx.cookie_dict[cookie.domain][cookie.name] = ck
         else:
             ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
+        ctx.cookie_list.append(ck)
 
 
 def setup(ctx):
@@ -945,7 +947,7 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
     # expose our real ip to the server
     assert mc.ctx.selenium_variant != SeleniumVariant.TORBROWSER
     try:
-        res = requests_dl(mc.ctx, link)
+        res = requests_dl(mc.ctx, link, mc.ctx.selenium_driver.get_cookies())
         data = res.content
         res.close()
         return data
@@ -1104,9 +1106,19 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     return selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath)
 
 
-def requests_dl(ctx, path):
-    return requests.get(path, cookies=ctx.cookie_jar,
-                        headers={'User-Agent': ctx.user_agent}, allow_redirects=True)
+def requests_dl(ctx, path, cookie_dict=None):
+    hostname = urllib.parse.urlparse(path).hostname
+    if cookie_dict is None:
+        cookie_dict = ctx.cookie_dict.get(hostname, {})
+    cookies = {
+        name: ck["value"] 
+        for name, ck in cookie_dict 
+        if ck.get("domain", hostname) == hostname
+    }
+    headers = {'User-Agent': ctx.user_agent}
+    return requests.get(
+        path, cookies=cookies, headers=headers, allow_redirects=True
+    )
 
 
 def warn_selenium_died(ctx):
