@@ -589,7 +589,7 @@ def add_cwd_to_path():
 def selenium_apply_firefox_options(ctx, ff_options):
     if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
-        if ctx.selenium_variant == SeleniumVariant.TOR:
+        if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
             # otherwise the user agent is not applied
             ff_options.set_preference("privacy.resistFingerprinting", False)
 
@@ -649,7 +649,6 @@ def setup_selenium_firefox(ctx):
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
     except WebDriverException as ex:
         error(f"failed to start geckodriver: {str(ex)}")
-    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
 
 
 def setup_selenium_chrome(ctx):
@@ -673,7 +672,18 @@ def setup_selenium_chrome(ctx):
             options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
     except WebDriverException as ex:
         error(f"failed to start chromedriver: {str(ex)}")
-    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
+
+
+def selenium_add_cookies_through_get(ctx):
+    # ctx.selenium_driver.set_page_load_timeout(0.01)
+    for domain, cookies in ctx.cookie_dict.items():
+        try:
+            ctx.selenium_driver.get(f"https://{domain}")
+        except selenium.common.exceptions.TimeoutException:
+            error(
+                "Failed to apply cookies for https://{domain}: page failed to load")
+        for c in cookies.values():
+            ctx.selenium_driver.add_cookie(c)
 
 
 def setup_selenium(ctx):
@@ -703,60 +713,11 @@ def setup_selenium(ctx):
         ctx.user_agent = ctx.selenium_driver.execute_script(
             "return navigator.userAgent;")
 
+    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
     if ctx.cookie_jar:
-        for cookie in ctx.cookie_jar:
-            ck = {
-                'domain': cookie.domain,
-                'name': cookie.name,
-                'value': cookie.value,
-                'secure': cookie.secure
-            }
-            if cookie.expires:
-                ck['expiry'] = cookie.expires
-            if cookie.path_specified:
-                ck['path'] = cookie.path
-            if cookie.domain in ctx.cookie_dict:
-                ctx.cookie_dict[cookie.domain][cookie.name] = ck
-            else:
-                ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
-
-
-def selenium_add_cookies(ctx):
-    changes = False
-    if not ctx.cookie_jar:
-        return
-    sel_cookies = ctx.selenium_driver.get_cookies()
-    added_cookies = {}
-    sel_domains = set()
-    for sc in sel_cookies:
-        domain = sc["domain"]
-        if domain in ctx.cookie_dict:
-            if domain not in sel_domains:
-                added_cookies[domain] = set()
-                sel_domains.add(domain)
-            name = sc["name"]
-            if name in ctx.cookie_dict[domain]:
-                stored_cookie = ctx.cookie_dict[domain][name]
-                added_cookies[domain].add(name)
-                if sc["value"] != stored_cookie["value"]:
-                    changes = True
-                    ctx.selenium_driver.delete_cookie(name)
-                    # the domain parameter here is probalby not being used,
-                    # since selenium sessions seem to only allow one domain
-                    # but it seems cleaner to pass it anyways
-                    ctx.selenium_driver.execute(
-                        selenium.webdriver.remote.command.Command.DELETE_COOKIE,
-                        {'domain': domain, 'name': name}
-                    )
-                    ctx.selenium_driver.add_cookie(stored_cookie)
-
-    for domain in sel_domains:
-        added = added_cookies[domain]
-        for stored_cookie in ctx.cookie_dict[domain].values():
-            if stored_cookie["name"] not in added:
-                ctx.selenium_driver.add_cookie(stored_cookie)
-                changes = True
-    return changes
+        # todo: implement something more clever for this, at least for chrome:
+        # https://stackoverflow.com/questions/63220248/how-to-preload-cookies-before-first-request-with-python3-selenium-chrome-webdri
+        selenium_add_cookies_through_get(ctx)
 
 
 def get_format_string_keys(fmt_string):
@@ -856,6 +817,35 @@ def setup_match_chain(mc, ctx):
         )
 
 
+def load_cookie_jar(ctx):
+    try:
+        ctx.cookie_jar = MozillaCookieJar()
+        ctx.cookie_jar.load(
+            os.path.expanduser(ctx.cookie_file),
+            ignore_discard=True, ignore_expires=True)
+    # this exception handling is really ugly but this is how this library
+    # does it internally
+    except OSError:
+        raise
+    except Exception as ex:
+        error(f"failed to read cookie file: {str(ex)}")
+    for cookie in ctx.cookie_jar:
+        ck = {
+            'domain': cookie.domain,
+            'name': cookie.name,
+            'value': cookie.value,
+            'secure': cookie.secure
+        }
+        if cookie.expires:
+            ck['expiry'] = cookie.expires
+        if cookie.path_specified:
+            ck['path'] = cookie.path
+        if cookie.domain in ctx.cookie_dict:
+            ctx.cookie_dict[cookie.domain][cookie.name] = ck
+        else:
+            ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
+
+
 def setup(ctx):
     global DEFAULT_CPF
     obj_apply_defaults(ctx, DlContext(blank=False))
@@ -865,18 +855,9 @@ def setup(ctx):
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
-
     if ctx.cookie_file is not None:
-        try:
-            ctx.cookie_jar = MozillaCookieJar()
-            ctx.cookie_jar.load(
-                ctx.cookie_file, ignore_discard=True, ignore_expires=True)
-        # this exception handling is really ugly but this is how this library
-        # does it internally
-        except OSError:
-            raise
-        except Exception as ex:
-            error(f"failed to read cookie file: {str(ex)}")
+        load_cookie_jar(ctx)
+
     if ctx.user_agent is not None and ctx.user_agent_random:
         error(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
@@ -988,7 +969,7 @@ def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
         cors_tab
     )
     ctx.selenium_driver.switch_to.window(cors_tab)
-    selenium_driver_get_with_cookies(ctx, host_link)
+    ctx.selenium_driver.get(host_link)
     return prev_window_handle
 
 
@@ -1185,17 +1166,6 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
             f"{doc.path}{di_ci_context}: wrote content into {save_path}")
 
 
-def selenium_driver_get_with_cookies(ctx, path):
-    if ctx.cookie_jar:
-        selenium_add_cookies(ctx)
-        ctx.selenium_driver.get(path)
-        changed = selenium_add_cookies(ctx)
-        if changed:
-            ctx.selenium_driver.refresh()
-    else:
-        ctx.selenium_driver.get(path)
-
-
 class ScrepFetchError(Exception):
     pass
 
@@ -1205,7 +1175,7 @@ def fetch_doc(ctx, doc):
         selpath = doc.path
         if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
             selpath = "file:" + os.path.realpath(selpath)
-        selenium_driver_get_with_cookies(ctx, selpath)
+        ctx.selenium_driver.get(selpath)
         enc, forced_enc = decide_document_encoding(ctx, doc)
         data = ctx.selenium_driver.page_source
         return data, enc, forced_enc
