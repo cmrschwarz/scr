@@ -1,0 +1,9 @@
+{
+    "args": [
+        "rfile=./test/res/js_content.html",
+        "cx=//p/text()",
+        "sel=c"
+    ],
+    "ec": 0,
+    "stdout": "content\n"
+}
