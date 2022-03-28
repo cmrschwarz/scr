@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from argparse import ArgumentError
 import lxml
 import lxml.html
 import requests
@@ -23,6 +24,7 @@ import tempfile
 import itertools
 import warnings
 import copy
+import shlex
 import binascii
 import shutil
 import mimetypes
@@ -244,7 +246,7 @@ class Locator:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
             error(f"invalid xpath: '{self.xpath}'")
-        except lxml.LxmlError as ex:
+        except lxml.etree.LxmlError as ex:
             error(
                 f"failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
@@ -319,6 +321,9 @@ class Document:
         self.document_type = document_type
         self.path = path
         self.encoding = None
+        self.forced_encoding = False
+        self.text = None
+        self.xml = None
         self.src_mc = src_mc
         if not match_chains:
             self.match_chains = []
@@ -432,8 +437,6 @@ class DlContext:
     def __init__(self, blank=False):
         self.cookie_file = None
         self.cookie_jar = None
-        self.cookie_dict = {}
-        self.cookie_list = []
 
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
@@ -443,11 +446,13 @@ class DlContext:
         self.verbosity = Verbosity.WARN
         self.documents_bfs = False
         self.selenium_keep_alive = False
+        self.repl = False
 
         if blank:
             for k in self.__dict__:
                 self.__dict__[k] = None
 
+        self.cookie_dict = {}
         self.match_chains = []
         self.docs = deque()
 
@@ -688,16 +693,11 @@ def selenium_add_cookies_through_get(ctx):
 
 
 def setup_selenium(ctx):
-    if ctx.selenium_variant == SeleniumVariant.DISABLED:
-        for mc in ctx.match_chains:
-            mc.selenium_strategy = SeleniumStrategy.DISABLED
-        return
+    have_internal_dls = any(
+        mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL
+        for mc in ctx.match_chains
+    )
 
-    have_internal_dls = False
-    for mc in ctx.match_chains:
-        if mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
-            have_internal_dls = True
-            break
     if have_internal_dls:
         ctx.selenium_download_dir = tempfile.mkdtemp(
             prefix="screp_selenium_downloads_")
@@ -777,7 +777,7 @@ def setup_match_chain(mc, ctx):
         mc.content_write_format = unescape_string(
             mc.content_write_format, "cwf")
 
-    mc.has_xpath_matching = max([l.xpath is not None for l in locators])
+    mc.has_xpath_matching = any(l.xpath is not None for l in locators)
     mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
     mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
     mc.has_document_matching = mc.has_document_matching or mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
@@ -812,9 +812,8 @@ def setup_match_chain(mc, ctx):
             mc.content_write_format,
             mc.content_print_format
         ]
-        mc.content_download_required = max(
-            map(lambda of: format_string_uses_arg(
-                of, None, "content"), output_formats)
+        mc.content_download_required = any(
+            format_string_uses_arg(of, None, "content") for of in output_formats
         )
 
 
@@ -850,9 +849,9 @@ def load_cookie_jar(ctx):
 
 def setup(ctx):
     global DEFAULT_CPF
-    obj_apply_defaults(ctx, DlContext(blank=False))
-    if len(ctx.docs) == 0:
+    if len(ctx.docs) == 0 and not ctx.repl:
         error("must specify at least one url or (r)file")
+    obj_apply_defaults(ctx, DlContext(blank=False))
 
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -893,7 +892,14 @@ def setup(ctx):
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
 
-    setup_selenium(ctx)
+    if ctx.selenium_variant == SeleniumVariant.DISABLED:
+        for mc in ctx.match_chains:
+            mc.selenium_strategy = SeleniumStrategy.DISABLED
+        return
+
+    # reuse selenium in repl mode
+    if ctx.selenium_driver is None:
+        setup_selenium(ctx)
 
 
 def parse_prompt_option(val, options, default=None, unparsable_val=None):
@@ -1111,8 +1117,8 @@ def requests_dl(ctx, path, cookie_dict=None):
     if cookie_dict is None:
         cookie_dict = ctx.cookie_dict.get(hostname, {})
     cookies = {
-        name: ck["value"] 
-        for name, ck in cookie_dict 
+        name: ck["value"]
+        for name, ck in cookie_dict
         if ck.get("domain", hostname) == hostname
     }
     headers = {'User-Agent': ctx.user_agent}
@@ -1188,18 +1194,18 @@ def fetch_doc(ctx, doc):
         if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
             selpath = "file:" + os.path.realpath(selpath)
         ctx.selenium_driver.get(selpath)
-        enc, forced_enc = decide_document_encoding(ctx, doc)
-        data = ctx.selenium_driver.page_source
-        return data, enc, forced_enc
+        decide_document_encoding(ctx, doc)
+        doc.text = ctx.selenium_driver.page_source
+        return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
                 data = f.read()
         except FileNotFoundError:
             raise ScrepFetchError("no such file or directory")
-        enc, forced_enc = decide_document_encoding(ctx, doc)
-        data = data.decode(enc, errors="surrogateescape")
-        return data, enc, forced_enc
+        decide_document_encoding(ctx, doc)
+        doc.text = data.decode(doc.encoding, errors="surrogateescape")
+        return
     assert doc.document_type == DocumentType.URL
     res = requests_dl(ctx, doc.path)
     data = res.content
@@ -1207,9 +1213,9 @@ def fetch_doc(ctx, doc):
     if data is None:
         raise ScrepFetchError("empty response")
     doc.encoding = res.encoding
-    enc, forced_enc = decide_document_encoding(ctx, doc)
-    data = data.decode(enc, errors="surrogateescape")
-    return data, enc, forced_enc
+    decide_document_encoding(ctx, doc)
+    doc.text = data.decode(doc.encoding, errors="surrogateescape")
+    return
 
 
 def gen_final_content_format(mc, format_str, label, di, ci, content_link, content, label_regex_match, content_regex_match, doc):
@@ -1493,20 +1499,23 @@ def handle_document_match(ctx, doc):
         return res
 
 
-def gen_content_matches(mc, doc, src, src_xml):
+def gen_content_matches(mc, doc):
     content_matches = []
 
     if mc.has_content_xpaths:
         contents, contents_xml = mc.content.match_xpath(
-            mc.ctx, src_xml, doc.path, ([doc.src], [src_xml]), True)
+            mc.ctx, doc.xml, doc.path, ([doc.src], [doc.xml]), True)
     else:
-        contents = mc.content.match_xpath(mc.ctx, src_xml, doc.path, [src])
+        contents = mc.content.match_xpath(
+            mc.ctx, doc.xml, doc.path, [doc.text]
+        )
 
     labels = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        for lx in mc.label.match_xpath(mc.ctx, src_xml, doc.path, [src]):
+        for lx in mc.label.match_xpath(mc.ctx, doc.xml, doc.path, [doc.text]):
             labels.extend(mc.label.match_regex(
-                src, doc.path, [RegexMatch(lx)]))
+                doc.text, doc.path, [RegexMatch(lx)])
+            )
     match_index = 0
     labels_none_for_n = 0
     for content in contents:
@@ -1515,9 +1524,9 @@ def gen_content_matches(mc, doc, src, src_xml):
         if mc.labels_inside_content and mc.label.xpath:
             content_xml = contents_xml[match_index] if mc.has_content_xpaths else None
             labels = []
-            for lx in mc.label.match_xpath(mc.ctx, content_xml, doc.path, [src]):
+            for lx in mc.label.match_xpath(mc.ctx, content_xml, doc.path, [doc.text]):
                 labels.extend(mc.label.match_regex(
-                    src, doc.path, [RegexMatch(lx)]))
+                    doc.text, doc.path, [RegexMatch(lx)]))
             if len(labels) == 0:
                 if not mc.label_allow_missing:
                     labels_none_for_n += len(content_regex_matches)
@@ -1554,9 +1563,9 @@ def gen_content_matches(mc, doc, src, src_xml):
     return content_matches, labels_none_for_n
 
 
-def gen_document_matches(mc, doc, src, src_xml):
+def gen_document_matches(mc, doc):
     # TODO: fix interactive matching for docs and give ci di chain to regex
-    paths = mc.document.apply(mc.ctx, src, src_xml, doc.path)
+    paths = mc.document.apply(mc.ctx, doc.text, doc.xml, doc.path)
     if doc.document_type == DocumentType.FILE:
         base = os.path.dirname(doc.path)
         for i, p in enumerate(paths):
@@ -1658,15 +1667,15 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
         return result, msg
 
 
-def handle_match_chain(mc, doc, src, src_xml):
+def handle_match_chain(mc, doc):
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc, src, src_xml)
+            mc, doc)
     else:
         content_matches = []
 
     if mc.need_document_matches(True):
-        document_matches = gen_document_matches(mc, doc, src, src_xml)
+        document_matches = gen_document_matches(mc, doc)
     else:
         document_matches = []
 
@@ -1765,7 +1774,7 @@ def decide_document_encoding(ctx, doc):
     else:
         enc = mc.default_document_encoding
     doc.encoding = enc
-    return enc, forced
+    doc.forced_encoding = forced
 
 
 def parse_xml(ctx, doc, src, enc, forced_enc):
@@ -1787,8 +1796,9 @@ def parse_xml(ctx, doc, src, enc, forced_enc):
         return None
 
 
-def dl(ctx):
+def dl(ctx, reused_doc=None):
     closed = False
+    doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
         unsatisfied_chains = 0
@@ -1802,7 +1812,8 @@ def dl(ctx):
 
         try_number = 0
         try:
-            src, enc, forced_enc = fetch_doc(ctx, doc)
+            if doc is not reused_doc:
+                fetch_doc(ctx, doc)
         except WebDriverException as ex:
             if selenium_has_died(ctx):
                 warn_selenium_died(ctx)
@@ -1828,8 +1839,8 @@ def dl(ctx):
                 assert ctx.selenium_variant != SeleniumVariant.DISABLED
                 try:
                     src_new = ctx.selenium_driver.page_source
-                    same_content = (src_new == src)
-                    src = src_new
+                    same_content = (src_new == doc.text)
+                    doc.text = src_new
                 except WebDriverException as e:
                     if selenium_has_died(ctx):
                         warn_selenium_died(ctx)
@@ -1841,17 +1852,18 @@ def dl(ctx):
 
             if not same_content:
                 interactive_chains = []
-                src_xml = None
                 if have_xpath_matching:
-                    src_xml = parse_xml(ctx, doc, src, enc, forced_enc)
-                    if src_xml is None:
+                    doc.xml = parse_xml(
+                        ctx, doc, doc.text,
+                        doc.encoding, doc.forced_encoding
+                    )
+                    if doc.xml is None:
                         break
 
                 for mc in doc.match_chains:
                     if mc.satisfied:
                         continue
-                    waiting, interactive = handle_match_chain(
-                        mc, doc, src, src_xml)
+                    waiting, interactive = handle_match_chain(mc, doc)
                     if not waiting:
                         mc.satisfied = True
                         unsatisfied_chains -= 1
@@ -1889,6 +1901,7 @@ def dl(ctx):
                 ctx.selenium_driver.close()
             except WebDriverException:
                 pass
+    return doc
 
 
 def finalize(ctx):
@@ -2100,10 +2113,9 @@ def verify_encoding(encoding):
 
 
 def apply_doc_arg(ctx, argname, doctype, arg):
-    success, mcs, value = parse_mc_arg(ctx, argname, arg)
+    success, mcs, path = parse_mc_arg(ctx, argname, arg)
     if not success:
         return False
-    mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
         mcs = list(ctx.match_chains)
@@ -2114,8 +2126,13 @@ def apply_doc_arg(ctx, argname, doctype, arg):
         extend_chains_above = None
     doc = Document(
         doctype,
-        normalize_link(ctx, None, Document(
-            doctype.url_handling_type(), None, None), None, value),
+        normalize_link(
+            ctx,
+            None,
+            Document(doctype.url_handling_type(), None, None),
+            None,
+            path
+        ),
         None,
         mcs,
         extend_chains_above
@@ -2146,13 +2163,35 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
     return True
 
 
-def main():
-    ctx = DlContext(blank=True)
-    if len(sys.argv) < 2:
-        error(f"missing command line options. Consider {sys.argv[0]} --help")
+def run_repl(ctx):
+    # run with initial args
+    last_doc = dl(ctx)
+    while True:
+        sys.stdout.write("screp> ")
+        line = input()
+        args = shlex.split(line)
+        if not len(args):
+            continue
+        ctx_new = DlContext(blank=True)
+        try:
+            parse_args(ctx_new, args)
+        except ValueError as ex:
+            log(ctx, Verbosity.ERROR, str(ex))
+        if not ctx_new.docs and last_doc:
+            last_doc.extend_chains_above = len(ctx_new.match_chains)
+            last_doc.match_chains = list(ctx.match_chains)
+        obj_apply_defaults(ctx_new, ctx)
+        ctx = ctx_new
+        setup(ctx)
+        last_doc = dl(ctx, last_doc)
 
-    for arg in sys.argv[1:]:
-        if arg == "--help" or arg == "-h":
+
+def parse_args(ctx, args):
+    for arg in args:
+        if (
+            arg in ["-h", "--help", "help"]
+            or (begins(arg, "help=") and parse_bool_arg(arg[len("help="):], arg))
+        ):
             help()
             return 0
 
@@ -2273,10 +2312,30 @@ def main():
         if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)):
             continue
 
-        error(f"unrecognized option: '{arg}'. Consider {sys.argv[0]} --help")
+        if apply_ctx_arg(ctx, "repl", "repl", arg,  parse_bool_arg, True):
+            continue
+
+        if apply_ctx_arg(ctx, "--repl", "repl", arg,  parse_bool_arg, True):
+            continue
+
+        raise ValueError(f"unrecognized option: '{arg}'")
+
+
+def main():
+    ctx = DlContext(blank=True)
+    if len(sys.argv) < 2:
+        error(f"missing command line options. Consider {sys.argv[0]} --help")
+    try:
+        parse_args(ctx, sys.argv[1:])
+    except ValueError as ex:
+        error(str(ex))
+
     setup(ctx)
     try:
-        dl(ctx)
+        if ctx.repl:
+            run_repl(ctx)
+        else:
+            dl(ctx)
     finally:
         finalize(ctx)
     return ctx.error_code
