@@ -969,7 +969,8 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
         res.close()
         return data
     except requests.exceptions.ConnectionError:
-        log(mc.ctx, Verbosity.ERROR,f"{doc.path}{di_ci_context}: failed to download '{link}': connection failed")
+        log(mc.ctx, Verbosity.ERROR,
+            f"{doc.path}{di_ci_context}: failed to download '{link}': connection failed")
         return None
 
 
@@ -1449,7 +1450,7 @@ def handle_content_match(mc, doc, content_match):
             doc
         )
         try:
-            save_path = save_path.decode("utf-8", error="surrogateescape")
+            save_path = save_path.decode("utf-8", errors="surrogateescape")
         except UnicodeDecodeError:
             log(mc.ctx, Verbosity.ERROR,
                 f"{doc.path}{di_ci_context}: generated save path is not valid utf-8")
@@ -1832,7 +1833,8 @@ def dl(ctx):
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: {str(ex)}")
             continue
         except requests.exceptions.ConnectionError as ex:
-            log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: connection failed")
+            log(ctx, Verbosity.ERROR,
+                f"Failed to fetch {doc.path}: connection failed")
             continue
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
@@ -2102,7 +2104,8 @@ def select_variant(val, variants_dict):
 def parse_variant_arg(val, variants_dict, arg):
     res = select_variant(val, variants_dict)
     if res is None:
-        error(f"illegal argument '{arg}', valid options for {arg[:len(arg)-len(val)-1]} are: {', '.join(sorted(variants_dict.keys()))}")
+        error(
+            f"illegal argument '{arg}', valid options for {arg[:len(arg)-len(val)-1]} are: {', '.join(sorted(variants_dict.keys()))}")
     return res
 
 
