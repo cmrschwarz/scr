@@ -5,5 +5,9 @@
         "sel=c"
     ],
     "ec": 0,
+    "tags": [
+        "selenium",
+        "chrome"
+    ],
     "stdout": "content\n"
 }

@@ -9,6 +9,9 @@
         "seldl2=f",
         "seldl1=e"
     ],
-    "tags": ["selenium", "chrome"],
+    "tags": [
+        "selenium",
+        "chrome"
+    ],
     "stdout": "a\nb\na\nb\n"
 }
