@@ -24,12 +24,13 @@ import time
 import tempfile
 import itertools
 import warnings
-import urllib3
 import copy
 import shlex
 import binascii
 import shutil
 import mimetypes
+import urllib3.exceptions  # for selenium MaxRetryError
+import urllib3.request
 
 
 def prefixes(str):
@@ -48,6 +49,7 @@ chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
+DEFAULT_TRUNCATION_LENGTH = 120
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 
@@ -612,6 +614,13 @@ def add_cwd_to_path():
     return cwd
 
 
+def truncate(text, max_len=DEFAULT_TRUNCATION_LENGTH, trailer="..."):
+    if len(text) > max_len:
+        assert(max_len > len(trailer))
+        return text[0:max_len - len(trailer)] + trailer
+    return text
+
+
 def selenium_apply_firefox_options(ctx, ff_options):
     if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
@@ -764,11 +773,11 @@ def setup_match_chain(mc, ctx):
     for l in locators:
         l.setup()
 
-    if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-        if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-            mc.selenium_download_variant = SeleniumDownloadStrategy.FETCH
-            log(ctx, Verbosity.WARN,
-                f"match chain {mc.chain_id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
+    # if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+    #    if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
+    #        mc.selenium_download_variant = SeleniumDownloadStrategy.FETCH
+    #        log(ctx, Verbosity.WARN,
+    #            f"match chain {mc.chain_id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
 
     if mc.dimin > mc.dimax:
         error(f"dimin can't exceed dimax")
@@ -875,7 +884,7 @@ def setup(ctx, for_repl=False):
     global DEFAULT_CPF
     obj_apply_defaults(ctx, DlContext(blank=False))
 
-    if len(ctx.docs) == 0 and (not ctx.repl or for_repl) and not ctx.reused_doc:
+    if len(ctx.docs) == 0 and not ctx.repl:
         log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
         raise ValueError()
 
@@ -912,8 +921,8 @@ def setup(ctx, for_repl=False):
                 ctx.match_chains[d.expand_match_chains_above:])
 
     # the default strategy changes if we are using tor
-    if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-        ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.FETCH
+    # if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+    #    ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.FETCH
 
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
@@ -975,17 +984,20 @@ def selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, fil
 
 
 def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
-    # we absolutely don't want to use this for tor since it would
-    # expose our real ip to the server
-    assert mc.ctx.selenium_variant != SeleniumVariant.TORBROWSER
+    proxies = None
+    if mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+        proxies = {
+            "http": f"socks5h://localhost:{mc.ctx.selenium_driver.socks_port}",
+            "https": f"socks5h://localhost:{mc.ctx.selenium_driver.socks_port}",
+            "data": None
+        }
     try:
-        res = requests_dl(mc.ctx, link, mc.ctx.selenium_driver.get_cookies())
-        data = res.content
-        res.close()
+        data, _enc = requests_dl(
+            mc.ctx, link, mc.ctx.selenium_driver.get_cookies(), proxies=proxies)
         return data
-    except requests.exceptions.ConnectionError:
+    except ScrepFetchError as ex:
         log(mc.ctx, Verbosity.ERROR,
-            f"{doc.path}{di_ci_context}: failed to download '{link}': connection failed")
+            f"{doc.path}{di_ci_context}: failed to download '{truncate(link)}': {str(ex)}")
         return None
 
 
@@ -1138,19 +1150,34 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     return selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath)
 
 
-def requests_dl(ctx, path, cookie_dict=None):
-    hostname = urllib.parse.urlparse(path).hostname
+def requests_dl(ctx, path, cookie_dict=None, proxies=None):
+    url = urllib.parse.urlparse(path)
+    if url.scheme == "data":
+        with urllib.request.urlopen(path) as res:
+            return res.read(), None
+
     if cookie_dict is None:
-        cookie_dict = ctx.cookie_dict.get(hostname, {})
+        cookie_dict = ctx.cookie_dict.get(url.hostname, {})
     cookies = {
         name: ck["value"]
         for name, ck in cookie_dict
-        if ck.get("domain", hostname) == hostname
+        if ck.get("domain", url.hostname) == url.hostname
     }
     headers = {'User-Agent': ctx.user_agent}
-    return requests.get(
-        path, cookies=cookies, headers=headers, allow_redirects=True
-    )
+    ex = None
+    try:
+        with requests.get(
+            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies
+        ) as req:
+            return req.content, req.encoding
+    except requests.exceptions.InvalidURL:
+        ex = ScrepFetchError("invalid url")
+    except requests.exceptions.ConnectionError:
+        ex = ScrepFetchError("connection failed")
+    except requests.exceptions.RequestException as ex:
+        ex = ScrepFetchError(truncate(str(ex)))
+    if ex:
+        raise ex
 
 
 def warn_selenium_died(ctx):
@@ -1174,9 +1201,12 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                     with open(content_path, "rb") as f:
                         content = f.read()
                 else:
-                    res = requests_dl(mc.ctx, content_path)
-                    content = res.content
-                    res.close()
+                    try:
+                        content, _enc = requests_dl(mc.ctx, content_path)
+                    except ScrepFetchError as ex:
+                        log(mc.ctx, Verbosity.ERROR,
+                            f"{doc.path}{di_ci_context}: failed to download '{truncate(content_path)}': {str(ex)}")
+                        return None
 
     if mc.content_print_format:
         print_data = gen_final_content_format(
@@ -1242,19 +1272,11 @@ def fetch_doc(ctx, doc):
         doc.text = data.decode(doc.encoding, errors="surrogateescape")
         return
     assert doc.document_type == DocumentType.URL
-    try:
-        res = requests_dl(ctx, doc.path)
-    except requests.exceptions.InvalidURL:
-        raise ScrepFetchError("invalid url")
-    except requests.exceptions.ConnectionError:
-        raise ScrepFetchError("connection failed")
-    except requests.exceptions.RequestException as ex:
-        raise ScrepFetchError(str(ex))
-    data = res.content
-    res.close()
+
+    data, encoding = requests_dl(ctx, doc.path)
     if data is None:
         raise ScrepFetchError("empty response")
-    doc.encoding = res.encoding
+    doc.encoding = encoding
     decide_document_encoding(ctx, doc)
     doc.text = data.decode(doc.encoding, errors="surrogateescape")
     return
