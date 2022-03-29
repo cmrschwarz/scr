@@ -1,0 +1,24 @@
+{
+    "args": [
+        "repl"
+    ],
+    "tags": [
+        "repl",
+        "selenium"
+    ],
+    "stdin": [
+        "file=./test/res/js_content.html",
+        "'cx=//p/text()'",
+        "sel=f",
+        "'cx=//p/text()'",
+        "sel=d",
+        "'cx=//p/text()'",
+        "exit"
+    ],
+    "stdout": [
+        "static content",
+        "static content",
+        "dynamic content",
+        "static content"
+    ]
+}

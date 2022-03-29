@@ -9,5 +9,5 @@
         "selenium",
         "firefox"
     ],
-    "stderr": "[ WARN]: the selenium instance was closed unexpectedly\n"
+    "stderr": " [WARN]: the selenium instance was closed unexpectedly\n"
 }

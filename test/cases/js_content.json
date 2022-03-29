@@ -9,5 +9,8 @@
         "selenium",
         "chrome"
     ],
-    "stdout": "content\n"
+    "stdout": [
+        "static content",
+        "dynamic content"
+    ]
 }

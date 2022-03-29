@@ -79,6 +79,9 @@ class DocumentType(Enum):
         return self
 
 
+document_type_display_dict = {dt: str(dt).lower() for dt in DocumentType}
+
+
 class SeleniumVariant(Enum):
     DISABLED = 0
     CHROME = 1
@@ -137,8 +140,8 @@ verbosities_dict = {
 
 verbosities_display_dict = {
     Verbosity.ERROR: "[ERROR]: ",
-    Verbosity.WARN:  "[ WARN]: ",
-    Verbosity.INFO:  "[ INFO]: ",
+    Verbosity.WARN:  " [WARN]: ",
+    Verbosity.INFO:  " [INFO]: ",
     Verbosity.DEBUG: "[DEBUG]: ",
 }
 
@@ -1211,7 +1214,8 @@ def fetch_doc(ctx, doc):
         return
     if doc is ctx.reused_doc:
         ctx.reused_doc = None
-        return
+        if not ctx.changed_selenium:
+            return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
             with open(doc.path, "rb") as f:
@@ -1319,6 +1323,17 @@ def normalize_link(ctx, mc, src_doc, doc_path, link):
     return res
 
 
+def get_ci_di_context(mc):
+    if mc.has_document_matching:
+        if mc.content.multimatch:
+            di_ci_context = f" (di={mc.di}, ci={mc.ci})"
+        else:
+            di_ci_context = f" (di={mc.di})"
+    elif mc.content.multimatch:
+        di_ci_context = f" (ci={mc.ci})"
+    return di_ci_context
+
+
 def handle_content_match(mc, doc, content_match):
     ci = mc.ci
     di = mc.di
@@ -1335,14 +1350,7 @@ def handle_content_match(mc, doc, content_match):
         label = mc.label.apply_format(
             label_regex_match, [di, ci], ["di", "ci"])
 
-    di_ci_context = ""
-    if mc.has_document_matching:
-        if mc.content.multimatch:
-            di_ci_context = f" (di={di}, ci={ci})"
-        else:
-            di_ci_context = f" (di={di})"
-    elif mc.content.multimatch:
-        di_ci_context = f" (ci={ci})"
+    di_ci_context = get_ci_di_context(mc)
 
     if mc.has_label_matching:
         label_context = f' (label "{label}")'
@@ -1821,6 +1829,8 @@ def dl(ctx):
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
+        log(ctx, Verbosity.INFO,
+            f"handling {document_type_display_dict[doc.document_type]} document {doc.path}")
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
@@ -2208,9 +2218,20 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
                 warn_selenium_died(ctx_new)
                 last_doc = None
         if doc_url:
-            last_doc = Document(
-                DocumentType.URL, doc_url, None, None, None
-            )
+            if begins(doc_url, "file:"):
+                path = doc_url[len("file:"):]
+                if not last_doc or os.path.realpath(last_doc.path) != os.path.realpath(path):
+                    doctype = DocumentType.FILE
+                    if last_doc and last_doc.doctype == DocumentType.RFILE:
+                        doctype = DocumentType.RFILE
+                    last_doc = Document(
+                        doctype, path, None, None, None
+                    )
+            else:
+                if not last_doc or doc_url != last_doc.path:
+                    last_doc = Document(
+                        DocumentType.URL, doc_url, None, None, None
+                    )
 
     if not ctx_new.docs and last_doc:
         last_doc.expand_match_chains_above = len(ctx_new.match_chains)
