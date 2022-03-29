@@ -1,8 +1,8 @@
 {
     "args": [
-        "url=xxx",
-        "cr=.*"
+        "url=./test/res/basic.html",
+        "cf={content}"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: Failed to fetch https://xxx: connection failed\n"
+    "stderr": "[ERROR]: Failed to fetch https:///./test/res/basic.html: invalid url\n"
 }

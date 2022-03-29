@@ -1,0 +1,8 @@
+{
+    "args": [
+        "url=xxx",
+        "cr=.*"
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: Failed to fetch https://xxx: connection failed\n"
+}

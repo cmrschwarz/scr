@@ -1217,7 +1217,14 @@ def fetch_doc(ctx, doc):
         doc.text = data.decode(doc.encoding, errors="surrogateescape")
         return
     assert doc.document_type == DocumentType.URL
-    res = requests_dl(ctx, doc.path)
+    try:
+        res = requests_dl(ctx, doc.path)
+    except requests.exceptions.InvalidURL:
+        raise ScrepFetchError("invalid url")
+    except requests.exceptions.ConnectionError:
+        raise ScrepFetchError("connection failed")
+    except requests.exceptions.RequestException as ex:
+        raise ScrepFetchError(str(ex))
     data = res.content
     res.close()
     if data is None:
@@ -1834,10 +1841,6 @@ def dl(ctx):
         except ScrepFetchError as ex:
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: {str(ex)}")
             continue
-        except requests.exceptions.ConnectionError as ex:
-            log(ctx, Verbosity.ERROR,
-                f"Failed to fetch {doc.path}: connection failed")
-            continue
         static_content = (
             doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
         last_msg = ""
@@ -1907,12 +1910,11 @@ def dl(ctx):
 
 
 def finalize(ctx):
-    if not ctx.selenium_keep_alive:
-        if ctx.selenium_variant != SeleniumVariant.DISABLED and not selenium_has_died(ctx):
-            try:
-                ctx.selenium_driver.close()
-            except WebDriverException:
-                pass
+    if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
+        try:
+            ctx.selenium_driver.close()
+        except WebDriverException:
+            pass
     if ctx.selenium_download_dir:
         shutil.rmtree(ctx.selenium_download_dir)
 
@@ -2359,8 +2361,8 @@ def main():
     except ValueError as ex:
         error(str(ex))
 
-    setup(ctx)
     try:
+        setup(ctx)
         if ctx.repl:
             run_repl(ctx)
         else:
