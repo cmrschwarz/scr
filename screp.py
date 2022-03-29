@@ -49,6 +49,9 @@ DEFAULT_CWF = "{content}"
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 
+# very slow to initialize, so we do it lazily cached
+RANDOM_USER_AGENT_INSTANCE = None
+
 
 class InteractiveResult(Enum):
     ACCEPT = 0
@@ -699,7 +702,7 @@ def setup_selenium(ctx):
         for mc in ctx.match_chains
     )
 
-    if have_internal_dls:
+    if have_internal_dls and not ctx.selenium_download_dir:
         ctx.selenium_download_dir = tempfile.mkdtemp(
             prefix="screp_selenium_downloads_")
 
@@ -860,10 +863,11 @@ def load_cookie_jar(ctx):
 
 def setup(ctx):
     global DEFAULT_CPF
+    obj_apply_defaults(ctx, DlContext(blank=False))
+
     if len(ctx.docs) == 0 and not ctx.repl:
         log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
         raise ValueError()
-    obj_apply_defaults(ctx, DlContext(blank=False))
 
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -875,8 +879,10 @@ def setup(ctx):
         log(ctx, Verbosity.ERROR, f"the options ua and uar are incompatible")
         raise ValueError()
     elif ctx.user_agent_random:
-        user_agent_rotator = UserAgent()
-        ctx.user_agent = user_agent_rotator.get_random_user_agent()
+        global RANDOM_USER_AGENT_INSTANCE
+        if RANDOM_USER_AGENT_INSTANCE is None:
+            RANDOM_USER_AGENT_INSTANCE = UserAgent()
+        ctx.user_agent = RANDOM_USER_AGENT_INSTANCE.get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
         ctx.user_agent = "screp/0.2.0"
 
@@ -1909,14 +1915,19 @@ def dl(ctx):
     return doc
 
 
-def finalize(ctx):
+def finalize_selenium(ctx):
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
         except WebDriverException:
             pass
+        finally:
+            ctx.selenium_driver = None
     if ctx.selenium_download_dir:
-        shutil.rmtree(ctx.selenium_download_dir)
+        try:
+            shutil.rmtree(ctx.selenium_download_dir)
+        finally:
+            ctx.selenium_download_dir = None
 
 
 def begins(string, begin):
@@ -2173,45 +2184,73 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
     return True
 
 
-def run_repl(ctx):
-    # run with initial args
-    last_doc = dl(ctx)
-    readline.add_history(shlex.join(sys.argv[1:]))
-    tty = sys.stdin.isatty()
-    while True:
-        try:
-            line = input("screp> " if tty else "")
-        except KeyboardInterrupt:
-            if tty:
-                print("")
-            raise
-        except EOFError:
-            if tty:
-                print("")
-            return
-        args = shlex.split(line)
-        if not len(args):
-            continue
-        ctx_new = DlContext(blank=True)
-        try:
-            parse_args(ctx_new, args)
-        except ValueError as ex:
-            log(ctx, Verbosity.ERROR, str(ex))
-        if not ctx_new.docs and last_doc:
-            last_doc.extend_chains_above = len(ctx_new.match_chains)
-            last_doc.match_chains = list(ctx_new.match_chains)
-            ctx.reused_doc = last_doc
-            ctx_new.docs.append(last_doc)
+def resolve_repl_defaults(ctx_new, ctx, last_doc):
+    if ctx_new.user_agent_random and not ctx_new.user_agent:
+        ctx.user_agent = None
 
-        obj_apply_defaults(ctx_new, ctx)
+    if ctx_new.user_agent and not ctx_new.user_agent_random:
+        ctx.user_agent_random = None
+
+    obj_apply_defaults(ctx_new, ctx)
+
+    if ctx_new.selenium_variant != ctx.selenium_variant:
         try:
-            setup(ctx_new)
-            ctx = ctx_new
-        except ValueError:
+            if ctx.selenium_driver:
+                ctx.selenium_driver.close()
+        except WebDriverException:
             pass
+        finally:
+            ctx_new.selenium_driver = None
+            ctx.selenium_driver = None
+
+    if not ctx_new.docs and last_doc:
+        last_doc.extend_chains_above = len(ctx_new.match_chains)
+        last_doc.match_chains = list(ctx_new.match_chains)
+        ctx.reused_doc = last_doc
+        ctx_new.docs.append(last_doc)
+
+
+def run_repl(ctx):
+    ctx_new = None
+    try:
+        # run with initial args
         last_doc = dl(ctx)
-        if ctx.exit:
-            return
+        readline.add_history(shlex.join(sys.argv[1:]))
+        tty = sys.stdin.isatty()
+        while True:
+            try:
+                line = input("screp> " if tty else "")
+            except KeyboardInterrupt:
+                if tty:
+                    print("")
+                raise
+            except EOFError:
+                if tty:
+                    print("")
+                return
+            args = shlex.split(line)
+            if not len(args):
+                continue
+            ctx_new = DlContext(blank=True)
+            try:
+                parse_args(ctx_new, args)
+            except ValueError as ex:
+                log(ctx, Verbosity.ERROR, str(ex))
+
+            resolve_repl_defaults(ctx_new, ctx, last_doc)
+
+            try:
+                setup(ctx_new)
+                ctx = ctx_new
+                ctx_new = None
+            except ValueError:
+                pass
+
+            last_doc = dl(ctx)
+            if ctx.exit:
+                return
+    finally:
+        finalize_selenium(ctx)
 
 
 def parse_args(ctx, args):
@@ -2361,14 +2400,14 @@ def main():
     except ValueError as ex:
         error(str(ex))
 
-    try:
-        setup(ctx)
-        if ctx.repl:
-            run_repl(ctx)
-        else:
+    setup(ctx)
+    if ctx.repl:
+        run_repl(ctx)
+    else:
+        try:
             dl(ctx)
-    finally:
-        finalize(ctx)
+        finally:
+            finalize_selenium(ctx)
     return ctx.error_code
 
 
