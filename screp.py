@@ -871,11 +871,11 @@ def load_cookie_jar(ctx):
         ctx.cookie_list.append(ck)
 
 
-def setup(ctx):
+def setup(ctx, for_repl=False):
     global DEFAULT_CPF
     obj_apply_defaults(ctx, DlContext(blank=False))
 
-    if len(ctx.docs) == 0 and not ctx.repl:
+    if len(ctx.docs) == 0 and (not ctx.repl or for_repl) and not ctx.reused_doc:
         log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
         raise ValueError()
 
@@ -2295,8 +2295,11 @@ def run_repl(ctx):
                 ctx = ctx_new
 
                 try:
-                    setup(ctx)
+                    setup(ctx, True)
                 except ValueError:
+                    if ctx.exit:
+                        ctx_old.exit = True
+                        ctx_old.error_code = ctx.error_code
                     ctx = ctx_old
                     pass
                 try:
@@ -2458,8 +2461,11 @@ def main():
         parse_args(ctx, sys.argv[1:])
     except ValueError as ex:
         error(str(ex))
+    try:
+        setup(ctx)
+    except ValueError:
+        return ctx.error_code
 
-    setup(ctx)
     if ctx.repl:
         ec = run_repl(ctx)
     else:

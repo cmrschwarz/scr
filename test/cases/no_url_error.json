@@ -1,0 +1,7 @@
+{
+    "args": [
+        "cr=."
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: must specify at least one url or (r)file\n"
+}
