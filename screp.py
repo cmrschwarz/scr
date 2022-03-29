@@ -884,10 +884,6 @@ def setup(ctx, for_repl=False):
     global DEFAULT_CPF
     obj_apply_defaults(ctx, DlContext(blank=False))
 
-    if len(ctx.docs) == 0 and not ctx.repl:
-        log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
-        raise ValueError()
-
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
@@ -926,6 +922,15 @@ def setup(ctx, for_repl=False):
 
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
+
+    if len(ctx.docs) == 0:
+        report = True
+        if ctx.repl:
+            if not any(mc.has_content_matching or mc.has_document_matching for mc in ctx.match_chains):
+                report = False
+        if report:
+            log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
+            raise ValueError()
 
     if ctx.selenium_variant == SeleniumVariant.DISABLED:
         for mc in ctx.match_chains:
