@@ -455,6 +455,7 @@ class DlContext:
         self.cookie_dict = {}
         self.match_chains = []
         self.docs = deque()
+        self.reused_doc = None
 
         # stuff that can't be reconfigured (yet)
         self.selenium_timeout_secs = 10
@@ -821,7 +822,7 @@ def setup_match_chain(mc, ctx):
         )
 
     if not mc.has_content_matching and not mc.has_document_matching:
-        if any(mc in doc.match_chains for doc in mc.ctx.docs):
+        if any(doc is not ctx.reused_doc and mc in doc.match_chains for doc in mc.ctx.docs):
             log(ctx, Verbosity.ERROR,
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
             raise ValueError()
@@ -1805,7 +1806,7 @@ def parse_xml(ctx, doc, src, enc, forced_enc):
         return None
 
 
-def dl(ctx, reused_doc=None):
+def dl(ctx):
     closed = False
     doc = None
     while ctx.docs:
@@ -1821,7 +1822,7 @@ def dl(ctx, reused_doc=None):
 
         try_number = 0
         try:
-            if doc is not reused_doc:
+            if doc is not ctx.reused_doc:
                 fetch_doc(ctx, doc)
         except WebDriverException as ex:
             if selenium_has_died(ctx):
@@ -2197,15 +2198,16 @@ def run_repl(ctx):
         if not ctx_new.docs and last_doc:
             last_doc.extend_chains_above = len(ctx_new.match_chains)
             last_doc.match_chains = list(ctx_new.match_chains)
+            ctx.reused_doc = last_doc
             ctx_new.docs.append(last_doc)
+
         obj_apply_defaults(ctx_new, ctx)
         try:
             setup(ctx_new)
             ctx = ctx_new
         except ValueError:
             pass
-
-        last_doc = dl(ctx, last_doc)
+        last_doc = dl(ctx)
         if ctx.exit:
             return
 

@@ -5,5 +5,5 @@
         "cx=//ul/li/text()"
     ],
     "stdin": "'cx=//ul/li/text()' cr=B.r\nexit\n",
-    "stdout": "Foo\nBar\nBaz\nBar\nBar"
+    "stdout": "Foo\nBar\nBaz\nBar\n"
 }

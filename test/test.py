@@ -47,6 +47,7 @@ def timed_exec(func):
 def execute_test(command, args, stdin):
     proc = subprocess.Popen(
         [command] + args,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
