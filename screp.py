@@ -459,6 +459,7 @@ class DlContext:
         self.match_chains = []
         self.docs = deque()
         self.reused_doc = None
+        self.changed_selenium = False
 
         # stuff that can't be reconfigured (yet)
         self.selenium_timeout_secs = 10
@@ -1200,7 +1201,7 @@ class ScrepFetchError(Exception):
 
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
-        if doc is not ctx.reused_doc:
+        if doc is not ctx.reused_doc or ctx.changed_selenium:
             selpath = doc.path
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.realpath(selpath)
@@ -2185,7 +2186,9 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
 
     obj_apply_defaults(ctx_new, ctx)
 
+    changed_selenium = False
     if ctx_new.selenium_variant != ctx.selenium_variant:
+        changed_selenium = True
         try:
             if ctx.selenium_driver:
                 ctx.selenium_driver.close()
@@ -2214,6 +2217,7 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
         last_doc.match_chains = list(ctx_new.match_chains)
         ctx_new.reused_doc = last_doc
         ctx_new.docs.append(last_doc)
+    ctx_new.changed_selenium = changed_selenium
 
 
 def run_repl(ctx):
