@@ -1,0 +1,9 @@
+{
+    "args": [
+        "repl",
+        "rfile=./test/res/basic.html",
+        "cx=//ul/li/text()"
+    ],
+    "stdin": "'cx=//ul/li/text()' cr=B.r\nexit\n",
+    "stdout": "Foo\nBar\nBaz\nBar\nBar"
+}

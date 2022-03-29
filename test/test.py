@@ -24,6 +24,7 @@ DASH_BAR = "-" * 80
 def get_key_with_default(obj, key, default=""):
     return obj[key] if key in obj else default
 
+
 def get_cmd_string(tc):
     cmd = tc.get("command", "screp")
     for arg in tc.get("args", []):
@@ -42,6 +43,7 @@ def timed_exec(func):
         time_notice = f"{elapsed_s:.2f} s"
     return res, time_notice
 
+
 def execute_test(command, args, stdin):
     proc = subprocess.Popen(
         [command] + args,
@@ -51,10 +53,9 @@ def execute_test(command, args, stdin):
         encoding="utf-8",
         env=os.environ
     )
-    output = proc.communicate(input=stdin)
-    stdout = output[0]
-    stderr = output[1]
+    stdout, stderr = proc.communicate(input=stdin)
     return proc.returncode, stdout, stderr
+
 
 def run_tests(tags_need, tags_avoid):
     fails = 0
@@ -99,7 +100,8 @@ def run_tests(tags_need, tags_avoid):
         sys.stdout.write(msg_inprogress)
         sys.stdout.flush()
 
-        (exit_code, stdout, stderr), exec_time_str = timed_exec(lambda: execute_test(command, args, stdin))
+        (exit_code, stdout, stderr), exec_time_str = timed_exec(
+            lambda: execute_test(command, args, stdin))
 
         success = False
         if stderr != expected_stderr:
@@ -128,18 +130,21 @@ def run_tests(tags_need, tags_avoid):
         sys.stdout.write("\r" + msg_result + "\n")
     return successes, fails, skipped
 
+
 def main():
     tags_need = []
     tags_avoid = []
 
     for t in sys.argv[1:]:
-        if not t: continue
+        if not t:
+            continue
         if t[0] == "-":
             tags_avoid.append(t[1:])
         else:
             tags_need.append(t)
 
-    (successes, fails, skipped), exec_time_str = timed_exec(lambda: run_tests(tags_need, tags_avoid))
+    (successes, fails, skipped), exec_time_str = timed_exec(
+        lambda: run_tests(tags_need, tags_avoid))
 
     if skipped:
         skip_notice = f", {skipped} test(s) skipped"
@@ -147,12 +152,14 @@ def main():
         skip_notice = ""
 
     if fails:
-        print(f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
+        print(
+            f"{ANSI_RED}{fails} test(s) failed, {successes} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
         return 1
     else:
         print(
             f"{ANSI_GREEN}{successes} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
         return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

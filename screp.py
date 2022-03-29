@@ -437,7 +437,7 @@ class DlContext:
     def __init__(self, blank=False):
         self.cookie_file = None
         self.cookie_jar = None
-
+        self.exit = None
         self.selenium_variant = SeleniumVariant.DISABLED
         self.tor_browser_dir = None
         self.selenium_driver = None
@@ -873,9 +873,6 @@ def setup(ctx):
     if not ctx.match_chains:
         ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
-        # this allows for screp url=... to be used as curl
-        # it is slightly inconsistent with the regular chains though
-        ctx.origin_mc.has_content_matching = True
         chain_zero_enabled = True
 
     for d in ctx.docs:
@@ -1817,7 +1814,6 @@ def dl(ctx, reused_doc=None):
         except WebDriverException as ex:
             if selenium_has_died(ctx):
                 warn_selenium_died(ctx)
-                closed = True
             else:
                 log(ctx, Verbosity.ERROR,
                     f"Failed to fetch {doc.path}: {str(ex)}")
@@ -1844,7 +1840,6 @@ def dl(ctx, reused_doc=None):
                 except WebDriverException as e:
                     if selenium_has_died(ctx):
                         warn_selenium_died(ctx)
-                        closed = True
                     else:
                         log(ctx, Verbosity.ERROR,
                             f"selenium failed to fetch page source: {str(ex)}")
@@ -1895,16 +1890,16 @@ def dl(ctx, reused_doc=None):
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
                 mc, doc, content_skip_doc, doc_skip_doc
             )
-    if ctx.selenium_variant != SeleniumVariant.DISABLED and not closed:
-        if not ctx.selenium_keep_alive:
-            try:
-                ctx.selenium_driver.close()
-            except WebDriverException:
-                pass
     return doc
 
 
 def finalize(ctx):
+    if not ctx.selenium_keep_alive:
+        if ctx.selenium_variant != SeleniumVariant.DISABLED and not selenium_has_died(ctx):
+            try:
+                ctx.selenium_driver.close()
+            except WebDriverException:
+                pass
     if ctx.selenium_download_dir:
         shutil.rmtree(ctx.selenium_download_dir)
 
@@ -2166,9 +2161,19 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
 def run_repl(ctx):
     # run with initial args
     last_doc = dl(ctx)
+    readline.add_history(shlex.join(sys.argv[1:]))
+    tty = sys.stdin.isatty()
     while True:
-        sys.stdout.write("screp> ")
-        line = input()
+        try:
+            line = input("screp> " if tty else "")
+        except KeyboardInterrupt:
+            if tty:
+                print("")
+            raise
+        except EOFError:
+            if tty:
+                print("")
+            return
         args = shlex.split(line)
         if not len(args):
             continue
@@ -2179,11 +2184,14 @@ def run_repl(ctx):
             log(ctx, Verbosity.ERROR, str(ex))
         if not ctx_new.docs and last_doc:
             last_doc.extend_chains_above = len(ctx_new.match_chains)
-            last_doc.match_chains = list(ctx.match_chains)
+            last_doc.match_chains = list(ctx_new.match_chains)
+            ctx_new.docs.append(last_doc)
         obj_apply_defaults(ctx_new, ctx)
         ctx = ctx_new
         setup(ctx)
         last_doc = dl(ctx, last_doc)
+        if ctx.exit:
+            return
 
 
 def parse_args(ctx, args):
@@ -2316,6 +2324,9 @@ def parse_args(ctx, args):
             continue
 
         if apply_ctx_arg(ctx, "--repl", "repl", arg,  parse_bool_arg, True):
+            continue
+
+        if apply_ctx_arg(ctx, "exit", "exit", arg,  parse_bool_arg, True):
             continue
 
         raise ValueError(f"unrecognized option: '{arg}'")

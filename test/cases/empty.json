@@ -1,6 +1,7 @@
 {
     "args": [
-        "rfile=./test/res/empty.html"
+        "rfile=./test/res/empty.html",
+        "cr=.*"
     ],
     "stdout": "\n"
 }
