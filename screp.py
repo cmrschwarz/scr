@@ -2256,7 +2256,7 @@ def run_repl(ctx):
 
                 last_doc = dl(ctx)
                 if ctx.exit:
-                    return
+                    return ctx.error_code
             except KeyboardInterrupt:
                 print("")
                 continue
@@ -2413,13 +2413,14 @@ def main():
 
     setup(ctx)
     if ctx.repl:
-        run_repl(ctx)
+        ec = run_repl(ctx)
     else:
         try:
             dl(ctx)
         finally:
             finalize_selenium(ctx)
-    return ctx.error_code
+        ec = ctx.error_code
+    return ec
 
 
 if __name__ == "__main__":

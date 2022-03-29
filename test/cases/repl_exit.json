@@ -1,0 +1,11 @@
+{
+    "args": [
+        "repl"
+    ],
+    "ec": 1,
+    "stdin": "exit file=xxx",
+    "tags": [
+        "repl"
+    ],
+    "stderr": "[ERROR]: Failed to fetch xxx: no such file or directory\n"
+}
