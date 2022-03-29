@@ -1,0 +1,15 @@
+{
+    "args": [
+        "repl"
+    ],
+    "stdin": [
+        "rfile=./test/res/basic.html",
+        "cx=//foo@bar",
+        "exit"
+    ],
+    "tags": [
+        "repl"
+    ],
+    "ec": 0,
+    "stderr": "[ERROR]: invalid xpath: '//foo@bar'\n"
+}

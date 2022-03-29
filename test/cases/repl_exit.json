@@ -3,7 +3,7 @@
         "repl"
     ],
     "ec": 1,
-    "stdin": "exit file=xxx",
+    "stdin": "exit file=xxx cr=.",
     "tags": [
         "repl"
     ],

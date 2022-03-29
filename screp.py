@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from argparse import ArgumentError
+from multiprocessing.sharedctypes import Value
 import lxml
 import lxml.html
 import requests
@@ -23,6 +24,7 @@ import time
 import tempfile
 import itertools
 import warnings
+import urllib3
 import copy
 import shlex
 import binascii
@@ -67,6 +69,7 @@ class DocumentType(Enum):
     URL = 1
     FILE = 2
     RFILE = 3
+    CONTENT_MATCH = 4
 
     def derived_type(self):
         if self == DocumentType.RFILE:
@@ -79,7 +82,12 @@ class DocumentType(Enum):
         return self
 
 
-document_type_display_dict = {dt: dt.name.lower() for dt in DocumentType}
+document_type_display_dict = {
+    DocumentType.URL: "url",
+    DocumentType.FILE: "file",
+    DocumentType.RFILE: "rfile",
+    DocumentType.CONTENT_MATCH: "content match from"
+}
 
 
 class SeleniumVariant(Enum):
@@ -251,15 +259,18 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            error(f"invalid xpath: '{self.xpath}'")
+            log(ctx, Verbosity.ERROR, f"invalid xpath: '{self.xpath}'")
+            raise ScrepMatchError
         except lxml.etree.LxmlError as ex:
-            error(
+            log(ctx, Verbosity.ERROR,
                 f"failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
-            )
+                )
+            raise ScrepMatchError
         if not isinstance(xpath_matches, list):
-            error(
+            log(ctx, Verbosity.ERROR,
                 f"invalid xpath: '{self.xpath}'")
+            raise ScrepMatchError
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
@@ -519,6 +530,7 @@ def help(err=False):
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
+        cfc=<chain spec>     forward content match as a virtual document
         cpf=<format string>  print the result of this format string for each content, empty to disable
                              defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
@@ -950,7 +962,7 @@ def selenium_has_died(ctx):
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except WebDriverException as e:
+    except (WebDriverException, urllib3.exceptions.MaxRetryError) as e:
         return True
 
 
@@ -1202,6 +1214,10 @@ class ScrepFetchError(Exception):
     pass
 
 
+class ScrepMatchError(Exception):
+    pass
+
+
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
@@ -1214,7 +1230,7 @@ def fetch_doc(ctx, doc):
         return
     if doc is ctx.reused_doc:
         ctx.reused_doc = None
-        if not ctx.changed_selenium:
+        if doc.text and not ctx.changed_selenium:
             return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
@@ -1829,8 +1845,7 @@ def dl(ctx):
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
-        log(ctx, Verbosity.INFO,
-            f"handling {document_type_display_dict[doc.document_type]} '{doc.path}'")
+
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
@@ -1839,6 +1854,13 @@ def dl(ctx):
                 mc.satisfied = False
                 if mc.has_xpath_matching:
                     have_xpath_matching += 1
+
+        if unsatisfied_chains == 0:
+            if ctx.selenium_variant == SeleniumVariant.DISABLED or (doc is ctx.reused_doc and not ctx.changed_selenium):
+                continue
+
+        log(ctx, Verbosity.INFO,
+            f"handling {document_type_display_dict[doc.document_type]} '{doc.path}'")
 
         try_number = 0
         try:
@@ -2239,6 +2261,9 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
         ctx_new.reused_doc = last_doc
         ctx_new.docs.append(last_doc)
     ctx_new.changed_selenium = changed_selenium
+    if changed_selenium and last_doc:
+        last_doc.text = None
+        last_doc.xml = None
 
 
 def run_repl(ctx):
@@ -2274,8 +2299,10 @@ def run_repl(ctx):
                 except ValueError:
                     ctx = ctx_old
                     pass
-
-                last_doc = dl(ctx)
+                try:
+                    last_doc = dl(ctx)
+                except ScrepMatchError:
+                    pass
                 if ctx.exit:
                     return ctx.error_code
             except KeyboardInterrupt:
@@ -2438,6 +2465,8 @@ def main():
     else:
         try:
             dl(ctx)
+        except ScrepMatchError:
+            pass
         finally:
             finalize_selenium(ctx)
         ec = ctx.error_code
