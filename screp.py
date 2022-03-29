@@ -737,7 +737,7 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 
 def setup_match_chain(mc, ctx):
-    # we meed ctx because mc.ctx is stil None before we apply_defaults
+    # we need ctx because mc.ctx is stil None before we apply_defaults
     obj_apply_defaults(mc, ctx.defaults_mc, {
                        "content": {}, "label": {}, "document": {}})
     locators = [mc.content, mc.label, mc.document]
@@ -748,7 +748,7 @@ def setup_match_chain(mc, ctx):
         if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
             mc.selenium_download_variant = SeleniumDownloadStrategy.FETCH
             log(ctx, Verbosity.WARN,
-                f"match chain {mc.id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
+                f"match chain {mc.chain_id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
 
     if mc.dimin > mc.dimax:
         error(f"dimin can't exceed dimax")
@@ -758,7 +758,9 @@ def setup_match_chain(mc, ctx):
     mc.di = mc.dimin
 
     if mc.content_write_format and not mc.content_save_format:
-        error(f"cannot specify cwf without csf")
+        log(ctx, Verbosity.ERROR,
+            f"match chain {mc.chain_id}: cannot specify cwf without csf")
+        raise ValueError()
 
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
@@ -787,7 +789,9 @@ def setup_match_chain(mc, ctx):
     if not mc.has_label_matching:
         mc.label_allow_missing = True
         if mc.labels_inside_content:
-            error(f"cannot specify lic without lx or lr")
+            log(ctx, Verbosity.ERROR,
+                f"match chain {mc.chain_id}: cannot specify lic without lx or lr")
+            raise ValueError()
 
     if mc.label_default_format is None and mc.label_allow_missing:
         form = "dl_"
@@ -815,6 +819,12 @@ def setup_match_chain(mc, ctx):
         mc.content_download_required = any(
             format_string_uses_arg(of, None, "content") for of in output_formats
         )
+
+    if not mc.has_content_matching and not mc.has_document_matching:
+        if any(mc in doc.match_chains for doc in mc.ctx.docs):
+            log(ctx, Verbosity.ERROR,
+                f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
+            raise ValueError()
 
 
 def load_cookie_jar(ctx):
@@ -850,7 +860,8 @@ def load_cookie_jar(ctx):
 def setup(ctx):
     global DEFAULT_CPF
     if len(ctx.docs) == 0 and not ctx.repl:
-        error("must specify at least one url or (r)file")
+        log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
+        raise ValueError()
     obj_apply_defaults(ctx, DlContext(blank=False))
 
     if ctx.tor_browser_dir:
@@ -860,7 +871,8 @@ def setup(ctx):
         load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
-        error(f"the options ua and uar are incompatible")
+        log(ctx, Verbosity.ERROR, f"the options ua and uar are incompatible")
+        raise ValueError()
     elif ctx.user_agent_random:
         user_agent_rotator = UserAgent()
         ctx.user_agent = user_agent_rotator.get_random_user_agent()
@@ -2187,8 +2199,12 @@ def run_repl(ctx):
             last_doc.match_chains = list(ctx_new.match_chains)
             ctx_new.docs.append(last_doc)
         obj_apply_defaults(ctx_new, ctx)
-        ctx = ctx_new
-        setup(ctx)
+        try:
+            setup(ctx_new)
+            ctx = ctx_new
+        except ValueError:
+            pass
+
         last_doc = dl(ctx, last_doc)
         if ctx.exit:
             return
