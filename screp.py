@@ -79,7 +79,7 @@ class DocumentType(Enum):
         return self
 
 
-document_type_display_dict = {dt: str(dt).lower() for dt in DocumentType}
+document_type_display_dict = {dt: dt.name.lower() for dt in DocumentType}
 
 
 class SeleniumVariant(Enum):
@@ -1830,7 +1830,7 @@ def dl(ctx):
     while ctx.docs:
         doc = ctx.docs.popleft()
         log(ctx, Verbosity.INFO,
-            f"handling {document_type_display_dict[doc.document_type]} document {doc.path}")
+            f"handling {document_type_display_dict[doc.document_type]} '{doc.path}'")
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
