@@ -1848,8 +1848,8 @@ def dl(ctx):
         last_msg = ""
         while unsatisfied_chains > 0:
             try_number += 1
-            same_content = static_content or try_number > 1
-            if not static_content and try_number > 1:
+            same_content = static_content and try_number > 1
+            if try_number > 1 and not static_content:
                 assert(ctx.selenium_variant != SeleniumVariant.DISABLED)
                 try:
                     src_new = ctx.selenium_driver.page_source
