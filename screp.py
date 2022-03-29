@@ -466,6 +466,7 @@ class DlContext:
         self.documents_bfs = False
         self.selenium_keep_alive = False
         self.repl = False
+        self.request_timeout = 30
 
         if blank:
             for k in self.__dict__:
@@ -478,7 +479,7 @@ class DlContext:
         self.changed_selenium = False
 
         # stuff that can't be reconfigured (yet)
-        self.selenium_timeout_secs = 10
+
         self.selenium_log_path = os.path.devnull
         self.selenium_poll_frequency_secs = 0.3
         self.selenium_content_count_pad_length = 6
@@ -591,6 +592,7 @@ def help(err=False):
             lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
     Global Options:
+        timeout=<seconds>   seconds before a web request timeouts (default 30)
         bfs=<bool>          traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
@@ -743,7 +745,7 @@ def setup_selenium(ctx):
         ctx.user_agent = ctx.selenium_driver.execute_script(
             "return navigator.userAgent;")
 
-    ctx.selenium_driver.set_page_load_timeout(ctx.selenium_timeout_secs)
+    ctx.selenium_driver.set_page_load_timeout(ctx.request_timeout)
     if ctx.cookie_jar:
         # todo: implement something more clever for this, at least for chrome:
         # https://stackoverflow.com/questions/63220248/how-to-preload-cookies-before-first-request-with-python3-selenium-chrome-webdri
@@ -1006,30 +1008,6 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
         return None
 
 
-def selenium_setup_cors_tab(ctx, doc_link, link, dl_index):
-    doc_url = urllib.parse.urlparse(doc_link)
-    link_url = urllib.parse.urlparse(link)
-    if doc_url.netloc == link_url.netloc:
-        return None
-    prev_window_handle = ctx.selenium_driver.current_window_handle
-    host_link = link_url._replace(
-        path="", params="", query="", fragment="").geturl()
-    cors_tab = f"screp_cors_tab_{dl_index}"
-    ctx.selenium_driver.execute_script(
-        "window.open('about:blank', arguments[0]);",
-        cors_tab
-    )
-    ctx.selenium_driver.switch_to.window(cors_tab)
-    ctx.selenium_driver.get(host_link)
-    return prev_window_handle
-
-
-def selenium_close_cors_tab(ctx, cors_prev_tab):
-    if cors_prev_tab is not None:
-        ctx.selenium_driver.close()
-        ctx.selenium_driver.switch_to.window(cors_prev_tab)
-
-
 def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
     dl_index = mc.ctx.selenium_dl_index
     mc.ctx.selenium_dl_index += 1
@@ -1158,7 +1136,7 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
 def requests_dl(ctx, path, cookie_dict=None, proxies=None):
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
-        with urllib.request.urlopen(path) as res:
+        with urllib.request.urlopen(path, timeout=ctx.request_timeout) as res:
             return res.read(), None
 
     if cookie_dict is None:
@@ -1172,13 +1150,15 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None):
     ex = None
     try:
         with requests.get(
-            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies
+            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies, timeout=ctx.request_timeout
         ) as req:
             return req.content, req.encoding
     except requests.exceptions.InvalidURL:
         ex = ScrepFetchError("invalid url")
     except requests.exceptions.ConnectionError:
         ex = ScrepFetchError("connection failed")
+    except requests.exceptions.ConnectTimeout:
+        ex = ScrepFetchError("connection timeout")
     except requests.exceptions.RequestException as ex:
         ex = ScrepFetchError(truncate(str(ex)))
     if ex:
@@ -1259,7 +1239,11 @@ def fetch_doc(ctx, doc):
             selpath = doc.path
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.realpath(selpath)
-            ctx.selenium_driver.get(selpath)
+            try:
+                ctx.selenium_driver.get(selpath)
+            except selenium.common.exceptions.TimeoutException:
+                ScrepFetchError("selenium timeout")
+
         decide_document_encoding(ctx, doc)
         doc.text = ctx.selenium_driver.page_source
         return
@@ -2475,6 +2459,9 @@ def parse_args(ctx, args):
             continue
 
         if apply_ctx_arg(ctx, "exit", "exit", arg,  parse_bool_arg, True):
+            continue
+
+        if apply_ctx_arg(ctx, "timeout", "request_timeout", arg,  parse_int_arg):
             continue
 
         raise ValueError(f"unrecognized option: '{arg}'")
