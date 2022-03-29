@@ -824,12 +824,6 @@ def setup_match_chain(mc, ctx):
             format_string_uses_arg(of, None, "content") for of in output_formats
         )
 
-    if not mc.has_content_matching and not mc.has_document_matching:
-        if any(doc is not ctx.reused_doc and mc in doc.match_chains for doc in mc.ctx.docs):
-            log(ctx, Verbosity.ERROR,
-                f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
-            raise ValueError()
-
 
 def load_cookie_jar(ctx):
     try:
@@ -1206,12 +1200,16 @@ class ScrepFetchError(Exception):
 
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
-        selpath = doc.path
-        if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-            selpath = "file:" + os.path.realpath(selpath)
-        ctx.selenium_driver.get(selpath)
+        if doc is not ctx.reused_doc:
+            selpath = doc.path
+            if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
+                selpath = "file:" + os.path.realpath(selpath)
+            ctx.selenium_driver.get(selpath)
         decide_document_encoding(ctx, doc)
         doc.text = ctx.selenium_driver.page_source
+        return
+    if doc is ctx.reused_doc:
+        ctx.reused_doc = None
         return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         try:
@@ -1800,27 +1798,25 @@ def decide_document_encoding(ctx, doc):
     doc.forced_encoding = forced
 
 
-def parse_xml(ctx, doc, src, enc, forced_enc):
+def parse_xml(ctx, doc):
     try:
-        src_bytes = src.encode(enc, errors="surrogateescape")
-        if src.strip() == "":
+        src_bytes = doc.text.encode(doc.encoding, errors="surrogateescape")
+        if doc.text.strip() == "":
             src_xml = lxml.etree.Element("html")
-        elif forced_enc:
+        elif doc.forced_encoding:
             src_xml = lxml.html.fromstring(
                 src_bytes,
-                parser=lxml.html.HTMLParser(encoding=enc)
+                parser=lxml.html.HTMLParser(encoding=doc.encoding)
             )
         else:
             src_xml = lxml.html.fromstring(src_bytes)
-        return src_xml
-    except (lxml.LxmlError, UnicodeEncodeError, UnicodeDecodeError) as ex:
+        doc.xml = src_xml
+    except (lxml.etree.LxmlError, UnicodeEncodeError, UnicodeDecodeError) as ex:
         log(ctx, Verbosity.ERROR,
             f"{doc.path}: failed to parse as xml: {str(ex)}")
-        return None
 
 
 def dl(ctx):
-    closed = False
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
@@ -1835,8 +1831,7 @@ def dl(ctx):
 
         try_number = 0
         try:
-            if doc is not ctx.reused_doc:
-                fetch_doc(ctx, doc)
+            fetch_doc(ctx, doc)
         except WebDriverException as ex:
             if selenium_has_died(ctx):
                 warn_selenium_died(ctx)
@@ -1852,9 +1847,9 @@ def dl(ctx):
         last_msg = ""
         while unsatisfied_chains > 0:
             try_number += 1
-            same_content = static_content and try_number > 1
-            if try_number > 1 and not static_content:
-                assert ctx.selenium_variant != SeleniumVariant.DISABLED
+            same_content = static_content or try_number > 1
+            if not static_content and try_number > 1:
+                assert(ctx.selenium_variant != SeleniumVariant.DISABLED)
                 try:
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == doc.text)
@@ -1870,10 +1865,7 @@ def dl(ctx):
             if not same_content:
                 interactive_chains = []
                 if have_xpath_matching:
-                    doc.xml = parse_xml(
-                        ctx, doc, doc.text,
-                        doc.encoding, doc.forced_encoding
-                    )
+                    parse_xml(ctx, doc)
                     if doc.xml is None:
                         break
 
@@ -2203,52 +2195,67 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
             ctx_new.selenium_driver = None
             ctx.selenium_driver = None
 
+    if ctx_new.selenium_driver:
+        doc_url = None
+        try:
+            doc_url = ctx_new.selenium_driver.current_url
+        except WebDriverException as ex:
+            # selenium died, abort
+            if selenium_has_died(ctx_new):
+                warn_selenium_died(ctx_new)
+                last_doc = None
+        if doc_url:
+            last_doc = Document(
+                DocumentType.URL, doc_url, None, None, None
+            )
+
     if not ctx_new.docs and last_doc:
-        last_doc.extend_chains_above = len(ctx_new.match_chains)
+        last_doc.expand_match_chains_above = len(ctx_new.match_chains)
         last_doc.match_chains = list(ctx_new.match_chains)
-        ctx.reused_doc = last_doc
+        ctx_new.reused_doc = last_doc
         ctx_new.docs.append(last_doc)
 
 
 def run_repl(ctx):
-    ctx_new = None
     try:
         # run with initial args
         last_doc = dl(ctx)
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
+
         while True:
             try:
-                line = input("screp> " if tty else "")
-            except KeyboardInterrupt:
-                if tty:
-                    print("")
-                raise
-            except EOFError:
-                if tty:
-                    print("")
-                return
-            args = shlex.split(line)
-            if not len(args):
-                continue
-            ctx_new = DlContext(blank=True)
-            try:
-                parse_args(ctx_new, args)
-            except ValueError as ex:
-                log(ctx, Verbosity.ERROR, str(ex))
+                try:
+                    line = input("screp> " if tty else "")
+                except EOFError:
+                    if tty:
+                        print("")
+                    return
+                args = shlex.split(line)
+                if not len(args):
+                    continue
+                ctx_new = DlContext(blank=True)
+                try:
+                    parse_args(ctx_new, args)
+                except ValueError as ex:
+                    log(ctx, Verbosity.ERROR, str(ex))
 
-            resolve_repl_defaults(ctx_new, ctx, last_doc)
-
-            try:
-                setup(ctx_new)
+                resolve_repl_defaults(ctx_new, ctx, last_doc)
+                ctx_old = ctx
                 ctx = ctx_new
-                ctx_new = None
-            except ValueError:
-                pass
 
-            last_doc = dl(ctx)
-            if ctx.exit:
-                return
+                try:
+                    setup(ctx)
+                except ValueError:
+                    ctx = ctx_old
+                    pass
+
+                last_doc = dl(ctx)
+                if ctx.exit:
+                    return
+            except KeyboardInterrupt:
+                print("")
+                continue
     finally:
         finalize_selenium(ctx)
 
