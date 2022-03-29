@@ -1153,16 +1153,14 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None):
             path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies, timeout=ctx.request_timeout
         ) as req:
             return req.content, req.encoding
-    except requests.exceptions.InvalidURL:
-        ex = ScrepFetchError("invalid url")
-    except requests.exceptions.ConnectionError:
-        ex = ScrepFetchError("connection failed")
-    except requests.exceptions.ConnectTimeout:
-        ex = ScrepFetchError("connection timeout")
+    except requests.exceptions.InvalidURL as ex:
+        raise ScrepFetchError("invalid url")
+    except requests.exceptions.ConnectionError as ex:
+        raise ScrepFetchError("connection failed")
+    except requests.exceptions.ConnectTimeout as ex:
+        raise ScrepFetchError("connection timeout")
     except requests.exceptions.RequestException as ex:
-        ex = ScrepFetchError(truncate(str(ex)))
-    if ex:
-        raise ex
+        raise ScrepFetchError(truncate(str(ex)))
 
 
 def warn_selenium_died(ctx):
@@ -1182,9 +1180,18 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                 if content is None:
                     return InteractiveResult.ACCEPT
             else:
-                if doc.document_type.derived_type() is DocumentType.FILE:
-                    with open(content_path, "rb") as f:
-                        content = f.read()
+                if doc.document_type.derived_type() is DocumentType.FILE and urllib.parse.urlparse(content_path).scheme != "data":
+                    try:
+                        with open(content_path, "rb") as f:
+                            content = f.read()
+                    except FileNotFoundError as ex:
+                        log(mc.ctx, Verbosity.ERROR,
+                            f"{doc.path}{di_ci_context}: failed to fetch '{truncate(content_path)}': file not found")
+                        return None
+                    except IOError as ex:
+                        log(mc.ctx, Verbosity.ERROR,
+                            f"{doc.path}{di_ci_context}: failed to fetch '{truncate(content_path)}': {truncate(str(ex))}")
+                        return None
                 else:
                     try:
                         content, _enc = requests_dl(mc.ctx, content_path)
@@ -1255,8 +1262,10 @@ def fetch_doc(ctx, doc):
         try:
             with open(doc.path, "rb") as f:
                 data = f.read()
-        except FileNotFoundError:
-            raise ScrepFetchError("no such file or directory")
+        except FileNotFoundError as ex:
+            raise ScrepFetchError("no such file or directory") from ex
+        except IOError as ex:
+            raise ScrepFetchError(str(ex)) from ex
         decide_document_encoding(ctx, doc)
         doc.text = data.decode(doc.encoding, errors="surrogateescape")
         return
@@ -1527,7 +1536,6 @@ def handle_content_match(mc, doc, content_match):
                 if res != InteractiveResult.EDIT:
                     return res
             save_path = input("enter new save path: ")
-
     download_content(mc, doc, di_ci_context, content_match, di,
                      ci, label, content, content_link, save_path)
 
