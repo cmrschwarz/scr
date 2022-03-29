@@ -7,6 +7,9 @@
     "tags": [
         "repl"
     ],
-    "stdin": "'cx=//ul/li/text()' cr=B.r\nexit\n",
+    "stdin": [
+        "'cx=//ul/li/text()' cr=B.r",
+        "exit"
+    ],
     "stdout": "Foo\nBar\nBaz\nBar\n"
 }

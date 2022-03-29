@@ -58,6 +58,12 @@ def execute_test(command, args, stdin):
     return proc.returncode, stdout, stderr
 
 
+def join_lines(lines):
+    if not isinstance(lines, list):
+        return lines
+    return "\n".join(lines) + "\n"
+
+
 def run_tests(tags_need, tags_avoid):
     fails = 0
     skipped = 0
@@ -93,9 +99,9 @@ def run_tests(tags_need, tags_avoid):
         ec = tc.get("ec", 0)
         command = tc.get("command", "screp")
         args = tc.get("args", [])
-        stdin = tc.get("stdin", "")
-        expected_stdout = tc.get("stdout", "")
-        expected_stderr = tc.get("stderr", "")
+        stdin = join_lines(tc.get("stdin", ""))
+        expected_stdout = join_lines(tc.get("stdout", ""))
+        expected_stderr = join_lines(tc.get("stderr", ""))
 
         msg_inprogress = f"{ANSI_YELLOW}RUNNING {name}{ANSI_CLEAR}"
         sys.stdout.write(msg_inprogress)
