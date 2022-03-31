@@ -27,6 +27,7 @@ import warnings
 import copy
 import shlex
 import binascii
+from io import BytesIO
 import shutil
 import mimetypes
 import urllib3.exceptions  # for selenium MaxRetryError
@@ -49,7 +50,8 @@ chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
-DEFAULT_TRUNCATION_LENGTH = 120
+DEFAULT_TRUNCATION_LENGTH = 200
+DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 
@@ -154,6 +156,58 @@ verbosities_display_dict = {
     Verbosity.INFO:  " [INFO]: ",
     Verbosity.DEBUG: "[DEBUG]: ",
 }
+
+
+class ResponseStreamWrapper(object):
+    def __init__(self, request_response, buffer_size=DEFAULT_RESPONSE_BUFFER_SIZE):
+        self._bytes_buffer = []
+        self._response = request_response
+        self._iterator = self._response.iter_content(buffer_size)
+        self._pos = 0
+
+    def tell(self):
+        return self._pos
+
+    def read(self, size=None):
+        if size is None:
+            goal_position = float("inf")
+        else:
+            goal_position = self._pos + size
+
+        loaded_until = self._pos + len(self._bytes_buffer)
+        while loaded_until < goal_position:
+            try:
+                buf = next(self._iterator)
+            except StopIteration:
+                break
+            loaded_until += len(buf)
+            if self._bytes_buffer:
+                self._bytes_buffer.extend(buf)
+            else:
+                self._bytes_buffer = buf
+        if loaded_until <= goal_position:
+            self._pos = loaded_until
+            res = self._bytes_buffer
+            self._bytes_buffer = []
+            return res
+        buf_pos = goal_position - self._pos
+        self._pos = goal_position
+        res = self._bytes_buffer[0:buf_pos]
+        self._bytes_buffer = self._bytes_buffer[buf_pos:]
+        return res
+
+    def seek(self, position, whence=None):
+        raise NotImplementedError(
+            "ResponseStreamWrapper does not support seek")
+
+    def close(self):
+        self._response.close()
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self):
+        self.close()
 
 
 class ContentMatch:
@@ -1001,8 +1055,12 @@ def selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, fil
     if not os.path.isabs(link):
         cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
         filepath = os.path.join(cur_path, link)
-    with open(filepath, "rb") as f:
-        return f.read()
+    try:
+        return open(filepath, "rb")
+    except IOError as ex:
+        log(mc.ctx, Verbosity.ERROR,
+            f"{doc.path}{di_ci_context}: failed to open file '{truncate(link)}': {truncate(str(ex))}")
+        return None
 
 
 def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
@@ -1015,7 +1073,7 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
         }
     try:
         data, _enc = requests_dl(
-            mc.ctx, link, mc.ctx.selenium_driver.get_cookies(), proxies=proxies)
+            mc.ctx, link, mc.ctx.selenium_driver.get_cookies(), proxies=proxies, stream=True)
         return data
     except ScrepFetchError as ex:
         log(mc.ctx, Verbosity.ERROR,
@@ -1076,10 +1134,12 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
                     return None
 
         i += 1
-    with open(tmp_path, "rb") as f:
-        data = f.read()
-    os.remove(tmp_path)
-    return data
+    f = open(tmp_path, "rb")
+    if sys.platform in ["linux", "darwin"]:
+        # windows doesn't handle the deletion of files with open handles
+        # the way we want. so we clean up on screp exit
+        os.remove(tmp_path)
+    return f
 
 
 def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None):
@@ -1128,7 +1188,7 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
         log(mc.ctx, Verbosity.ERROR,
             f"{doc.path}{di_ci_context}: selenium download of '{link}' failed{cors_warn}: {err}")
         return None
-    return binascii.a2b_base64(res["ok"])
+    return BytesIO(binascii.a2b_base64(res["ok"]))
 
 
 def selenium_download(mc, doc, di_ci_context, link, filepath=None):
@@ -1148,11 +1208,15 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     return selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath)
 
 
-def requests_dl(ctx, path, cookie_dict=None, proxies=None):
+def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
-        with urllib.request.urlopen(path, timeout=ctx.request_timeout) as res:
-            return res.read(), None
+        res = urllib.request.urlopen(path, timeout=ctx.request_timeout)
+        if stream:
+            return res, None
+        data = res.read()
+        res.close()
+        return data, None
 
     if cookie_dict is None:
         cookie_dict = ctx.cookie_dict.get(url.hostname, {})
@@ -1164,10 +1228,16 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None):
     headers = {'User-Agent': ctx.user_agent}
     ex = None
     try:
-        with requests.get(
-            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies, timeout=ctx.request_timeout
-        ) as req:
-            return req.content, req.encoding
+        res = requests.get(
+            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies, timeout=ctx.request_timeout, stream=stream
+        )
+        if stream:
+            return ResponseStreamWrapper(res), res.encoding
+        data = res.read()
+        encoding = res.encoding
+        res.close()
+        return data, encoding
+
     except requests.exceptions.InvalidURL as ex:
         raise ScrepFetchError("invalid url")
     except requests.exceptions.ConnectionError as ex:
@@ -1190,15 +1260,14 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
     if not mc.content_raw:
         if mc.content_download_required:
             if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
-                content = selenium_download(
+                content_stream = selenium_download(
                     mc, doc, di_ci_context, content_path, save_path)
-                if content is None:
+                if content_stream is None:
                     return InteractiveResult.ACCEPT
             else:
                 if doc.document_type.derived_type() is DocumentType.FILE and urllib.parse.urlparse(content_path).scheme != "data":
                     try:
-                        with open(content_path, "rb") as f:
-                            content = f.read()
+                        content_stream = open(content_path, "rb")
                     except FileNotFoundError as ex:
                         log(mc.ctx, Verbosity.ERROR,
                             f"{doc.path}{di_ci_context}: failed to fetch '{truncate(content_path)}': file not found")
@@ -1209,12 +1278,14 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                         return None
                 else:
                     try:
-                        content, _enc = requests_dl(mc.ctx, content_path)
+                        content_stream, _enc = requests_dl(
+                            mc.ctx, content_path, stream=True)
                     except ScrepFetchError as ex:
                         log(mc.ctx, Verbosity.ERROR,
                             f"{doc.path}{di_ci_context}: failed to download '{truncate(content_path)}': {str(ex)}")
                         return None
-
+            content = content_stream.read()
+            content_stream.close()
     if mc.content_print_format:
         print_data = gen_final_content_format(
             mc, mc.content_print_format, label, di, ci, content_path,
