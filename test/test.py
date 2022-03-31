@@ -77,7 +77,7 @@ def run_test(name, tags_need, tags_avoid, parallelism):
         try:
             tc = json.load(f)
         except json.JSONDecodeError as ex:
-            print(f"{ANSI_RED}JSON PARSE ERROR in {name}: {str(ex)}")
+            print(f"{ANSI_RED}JSON PARSE ERROR in {name}: {str(ex)}{ANSI_CLEAR}")
             return TestResult.FAILED
     tags = tc.get("tags", [])
     tags.append(name)

@@ -539,7 +539,6 @@ def help(err=False):
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
-        owf=<bool>           allow to overwrite existing files, defaults to true
         cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
                              (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csin<bool>           giva a promt to edit the save path for a file
@@ -583,6 +582,7 @@ def help(err=False):
     Other:
         selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
         seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
+        owf=<bool>           allow to overwrite existing files, defaults to true
 
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
@@ -603,6 +603,8 @@ def help(err=False):
                             (default: disabled, values: tor, chrome, firefox, disabled)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
+        repl=<bool>         accept commands in a read eval print loop
+        exit=<bool>         exit the repl (with the result of the current command)
         """.strip()
     if err:
         error(text)
@@ -2308,6 +2310,8 @@ def run_repl(ctx):
 
         while True:
             try:
+                if ctx.exit:
+                    return ctx.error_code
                 try:
                     line = input("screp> " if tty else "")
                 except EOFError:
@@ -2339,8 +2343,6 @@ def run_repl(ctx):
                     last_doc = dl(ctx)
                 except ScrepMatchError:
                     pass
-                if ctx.exit:
-                    return ctx.error_code
             except KeyboardInterrupt:
                 print("")
                 continue
