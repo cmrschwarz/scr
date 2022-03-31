@@ -850,6 +850,18 @@ def setup_match_chain(mc, ctx):
         mc.content_download_required = any(
             format_string_uses_arg(of, None, "content") for of in output_formats
         )
+    if not mc.has_content_matching and not mc.has_document_matching:
+        err_unused = True
+        if mc.chain_id == 0:
+            if mc.ctx.repl:
+                err_unused = False
+            else:
+                err_unused = any(
+                    mc in d.match_chains for d in mc.ctx.docs)
+        if err_unused:
+            log(ctx, Verbosity.ERROR,
+                f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
+            raise ValueError()
 
 
 def load_cookie_jar(ctx):
@@ -904,8 +916,9 @@ def setup(ctx, for_repl=False):
         ctx.user_agent = "screp/0.2.0"
 
     # if no chains are specified, use the origin chain as chain 0
-    chain_zero_enabled = True in (
-        d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs)
+    chain_zero_enabled = any(
+        d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs
+    )
     if not ctx.match_chains:
         ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
@@ -2181,6 +2194,7 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     success, mcs, path = parse_mc_arg(ctx, argname, arg)
     if not success:
         return False
+    mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
         mcs = list(ctx.match_chains)
