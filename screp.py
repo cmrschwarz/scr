@@ -321,15 +321,13 @@ def content_match_build_format_args(cm, content=None):
 
 
 class Locator:
-    def __init__(self, name, additional_format_keys=[], blank=False):
+    def __init__(self, name, blank=False):
         self.name = name
         self.xpath = None
         self.regex = None
         self.format = None
         self.multimatch = True
         self.interactive = False
-        self.content_capture_group = None
-        self.additional_format_keys = additional_format_keys
         if blank:
             for k in self.__dict__:
                 self.__dict__[k] = None
@@ -338,48 +336,52 @@ class Locator:
         if self.regex is None:
             return
         try:
-            regex_comp = re.compile(self.regex, re.MULTILINE)
+            self.regex = re.compile(self.regex, re.MULTILINE)
         except re.error as err:
-            error(f"{self.name[0]}r is not a valid regex: {err.msg}")
-        if self.name in regex_comp.groupindex:
-            self.content_capture_group = self.name
-        else:
-            self.content_capture_group = 0
-        self.regex = regex_comp
+            raise ScrepSetupError(
+                f"{self.name[0]}r is not a valid regex: {err.msg}"
+            )
+
+    def compile_format(self):
+        if self.format is None:
+            return
+        self.format = unescape_string(self.format, f"{self.name[0]}f")
+        try:
+            if self.regex:
+                capture_group_keys = list(self.regex.groupindex.keys())
+                unnamed_regex_group_count = self.regex.groups - \
+                    len(capture_group_keys)
+            else:
+                capture_group_keys = []
+                unnamed_regex_group_count = 0
+            # TODO: use content_match_build_format_args to get list of args here
+            known_keys = capture_group_keys
+            key_count = len(known_keys) + unnamed_regex_group_count
+            fmt_keys = get_format_string_keys(self.format)
+            named_arg_count = 0
+            for k in fmt_keys:
+                if k == "":
+                    named_arg_count += 1
+                    if named_arg_count > key_count:
+                        raise ScrepSetupError(
+                            f"exceeded number of keys in "
+                            + f"{self.name[0]}f={self.format}"
+                        )
+                elif k not in known_keys:
+                    raise ScrepSetupError(
+                        f"unknown key {{{k}}} in {self.name[0]}f={self.format}"
+                    )
+        except re.error as ex:
+            raise ScrepSetupError(
+                f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}"
+            )
 
     def setup(self):
         self.xpath = empty_string_to_none(self.xpath)
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
-        if self.format:
-            self.format = unescape_string(self.format, f"{self.name[0]}f")
         self.compile_regex()
-        if self.format:
-            try:
-                if self.regex:
-                    capture_group_keys = list(self.regex.groupindex.keys())
-                    unnamed_regex_group_count = self.regex.groups - \
-                        len(capture_group_keys)
-                else:
-                    capture_group_keys = []
-                    unnamed_regex_group_count = 0
-                known_keys = [self.name] + capture_group_keys + \
-                    self.additional_format_keys
-                key_count = len(known_keys) + unnamed_regex_group_count
-                fmt_keys = get_format_string_keys(self.format)
-                named_arg_count = 0
-                for k in fmt_keys:
-                    if k == "":
-                        named_arg_count += 1
-                        if named_arg_count > key_count:
-                            error(
-                                f"exceeded number of keys in {self.name[0]}f={self.format}")
-                    elif k not in known_keys:
-                        error(
-                            f"unknown key {{{k}}} in {self.name[0]}f={self.format}")
-            except re.error as ex:
-                error(
-                    f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}")
+        self.compile_format()
 
     def match_xpath(self, ctx, src_xml, path, default=[], return_xml_tuple=False):
         if self.xpath is None:
@@ -387,18 +389,15 @@ class Locator:
         try:
             xpath_matches = src_xml.xpath(self.xpath)
         except lxml.etree.XPathEvalError as ex:
-            log(ctx, Verbosity.ERROR, f"invalid xpath: '{self.xpath}'")
-            raise ScrepMatchError
+            raise ScrepMatchError(f"invalid xpath: '{self.xpath}'")
         except lxml.etree.LxmlError as ex:
-            log(ctx, Verbosity.ERROR,
+            raise ScrepMatchError(
                 f"failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
-                )
-            raise ScrepMatchError
+            )
+
         if not isinstance(xpath_matches, list):
-            log(ctx, Verbosity.ERROR,
-                f"invalid xpath: '{self.xpath}'")
-            raise ScrepMatchError
+            raise ScrepMatchError(f"invalid xpath: '{self.xpath}'")
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
@@ -419,8 +418,9 @@ class Locator:
                     if return_xml_tuple:
                         res_xml.append(xm)
                 except (lxml.LxmlError, UnicodeEncodeError) as ex1:
-                    log(ctx, Verbosity.WARN,
-                        f"{path}: xpath match encoding failed: {str(ex1)}")
+                    raise ScrepMatchError(
+                        f"{path}: xpath match encoding failed: {str(ex1)}"
+                    )
 
         if return_xml_tuple:
             return res, res_xml
@@ -431,8 +431,9 @@ class Locator:
             return default
         res = []
         for m in self.regex.finditer(xmatch):
-            res.append(RegexMatch(xmatch, m.group(self.content_capture_group),
-                       list(m.groups()), m.groupdict()))
+            res.append(
+                RegexMatch(xmatch, m.string, list(m.groups()), m.groupdict())
+            )
             if not self.multimatch:
                 break
         return res
@@ -583,9 +584,9 @@ class MatchChain:
 
         self.ctx = ctx
         self.chain_id = chain_id
-        self.content = Locator("content", ["ci", "di", "chain"], blank)
-        self.label = Locator("label", ["ci", "di", "chain"], blank)
-        self.document = Locator("document", ["ci", "di", "chain"], blank)
+        self.content = Locator("content", blank)
+        self.label = Locator("label", blank)
+        self.document = Locator("document", blank)
         self.document_output_chains = [self]
 
         self.di = None
@@ -669,27 +670,22 @@ class DlContext:
         self.error_code = 0
 
 
-def log_raw(msg, verbosity):
+def log_raw(verbosity, msg):
     sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
-
-
-def error(msg):
-    log_raw(msg, Verbosity.ERROR)
-    exit(1)
 
 
 def unescape_string(txt, context):
     try:
         return txt.encode("utf-8").decode("unicode_escape")
     except (UnicodeEncodeError, UnicodeDecodeError) as ex:
-        error(f"failed to unescape {context}: {str(ex)}")
+        raise ScrepSetupError(f"failed to unescape {context}: {str(ex)}")
 
 
 def log(ctx, verbosity, msg):
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
     if ctx.verbosity >= verbosity:
-        log_raw(msg, verbosity)
+        log_raw(verbosity, msg)
 
 
 def help(err=False):
@@ -813,7 +809,9 @@ def help(err=False):
         exit=<bool>         exit the repl (with the result of the current command)
         """.strip()
     if err:
-        error(text)
+        sys.stderr.write(text + "\n")
+        sys.exit(1)
+
     else:
         print(text)
 
@@ -872,7 +870,7 @@ def setup_selenium_tor(ctx):
         if tb_env_var in os.environ:
             ctx.tor_browser_dir = os.environ[tb_env_var]
         else:
-            error(f"no tbdir specified, check --help")
+            raise ScrepSetupError(f"no tbdir specified, check --help")
     try:
         options = webdriver.firefox.options.Options()
         selenium_apply_firefox_options(ctx, options)
@@ -880,7 +878,7 @@ def setup_selenium_tor(ctx):
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
 
     except WebDriverException as ex:
-        error(f"failed to start tor browser: {str(ex)}")
+        raise ScrepSetupError(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
@@ -893,7 +891,7 @@ def setup_selenium_firefox(ctx):
         ctx.selenium_driver = webdriver.Firefox(
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
     except WebDriverException as ex:
-        error(f"failed to start geckodriver: {str(ex)}")
+        raise ScrepSetupError(f"failed to start geckodriver: {str(ex)}")
 
 
 def setup_selenium_chrome(ctx):
@@ -916,7 +914,7 @@ def setup_selenium_chrome(ctx):
         ctx.selenium_driver = webdriver.Chrome(
             options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
     except WebDriverException as ex:
-        error(f"failed to start chromedriver: {str(ex)}")
+        raise ScrepSetupError(f"failed to start chromedriver: {str(ex)}")
 
 
 def selenium_add_cookies_through_get(ctx):
@@ -925,7 +923,7 @@ def selenium_add_cookies_through_get(ctx):
         try:
             ctx.selenium_driver.get(f"https://{domain}")
         except selenium.common.exceptions.TimeoutException:
-            error(
+            raise ScrepSetupError(
                 "Failed to apply cookies for https://{domain}: page failed to load")
         for c in cookies.values():
             ctx.selenium_driver.add_cookie(c)
@@ -982,16 +980,16 @@ def setup_match_chain(mc, ctx):
     #            f"match chain {mc.chain_id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
 
     if mc.dimin > mc.dimax:
-        error(f"dimin can't exceed dimax")
+        raise ScrepSetupError(f"dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
-        error(f"cimin can't exceed cimax")
+        raise ScrepSetupError(f"cimin can't exceed cimax")
     mc.ci = mc.cimin
     mc.di = mc.dimin
 
     if mc.content_write_format and not mc.content_save_format:
-        log(ctx, Verbosity.ERROR,
-            f"match chain {mc.chain_id}: cannot specify cwf without csf")
-        raise ValueError()
+        raise ScrepSetupError(
+            f"match chain {mc.chain_id}: cannot specify cwf without csf"
+        )
 
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
@@ -1014,18 +1012,20 @@ def setup_match_chain(mc, ctx):
 
     if mc.content_print_format:
         mc.content_print_format = unescape_string(
-            mc.content_print_format, "cpf")
+            mc.content_print_format, "cpf"
+        )
     if mc.content_save_format:
         mc.content_save_format = unescape_string(mc.content_save_format, "csf")
         mc.content_write_format = unescape_string(
-            mc.content_write_format, "cwf")
+            mc.content_write_format, "cwf"
+        )
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
         if mc.labels_inside_content:
-            log(ctx, Verbosity.ERROR,
-                f"match chain {mc.chain_id}: cannot specify lic without lx or lr")
-            raise ValueError()
+            raise ScrepSetupError(
+                f"match chain {mc.chain_id}: cannot specify lic without lx or lr"
+            )
 
     if mc.label_default_format is None and mc.label_allow_missing:
         form = "dl_"
@@ -1055,9 +1055,9 @@ def setup_match_chain(mc, ctx):
         mc.content_refs_print + mc.content_refs_write) > 0
     if not mc.has_content_matching and not mc.has_document_matching:
         if not (mc.chain_id == 0 and mc.ctx.repl):
-            log(ctx, Verbosity.ERROR,
-                f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
-            raise ValueError()
+            raise ScrepSetupError(
+                f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
+            )
 
 
 def load_cookie_jar(ctx):
@@ -1071,7 +1071,7 @@ def load_cookie_jar(ctx):
     except OSError:
         raise
     except Exception as ex:
-        error(f"failed to read cookie file: {str(ex)}")
+        raise ScrepSetupError(f"failed to read cookie file: {str(ex)}")
     for cookie in ctx.cookie_jar:
         ck = {
             'domain': cookie.domain,
@@ -1101,8 +1101,7 @@ def setup(ctx, for_repl=False):
         load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
-        log(ctx, Verbosity.ERROR, f"the options ua and uar are incompatible")
-        raise ValueError()
+        raise ScrepSetupError(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
         global RANDOM_USER_AGENT_INSTANCE
         if RANDOM_USER_AGENT_INSTANCE is None:
@@ -1134,8 +1133,7 @@ def setup(ctx, for_repl=False):
             if not any(mc.has_content_matching or mc.has_document_matching for mc in ctx.match_chains):
                 report = False
         if report:
-            log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
-            raise ValueError()
+            raise ScrepSetupError("must specify at least one url or (r)file")
 
     if not ctx.downloads_temp_dir:
         have_internal_dls = any(
@@ -1588,6 +1586,10 @@ def download_content(cm, save_path):
             os.remove(temp_file_path)
         if save_file is not None:
             save_file.close()
+
+
+class ScrepSetupError(Exception):
+    pass
 
 
 class ScrepFetchError(Exception):
@@ -2304,9 +2306,10 @@ def begins(string, begin):
 def parse_mc_range_int(ctx, v, arg):
     try:
         return int(v)
-    except ValueError:
-        error(
-            f"failed to parse '{v}' as an integer for match chain specification of '{arg}'")
+    except ValueError as ex:
+        raise ScrepSetupError(
+            f"failed to parse '{v}' as an integer for match chain specification of '{arg}'"
+        )
 
 
 def extend_match_chain_list(ctx, needed_id):
@@ -2324,11 +2327,11 @@ def parse_simple_mc_range(ctx, mc_spec, arg):
     for s in sections:
         s = s.strip()
         if s == "":
-            error(
+            raise ScrepSetupError(
                 "invalid empty range in match chain specification of '{arg}'")
         dash_split = [r.strip() for r in s.split("-")]
         if len(dash_split) > 2 or s == "-":
-            error(
+            raise ScrepSetupError(
                 "invalid range '{s}' in match chain specification of '{arg}'")
         if len(dash_split) == 1:
             id = parse_mc_range_int(ctx, dash_split[0], arg)
@@ -2347,8 +2350,10 @@ def parse_simple_mc_range(ctx, mc_spec, arg):
             else:
                 snd = parse_mc_range_int(ctx, dash_split[1], arg)
                 if fst > snd:
-                    error(
-                        f"second value must be larger than first for range {s} in match chain specification of '{arg}'")
+                    raise ScrepSetupError(
+                        f"second value must be larger than first for range {s} "
+                        + f"in match chain specification of '{arg}'"
+                    )
                 extend_match_chain_list(ctx, snd)
             ranges.append(ctx.match_chains[fst: snd + 1])
     return itertools.chain(*ranges)
@@ -2360,8 +2365,9 @@ def parse_mc_range(ctx, mc_spec, arg):
 
     esc_split = [x.strip() for x in mc_spec.split("^")]
     if len(esc_split) > 2:
-        error(
-            f"cannot have more than one '^' in match chain specification of '{arg}'")
+        raise ScrepSetupError(
+            f"cannot have more than one '^' in match chain specification of '{arg}'"
+        )
     if len(esc_split) == 1:
         return parse_simple_mc_range(ctx, mc_spec, arg)
     lhs, rhs = esc_split
@@ -2387,7 +2393,7 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
         if arg != argname:
             return False, None, None
         if not support_blank:
-            error("missing equals sign in argument '{arg}'")
+            raise ScrepSetupError("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
         value = blank_value
         mc_spec = arg[argname_len:]
@@ -2432,8 +2438,10 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
                     chainid = ""
                 else:
                     chainid = mc.chain_id
-                error(
-                    f"{argname}{chainid} specified twice in: '{t._final_values[ident]}' and '{arg}'")
+                raise ScrepSetupError(
+                    f"{argname}{chainid} specified twice in: "
+                    + f"'{t._final_values[ident]}' and '{arg}'"
+                )
             t._final_values[ident] = arg
         t.__dict__[ident] = value
 
@@ -2453,19 +2461,19 @@ def parse_bool_arg(v, arg, blank_val=True):
         return True
     if v in no_indicating_strings:
         return False
-    error(f"cannot parse '{v}' as a boolean in '{arg}'")
+    raise ScrepSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
 
 
 def parse_int_arg(v, arg):
     try:
         return int(v)
     except ValueError:
-        error(f"cannot parse '{v}' as an integer in '{arg}'")
+        raise ScrepSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
 
 
 def parse_encoding_arg(v, arg):
     if not verify_encoding(v):
-        error(f"unknown encoding in '{arg}'")
+        raise ScrepSetupError(f"unknown encoding in '{arg}'")
     return v
 
 
@@ -2487,8 +2495,11 @@ def select_variant(val, variants_dict):
 def parse_variant_arg(val, variants_dict, arg):
     res = select_variant(val, variants_dict)
     if res is None:
-        error(
-            f"illegal argument '{arg}', valid options for {arg[:len(arg)-len(val)-1]} are: {', '.join(sorted(variants_dict.keys()))}")
+        raise ScrepSetupError(
+            f"illegal argument '{arg}', valid options for "
+            + f"{arg[:len(arg)-len(val)-1]} are: "
+            + f"{', '.join(sorted(variants_dict.keys()))}"
+        )
     return res
 
 
@@ -2537,17 +2548,20 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
         if support_blank:
             val = blank_val
         else:
-            error(f"missing '=' and value for option '{optname}'")
+            raise ScrepSetupError(
+                f"missing '=' and value for option '{optname}'"
+            )
     else:
         nc = arg[len(optname):]
         if chain_regex.match(nc):
-            error(
-                "option '{optname}' does not support match chain specification")
+            raise ScrepSetupError(
+                "option '{optname}' does not support match chain specification"
+            )
         if nc[0] != "=":
             return False
         val = get_arg_val(arg)
     if ctx.__dict__[argname] is not None:
-        error(f"error: {argname} specified twice")
+        raise ScrepSetupError(f"error: {argname} specified twice")
     ctx.__dict__[argname] = value_parse(val, arg)
     return True
 
@@ -2629,11 +2643,13 @@ def run_repl(ctx):
                 args = shlex.split(line)
                 if not len(args):
                     continue
+
                 ctx_new = DlContext(blank=True)
                 try:
                     parse_args(ctx_new, args)
-                except ValueError as ex:
+                except ScrepSetupError as ex:
                     log(ctx, Verbosity.ERROR, str(ex))
+                    continue
 
                 resolve_repl_defaults(ctx_new, ctx, last_doc)
                 ctx_old = ctx
@@ -2641,16 +2657,17 @@ def run_repl(ctx):
 
                 try:
                     setup(ctx, True)
-                except ValueError:
+                except ScrepSetupError as ex:
                     if ctx.exit:
                         ctx_old.exit = True
                         ctx_old.error_code = ctx.error_code
                     ctx = ctx_old
-                    pass
+                    log(ctx, Verbosity.ERROR, str(ex))
+                    continue
                 try:
                     last_doc = dl(ctx)
-                except ScrepMatchError:
-                    pass
+                except ScrepMatchError as ex:
+                    log(ctx, Verbosity.ERROR, str(ex))
             except KeyboardInterrupt:
                 print("")
                 continue
@@ -2800,21 +2817,24 @@ def parse_args(ctx, args):
         if apply_ctx_arg(ctx, "timeout", "request_timeout", arg,  parse_int_arg):
             continue
 
-        raise ValueError(f"unrecognized option: '{arg}'")
+        raise ScrepSetupError(f"unrecognized option: '{arg}'")
 
 
 def main():
     ctx = DlContext(blank=True)
     if len(sys.argv) < 2:
-        error(f"missing command line options. Consider {sys.argv[0]} --help")
+        log_raw(
+            Verbosity.ERROR,
+            f"missing command line options. Consider {sys.argv[0]} --help"
+        )
+        return 1
+
     try:
         parse_args(ctx, sys.argv[1:])
-    except ValueError as ex:
-        error(str(ex))
-    try:
         setup(ctx)
-    except ValueError:
-        return ctx.error_code
+    except ScrepSetupError as ex:
+        log_raw(Verbosity.ERROR, str(ex))
+        return 1
 
     if ctx.repl:
         ec = run_repl(ctx)
