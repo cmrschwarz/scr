@@ -1,0 +1,7 @@
+{
+    "args": [
+        "url3=xxx"
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: match chain 0 is unused, it has neither document nor content matching\n"
+}
