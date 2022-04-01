@@ -1294,14 +1294,31 @@ def selenium_download(mc, doc, di_ci_context, link, filepath=None):
     return selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath)
 
 
+def fetch_file(ctx, path, stream=False):
+    try:
+        f = open(path, "rb")
+        if stream:
+            return f
+        try:
+            return f.read()
+        finally:
+            f.close()
+    except FileNotFoundError as ex:
+        raise ScrepFetchError("no such file or directory") from ex
+    except IOError as ex:
+        raise ScrepFetchError(truncate(str(ex))) from ex
+
+
 def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
         res = urllib.request.urlopen(path, timeout=ctx.request_timeout)
         if stream:
             return res, None
-        data = res.read()
-        res.close()
+        try:
+            data = res.read()
+        finally:
+            res.close()
         return data, None
 
     if cookie_dict is None:
@@ -1342,6 +1359,15 @@ def report_selenium_error(ctx, ex):
     log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
+def advance_output_formatters(output_formatters, buf):
+    i = 0
+    while i < len(output_formatters):
+        if output_formatters[i].advance(buf):
+            i += 1
+        else:
+            del output_formatters[i]
+
+
 def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
     context = f"{truncate(doc.path)}{di_ci_context}"
     if mc.content_raw:
@@ -1357,7 +1383,11 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                     return InteractiveResult.ACCEPT
             else:
                 if doc.document_type.derived_type() is DocumentType.FILE and urllib.parse.urlparse(content_path).scheme != "data":
-                    content = content_path
+                    if not os.path.isabs(content_path):
+                        content = os.path.normpath(os.path.join(
+                            os.path.dirname(doc.path), content_path))
+                    else:
+                        content = content_path
                     download_format = DownloadFormat.FILE
                 else:
                     try:
@@ -1369,20 +1399,16 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                             f"{context}: failed to download '{truncate(content_path)}': {str(ex)}")
                         return
     temp_file = None
-    content_stream = None
     save_file = None
+    multipass_file = None
+    content_stream = content if download_format == DownloadFormat.STREAM else None
+    need_multipass = mc.content_refs_print > 1 or mc.content_refs_write > 1
     try:
-        if download_format == DownloadFormat.STREAM:
+        if download_format == DownloadFormat.FILE:
+            content = fetch_file(mc.ctx, content, stream=True)
             content_stream = content
-            if (mc.content_refs_print > 1 or mc.content_refs_write > 1):
-                try:
-                    temp_file_path, _filename = gen_dl_temp_name(
-                        mc.ctx, save_path)
-                    temp_file = open(temp_file_path, "xb+")
-                except IOError as ex:
-                    log(mc.ctx, Verbosity.ERROR,
-                        f": failed to create temp file '{temp_file_path}': {truncate(str(ex))}")
-                    return
+            if need_multipass:
+                multipass_file = content
 
         output_formatters = []
         if mc.content_print_format:
@@ -1394,8 +1420,19 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
 
         if save_path:
             try:
+                use_as_multipass = (
+                    need_multipass
+                    and multipass_file is None
+                    and mc.content_write_format == DEFAULT_CWF
+                )
                 save_file = open(
-                    save_path, ("w" if mc.overwrite_files else "x") + "b")
+                    save_path,
+                    ("w" if mc.overwrite_files else "x")
+                    + "b"
+                    + ("+" if use_as_multipass else "")
+                )
+                if use_as_multipass:
+                    multipass_file = save_file
             except FileExistsError:
                 log(mc.ctx, Verbosity.ERROR,
                     f"{doc.path}{di_ci_context}: file already exists: {save_path}")
@@ -1417,31 +1454,35 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
                 assert res == False
             return
 
-        def run_output_formatters(output_formatters, buf):
-            i = 0
-            while i < len(output_formatters):
-                if output_formatters[i].advance(buf):
-                    i += 1
-                else:
-                    del output_formatters[i]
+        if need_multipass and multipass_file is None:
+            try:
+                temp_file_path, _filename = gen_dl_temp_name(
+                    mc.ctx, save_path)
+                temp_file = open(temp_file_path, "xb+")
+            except IOError as ex:
+                log(mc.ctx, Verbosity.ERROR,
+                    f": failed to create temp file '{temp_file_path}': {truncate(str(ex))}")
+                return
+            multipass_file = temp_file
 
         if content_stream:
             while True:
                 buf = content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
-                run_output_formatters(output_formatters, buf)
+                advance_output_formatters(output_formatters, buf)
                 if temp_file:
                     temp_file.write(buf)
                 if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
-                    content_stream.close()
-                    content_stream = None
+                    if content_stream is not multipass_file:
+                        content_stream.close()
+                        content_stream = None
                     break
 
-        if temp_file:
+        if multipass_file:
             while output_formatters:
-                temp_file.seek(0)
+                multipass_file.seek(0)
                 while True:
-                    buf = temp_file.read(DEFAULT_RESPONSE_BUFFER_SIZE)
-                    run_output_formatters(output_formatters, buf)
+                    buf = multipass_file.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+                    advance_output_formatters(output_formatters, buf)
                     if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
                         break
 
@@ -1481,13 +1522,7 @@ def fetch_doc(ctx, doc):
         if doc.text and not ctx.changed_selenium:
             return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-        try:
-            with open(doc.path, "rb") as f:
-                data = f.read()
-        except FileNotFoundError as ex:
-            raise ScrepFetchError("no such file or directory") from ex
-        except IOError as ex:
-            raise ScrepFetchError(str(ex)) from ex
+        data = fetch_file(ctx, doc.path)
         decide_document_encoding(ctx, doc)
         doc.text = data.decode(doc.encoding, errors="surrogateescape")
         return
