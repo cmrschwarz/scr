@@ -46,6 +46,7 @@ chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_CPF = "{content}\\n"
 DEFAULT_CWF = "{content}"
+DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
@@ -529,6 +530,7 @@ class MatchChain:
         self.content_save_format = None
         self.content_print_format = None
         self.content_write_format = None
+        self.content_forward_chains = []
         self.content_raw = True
         self.content_input_encoding = "utf-8"
         self.content_forced_input_encoding = None
@@ -615,7 +617,7 @@ class DlContext:
         self.documents_bfs = False
         self.selenium_keep_alive = False
         self.repl = False
-        self.request_timeout = 30
+        self.request_timeout = DEFAULT_TIMEOUT_SECONDS
 
         if blank:
             for k in self.__dict__:
@@ -677,20 +679,22 @@ def help(err=False):
     Content to Write out:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
-        cf=<format string>   content format string (args: <cr capture groups>, content, di, ci)
+        cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
         cm=<bool>            allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
         cicont=<bool>        don't reset the content index for each document
-        cfc=<chain spec>     forward content match as a virtual document
-        cpf=<format string>  print the result of this format string for each content, empty to disable
-                             defaults to \"{DEFAULT_CPF}\" if cpf and csf are both unspecified
-                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         csf=<format string>  save content to file at the path resulting from the format string, empty to enable
-                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+                             (args: xmatch, rmatch, fmatch, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
         cwf=<format string>  format to write to file. defaults to \"{DEFAULT_CWF}\"
-                             (args: content, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
-        csin<bool>           giva a promt to edit the save path for a file
+                             (args: content, xmatch, rmatch, fmatch, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+        cpf=<format string>  print the result of this format string for each content, empty to disable
+                             defaults to \"{DEFAULT_CPF}\" if cpf, csf and cfc are unspecified
+                             (args: content, xmatch, rmatch, fmatch, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+        cfc=<chain spec>     forward content match as a virtual document
+        cff=<format string>  format of the virtual document forwarded to the cfc chains. defaults to \"{DEFAULT_CWF}\"
+                             (args: content, match, label, encoding, document, escape, [di], [ci], [link], <lr capture groups>, <cr capture groups>)
+        csin<bool>           give a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
         cesc=<string>        escape sequence to terminate content in cin mode
@@ -741,7 +745,7 @@ def help(err=False):
             lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
     Global Options:
-        timeout=<seconds>   seconds before a web request timeouts (default 30)
+        timeout=<seconds>   seconds before a web request timeouts (default {DEFAULT_TIMEOUT_SECONDS})
         bfs=<bool>          traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>       output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>         user agent to pass in the html header for url GETs
@@ -1626,8 +1630,7 @@ def handle_content_match(mc, doc, content_match):
                         report_selenium_error(mc.ctx, ex)
                     return InteractiveResult.REJECT
 
-            content_link = normalize_link(
-                mc.ctx, mc, doc, doc_url, content_link)
+            content_link = normalize_link(mc.ctx, mc, doc, doc_url, content_link)
 
         if mc.content.interactive:
             prompt_options = [
@@ -2569,6 +2572,8 @@ def parse_args(ctx, args):
             continue
         if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg, True):
             continue
+        if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_range_as_arg(ctx, arg, v)):
+            continue
 
         if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg, True):
             continue
@@ -2577,6 +2582,8 @@ def parse_args(ctx, args):
         if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg, True):
             continue
 
+        if apply_mc_arg(ctx, "cff", ["content_forward_format"], arg):
+            continue
         if apply_mc_arg(ctx, "cpf", ["content_print_format"], arg):
             continue
         if apply_mc_arg(ctx, "cwf", ["content_write_format"], arg):
