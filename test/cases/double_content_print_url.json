@@ -3,8 +3,7 @@
         "url=echo.d.cmrs.io?echo=echo.d.cmrs.io?echo=foo",
         "cl=1",
         "cr=^.+$",
-        "cpf={content}:::{content}",
-        "csf=foo.txt"
+        "cpf={content}:::{content}"
     ],
     "tags": [
         "need-cmrs.io"

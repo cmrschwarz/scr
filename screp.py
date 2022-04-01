@@ -2085,8 +2085,10 @@ def parse_xml(ctx, doc):
 def dl(ctx):
     doc = None
     while ctx.docs:
-        doc = ctx.docs.popleft()
-
+        if ctx.documents_bfs:
+            doc = ctx.docs.popright()
+        else:
+            doc = ctx.docs.popleft()
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:

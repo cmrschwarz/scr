@@ -1,18 +1,21 @@
 {
     "args": [
-        "file=./test/res/multidoc.html",
-        "dx=//iframe/@src",
-        "cx=//div[@id='resources']//embed/@src",
+        "file0=./test/res/multidoc.html",
+        "dx0=//iframe/@src",
+        "doc0=1-3",
+        "cx1-3=//div[@id='resources']//embed/@src",
+        "cr3=^.*\\.txt$",
         "sel=f",
         "cl=t",
         "cpf={content}",
+        "seldl1=e",
         "seldl2=f",
-        "seldl1=e"
+        "seldl3=i"
     ],
     "tags": [
         "selenium",
         "firefox",
         "need-cmrs.io"
     ],
-    "stdout": "a\nb\na\nb\n"
+    "stdout": "a\nb\na\nb\na\n"
 }
