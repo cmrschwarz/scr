@@ -6,7 +6,7 @@
         "cx1-2=//div[@id='resources']//embed/@src",
         "sel=c",
         "cl=t",
-        "cpf1-3={content}",
+        "cpf1-3={c}",
         "seldl0=e",
         "seldl1=f"
     ],

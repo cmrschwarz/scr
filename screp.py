@@ -46,8 +46,8 @@ accept_chain_indicating_strings = prefixes("acceptchain")
 chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
-DEFAULT_CPF = "{content}\\n"
-DEFAULT_CWF = "{content}"
+DEFAULT_CPF = "{c}\\n"
+DEFAULT_CWF = "{c}"
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
@@ -261,6 +261,12 @@ class RegexMatch:
     def __hash__(self):
         return hash(self.__key())
 
+    def group_list_to_dict(self, name_prefix):
+        group_dict = {f"{name_prefix}0": self.rmatch}
+        for i, g in enumerate(self.group_list):
+            group_dict[f"{name_prefix}{i+1}"] = g
+        return group_dict
+
 
 def empty_string_to_none(string):
     if string == "":
@@ -453,33 +459,42 @@ class OutputFormatter:
     ):
         self.args_dict = {}
         self.args_list = []
+
+        # add default format parameters
+        self.args_dict.update({
+            "cx":   cm.content_regex_match.xmatch if cm.content_regex_match else None,
+            "cr":   cm.content_regex_match.rmatch if cm.content_regex_match else None,
+            "cf":   cm.cfmatch,
+            "cm":   cm.cmatch,
+            "lx":   cm.label_regex_match.xmatch if cm.label_regex_match else None,
+            "lr":   cm.label_regex_match.rmatch if cm.label_regex_match else None,
+            "lf":   cm.lfmatch,
+            "l":    cm.lmatch,
+            "enc":  cm.doc.encoding,
+            "dl":   cm.doc.path,
+            "esc":  cm.mc.content_escape_sequence,
+        })
+
         if cm.di is not None:
             self.args_dict["di"] = cm.di
         if cm.ci is not None:
             self.args_dict["ci"] = cm.ci
         if content is not None:
-            self.args_dict["content"] = content
+            self.args_dict["c"] = content
 
-        self.args_dict.update({
-            "match":    cm.cmatch,
-            "xmatch":   cm.content_regex_match.xmatch if cm.content_regex_match else None,
-            "rmatch":   cm.content_regex_match.rmatch if cm.content_regex_match else None,
-            "fmatch":   cm.cfmatch,
-            "label":    cm.lfmatch,
-            "lxmatch":  cm.label_regex_match.xmatch if cm.label_regex_match else None,
-            "lrmatch":  cm.label_regex_match.rmatch if cm.label_regex_match else None,
-            "lfmatch":  cm.lfmatch,
-            "encoding": cm.doc.encoding,
-            "document": cm.doc.path,
-            "escape":   cm.mc.content_escape_sequence,
-        })
+        # apply the unnamed groups first in case somebody overwrote it with a named group
+        if cm.label_regex_match:
+            self.args_dict.update(
+                cm.label_regex_match.group_list_to_dict("lg"))
+        if cm.content_regex_match:
+            self.args_dict.update(
+                cm.content_regex_match.group_list_to_dict("cg"))
 
+        # finally apply the named groups
         if cm.label_regex_match:
             self.args_dict.update(cm.label_regex_match.group_dict)
-            self.args_list.extend(cm.label_regex_match.group_list)
         if cm.content_regex_match:
             self.args_dict.update(cm.content_regex_match.group_dict)
-            self.args_list.extend(cm.content_regex_match.group_list)
 
         # we reverse these lists so we can take out elements using pop()
         self.format_parts = list(reversed(list(Formatter().parse(format_str))))
@@ -520,7 +535,7 @@ class OutputFormatter:
                             .encode("utf-8", errors="surrogateescape")
                         )
                     else:
-                        assert key == "content"
+                        assert key == "c"
                         self.found_stream = True
                         break
             if not self.found_stream:
@@ -765,6 +780,7 @@ def help(err=False):
 
         {{di}}                document index
         {{ci}}                content index
+        {{dl}}                document link
         {{enc}}               content encoding, deduced while respecting cenc and cfenc
         {{esc}}               escape sequence for separating content, can be overwritten using cesc
 
@@ -1026,9 +1042,11 @@ def setup_match_chain(mc, ctx):
         mc.label_default_format = form
 
     mc.content_refs_print = format_string_uses_arg(
-        mc.content_print_format, None, "content")
+        mc.content_print_format, None, "c"
+    )
     mc.content_refs_write = format_string_uses_arg(
-        mc.content_write_format, None, "content")
+        mc.content_write_format, None, "c"
+    )
     mc.need_content_download = (
         mc.content_refs_print + mc.content_refs_write) > 0
     if not mc.has_content_matching and not mc.has_document_matching:

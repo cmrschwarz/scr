@@ -2,7 +2,7 @@
     "args": [
         "file=test/res/tree.html",
         "dx=//iframe/@src",
-        "cpf={document}\\n",
+        "cpf={dl}\\n",
         "bfs=1"
     ],
     "stdout": [
