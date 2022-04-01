@@ -487,7 +487,8 @@ class OutputFormatter:
             if self.found_stream:
                 if buffer is None:
                     return True
-                self.out_stream.write(buffer)
+                if buffer: # avoid length zero buffers which may cause errors
+                    self.out_stream.write(buffer)
                 if len(buffer) == self.input_buffer_sizes:
                     return True
                 self.found_stream = False
@@ -996,7 +997,7 @@ def setup_match_chain(mc, ctx):
     mc.content_refs_print = format_string_uses_arg(
         mc.content_print_format, None, "content")
     mc.content_refs_write = format_string_uses_arg(
-        mc.content_print_format, None, "content")
+        mc.content_write_format, None, "content")
     mc.need_content_download = (
         mc.content_refs_print + mc.content_refs_write) > 0
     if not mc.has_content_matching and not mc.has_document_matching:
@@ -1404,7 +1405,12 @@ def download_content(mc, doc, di_ci_context, content_match, di, ci, label, conte
     need_multipass = mc.content_refs_print > 1 or mc.content_refs_write > 1
     try:
         if download_format == DownloadFormat.FILE:
-            content = fetch_file(mc.ctx, content, stream=True)
+            try:
+                content = fetch_file(mc.ctx, content, stream=True)
+            except ScrepFetchError as ex:
+                log(mc.ctx, Verbosity.ERROR,
+                    f"{context}: failed to open file '{truncate(content_path)}': {str(ex)}")
+                return
             content_stream = content
             if need_multipass:
                 multipass_file = content
