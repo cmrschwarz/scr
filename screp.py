@@ -1000,8 +1000,7 @@ def setup_match_chain(mc, ctx):
             if mc.ctx.repl:
                 err_unused = False
             else:
-                err_unused = any(
-                    mc in d.match_chains for d in mc.ctx.docs)
+                err_unused = any(mc in d.match_chains for d in mc.ctx.docs)
         if err_unused:
             log(ctx, Verbosity.ERROR,
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
@@ -1060,18 +1059,12 @@ def setup(ctx, for_repl=False):
         ctx.user_agent = "screp/0.2.0"
 
     # if no chains are specified, use the origin chain as chain 0
-    chain_zero_enabled = any(
-        d.match_chains[0:1] == ctx.match_chains[0:1] for d in ctx.docs
-    )
     if not ctx.match_chains:
         ctx.match_chains = [ctx.origin_mc]
         ctx.origin_mc.chain_id = 0
-        chain_zero_enabled = True
 
     for d in ctx.docs:
         if d.expand_match_chains_above is not None:
-            if not chain_zero_enabled and d.expand_match_chains_above == 0:
-                d.expand_match_chains_above = 1
             d.match_chains.extend(
                 ctx.match_chains[d.expand_match_chains_above:])
 

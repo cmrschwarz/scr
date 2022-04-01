@@ -6,8 +6,8 @@
         "sel=c",
         "cl=t",
         "cpf={content}",
-        "seldl2=f",
-        "seldl1=e"
+        "seldl0=e",
+        "seldl1=f"
     ],
     "tags": [
         "selenium",

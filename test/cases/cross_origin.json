@@ -5,8 +5,8 @@
         "sel=f",
         "cl=t",
         "cpf={content}",
-        "seldl1=e",
-        "seldl2=f"
+        "seldl0=e",
+        "seldl1=f"
     ],
     "ec": 1,
     "stdout": "foobar\n",
