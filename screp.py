@@ -2841,8 +2841,8 @@ def main():
     else:
         try:
             dl(ctx)
-        except ScrepMatchError:
-            pass
+        except ScrepMatchError as ex:
+            log(ctx, Verbosity.ERROR, str(ex))
         finally:
             finalize_selenium(ctx)
         ec = ctx.error_code
@@ -2853,7 +2853,8 @@ if __name__ == "__main__":
     try:
         # to silence: "Setting a profile has been deprecated" on launching tor
         warnings.filterwarnings(
-            "ignore", module=".*selenium.*", category=DeprecationWarning)
+            "ignore", module=".*selenium.*", category=DeprecationWarning
+        )
         exit(main())
     except BrokenPipeError:
         # Python flushes standard streams on exit; redirect remaining output
