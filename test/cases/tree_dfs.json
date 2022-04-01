@@ -1,0 +1,13 @@
+{
+    "args": [
+        "file=test/res/tree.html",
+        "dx=//iframe/@src",
+        "cpf={document}\\n"
+    ],
+    "stdout": [
+        "test/res/tree.html",
+        "test/res/tree_a.html",
+        "test/res/tree_c.html",
+        "test/res/tree_b.html"
+    ]
+}
