@@ -4,10 +4,10 @@
         "cx=//p/text()",
         "sel=f"
     ],
-    "ec": 0,
+    "ec": 1,
     "tags": [
         "selenium",
         "firefox"
     ],
-    "stderr": " [WARN]: the selenium instance was closed unexpectedly\n"
+    "stderr": "[ERROR]: the selenium instance was closed unexpectedly\n"
 }
