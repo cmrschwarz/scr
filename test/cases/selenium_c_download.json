@@ -11,7 +11,8 @@
     ],
     "tags": [
         "selenium",
-        "chrome"
+        "chrome",
+        "need-cmrs.io"
     ],
     "stdout": "a\nb\na\nb\n"
 }
