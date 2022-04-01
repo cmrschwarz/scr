@@ -274,6 +274,52 @@ def empty_string_to_none(string):
     return string
 
 
+def dict_update_unless_none(current, updates):
+    current.update({
+        k: v for k, v in updates.items() if v is not None
+    })
+
+
+def content_match_build_format_args(cm, content=None):
+    args_dict = {
+        "cenc": cm.doc.encoding,
+        "cesc": cm.mc.content_escape_sequence,
+        "dl":   cm.doc.path,
+    }
+    regex_matches = [
+        ("d", cm.doc.regex_match),
+        ("l", cm.label_regex_match),
+        ("c", cm.content_regex_match)
+    ]
+    regex_matches = filter(lambda rm: rm[1] is not None, regex_matches)
+    for p, rm in regex_matches:
+        args_dict.update({
+            f"{p}x": rm.xmatch,
+            f"{p}r": rm.rmatch,
+        })
+
+    dict_update_unless_none(args_dict, {
+        "cf": cm.cfmatch,
+        "cm": cm.cmatch,
+        "lf": cm.lfmatch,
+        "lm": cm.lmatch,
+        "df": cm.doc.dfmatch,
+        "di": cm.di,
+        "ci": cm.ci,
+        "c": content,
+    })
+
+    # apply the unnamed groups first in case somebody overwrote it with a named group
+    for p, rm in regex_matches:
+        args_dict.update(rm.group_list_to_dict(f"{p}g"))
+
+    # finally apply the named groups
+    for p, rm in regex_matches:
+        args_dict.update(rm.label_regex_match.group_dict)
+
+    return args_dict
+
+
 class Locator:
     def __init__(self, name, additional_format_keys=[], blank=False):
         self.name = name
@@ -391,32 +437,17 @@ class Locator:
                 break
         return res
 
-    def apply_format(self, match, values, keys):
-        if self.format is None:
-            return match.rmatch
-        return self.format.format(
-            *(match.group_list + [match.rmatch] + values),
-            **dict(
-                [(keys[i], values[i]) for i in range(len(values))] +
-                [(self.name, match.rmatch)] + list(match.group_dict.items())
-            )
-        )
+    def apply_format(self, cm, rm):
+        if not self.format:
+            return rm.rmatch
+        return self.format.format(**content_match_build_format_args(cm))
 
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
-    def apply(self, ctx, src, src_xml, path, default=[], values=[], keys=[]):
-        if self.is_unset():
-            return default
-        res = []
-        for xmatch in self.match_xpath(ctx, src_xml, path, [src]):
-            for m in self.match_regex(xmatch, path, [RegexMatch(xmatch, xmatch)]):
-                res.append(self.apply_format(m, values, keys))
-        return res
-
 
 class Document:
-    def __init__(self, document_type, path, src_mc, match_chains=None, expand_match_chains_above=None):
+    def __init__(self, document_type, path, src_mc, match_chains=None, expand_match_chains_above=None, regex_match=None):
         self.document_type = document_type
         self.path = path
         self.encoding = None
@@ -424,6 +455,8 @@ class Document:
         self.text = None
         self.xml = None
         self.src_mc = src_mc
+        self.regex_match = regex_match
+        self.dfmatch = None
         if not match_chains:
             self.match_chains = []
         else:
@@ -457,44 +490,8 @@ class OutputFormatter:
         self, format_str, cm, content,
         out_stream, input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
-        self.args_dict = {}
-        self.args_list = []
-
-        # add default format parameters
-        self.args_dict.update({
-            "cx":   cm.content_regex_match.xmatch if cm.content_regex_match else None,
-            "cr":   cm.content_regex_match.rmatch if cm.content_regex_match else None,
-            "cf":   cm.cfmatch,
-            "cm":   cm.cmatch,
-            "lx":   cm.label_regex_match.xmatch if cm.label_regex_match else None,
-            "lr":   cm.label_regex_match.rmatch if cm.label_regex_match else None,
-            "lf":   cm.lfmatch,
-            "l":    cm.lmatch,
-            "enc":  cm.doc.encoding,
-            "dl":   cm.doc.path,
-            "esc":  cm.mc.content_escape_sequence,
-        })
-
-        if cm.di is not None:
-            self.args_dict["di"] = cm.di
-        if cm.ci is not None:
-            self.args_dict["ci"] = cm.ci
-        if content is not None:
-            self.args_dict["c"] = content
-
-        # apply the unnamed groups first in case somebody overwrote it with a named group
-        if cm.label_regex_match:
-            self.args_dict.update(
-                cm.label_regex_match.group_list_to_dict("lg"))
-        if cm.content_regex_match:
-            self.args_dict.update(
-                cm.content_regex_match.group_list_to_dict("cg"))
-
-        # finally apply the named groups
-        if cm.label_regex_match:
-            self.args_dict.update(cm.label_regex_match.group_dict)
-        if cm.content_regex_match:
-            self.args_dict.update(cm.content_regex_match.group_dict)
+        self.args_dict = content_match_build_format_args(cm, content)
+        self.args_list = []  # no positional args right now
 
         # we reverse these lists so we can take out elements using pop()
         self.format_parts = list(reversed(list(Formatter().parse(format_str))))
@@ -724,7 +721,7 @@ def help(err=False):
         cenc=<encoding>      default encoding to assume that content is in
         cfenc=<encoding>     encoding to always assume that content is in, even if http(s) says differently
 
-    Labels to give each matched content (useful e.g. for the filename in csf):
+    Labels to give each matched content (mostly useful for the filename in csf):
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string
@@ -738,7 +735,7 @@ def help(err=False):
     Further documents to scan referenced in already found ones:
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
-        df=<format string>  document format string (args: <dr capture groups>, document)
+        df=<format string>  document format string
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
         dm=<bool>           allow multiple document matches in one document instead of picking the first
@@ -759,32 +756,39 @@ def help(err=False):
         selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
         seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
         owf=<bool>          allow to overwrite existing files, defaults to true
-    
+
     Format Args:
-        Named arguments for <format string> arguments. 
+        Named arguments for <format string> arguments.
         Some only become available later in the pipeline (e.g. {{cm}} is not available inside cf).
-        
+
         {{cx}}                content xpath match
-        {{cr}}                content regex match, equal to {{cx}} if cr is unspecified 
-        {{cf}}                content after applying cf
-        <cr capture groups> the named capture groups (?P<name>...) from cr are available as {{name}},
+        {{cr}}                content regex match, equal to {{cx}} if cr is unspecified
+        <cr capture groups> the named regex capture groups (?P<name>...) from cr are available as {{name}},
                             the unnamed ones (...) as {{cg<unnamed capture group number>}}
-        {{cm}}                final content match after link normalization (cl) and user interaction (cin) 
-        
+        {{cf}}                content after applying cf
+        {{cm}}                final content match after link normalization (cl) and user interaction (cin)
+
         {{lx}}                label xpath match
         {{lr}}                label regex match, equal to {{lx}} if lr is unspecified
-        <lr capture groups> the named capture groups (?P<name>...) from cr are available as {{name}},
+        <lr capture groups> the named regex capture groups (?P<name>...) from cr are available as {{name}},
                             the unnamed ones (...) as {{lg<unnamed capture group number>}}
         {{lf}}                label after applying lf
         {{l}}                 final label after user interaction (lin)
 
+        {{dx}}                document link xpath match
+        {{dr}}                document link regex match, equal to {{dx}} if dr is unspecified
+        <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {{name}},
+                            the unnamed ones (...) as {{dg<unnamed capture group number>}}
+        {{df}}                document link after applying df
+        {{dm}}                final document link after user interaction (din)
+
         {{di}}                document index
         {{ci}}                content index
-        {{dl}}                document link
-        {{enc}}               content encoding, deduced while respecting cenc and cfenc
-        {{esc}}               escape sequence for separating content, can be overwritten using cesc
+        {{dl}}                document link (even for df, this still refers to the parent document)
+        {{cenc}}              content encoding, deduced while respecting cenc and cfenc
+        {{cesc}}              escape sequence for separating content, can be overwritten using cesc
 
-        {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm                   
+        {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
@@ -1678,11 +1682,7 @@ def get_ci_di_context(mc, di, ci):
 def handle_content_match(cm):
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
-    cm.cfmatch = cm.mc.content.apply_format(
-        cm.content_regex_match,
-        [cm.di, cm.ci],
-        ["di", "ci"],
-    )
+    cm.cfmatch = cm.mc.content.apply_format(cm, cm.content_regex_match)
     cm.cmatch = cm.cfmatch
 
     if cm.label_regex_match is None:
@@ -1911,7 +1911,9 @@ def gen_content_matches(mc, doc):
             if mc.labels_inside_content:
                 if not mc.label.xpath:
                     label_regex_matches = mc.label.match_regex(
-                        crm.value, doc.path, [RegexMatch(crm.rmatch, crm.rmatch)])
+                        crm.value, doc.path,
+                        [RegexMatch(crm.rmatch, crm.rmatch)]
+                    )
                     if len(label_regex_matches) == 0:
                         if not mc.label_allow_missing:
                             labels_none_for_n += 1
@@ -1937,21 +1939,37 @@ def gen_content_matches(mc, doc):
 
 def gen_document_matches(mc, doc):
     # TODO: fix interactive matching for docs and give ci di chain to regex
-    paths = mc.document.apply(mc.ctx, doc.text, doc.xml, doc.path)
-    if doc.document_type == DocumentType.FILE:
-        base = os.path.dirname(doc.path)
-        for i, p in enumerate(paths):
-            if not os.path.isabs(p):
-                paths[i] = os.path.normpath(os.path.join(base, p))
-    return [
-        Document(
-            doc.document_type.derived_type(),
-            path,
-            mc,
-            mc.document_output_chains
+    document_matches = []
+    base_dir = os.path.dirname(doc.path)
+    xmatches = mc.document.match_xpath(
+        mc.ctx, doc.xml, doc.path, [doc.text]
+    )
+    for xmatch in xmatches:
+        rmatches = mc.document.match_regex(
+            xmatch, doc.path, [RegexMatch(xmatch, xmatch)]
         )
-        for path in paths
-    ]
+        for rm in rmatches:
+            ndoc = Document(
+                doc.document_type.derived_type(),
+                None,
+                mc,
+                mc.document_output_chains,
+                None,
+                rm
+            )
+            ndoc.dfmatch = mc.document.apply_format(
+                ContentMatch(None, None, mc, ndoc), rm
+            )
+            if not os.path.isabs(ndoc.dfmatch):
+                ndoc.path = os.path.normpath(
+                    os.path.join(base_dir, ndoc.dfmatch)
+                )
+            else:
+                ndoc.path = ndoc.dfmatch
+
+            document_matches.append(ndoc)
+
+    return document_matches
 
 
 def make_padding(ctx, count_number):
