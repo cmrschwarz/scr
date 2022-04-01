@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from argparse import ArgumentError
-from multiprocessing.sharedctypes import Value
 import lxml
 import lxml.html
 import requests
@@ -27,12 +25,10 @@ import warnings
 import copy
 import shlex
 import binascii
-from io import DEFAULT_BUFFER_SIZE, BytesIO
+from io import BytesIO
 import shutil
 import mimetypes
 import urllib3.exceptions  # for selenium MaxRetryError
-import urllib3.request
-
 
 def prefixes(str):
     return [str[:i] for i in range(len(str), 0, -1)]

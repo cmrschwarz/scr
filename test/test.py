@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import textwrap
 import json
 import glob
 import shellescape
@@ -8,7 +7,7 @@ import sys
 import time
 import subprocess
 from enum import Enum
-from multiprocessing import Pool, freeze_support, cpu_count
+from multiprocessing import Pool, cpu_count
 
 # cd into parent of scriptdir
 os.chdir(os.path.dirname(os.path.abspath(os.path.realpath(__file__))) + "/..")
