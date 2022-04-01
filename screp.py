@@ -483,7 +483,18 @@ class OutputFormatter:
         self.input_buffer_sizes = input_buffer_sizes
 
     def advance(self, buffer=None):
-        if not self.found_stream:
+        while True:
+            if self.found_stream:
+                if buffer is None:
+                    return True
+                self.out_stream.write(buffer)
+                if len(buffer) == self.input_buffer_sizes:
+                    return True
+                self.found_stream = False
+                buffer = None
+                if not len(self.format_parts):
+                    break
+
             while self.format_parts:
                 (text, key, format_args, b) = self.format_parts.pop()
                 if text:
@@ -503,14 +514,10 @@ class OutputFormatter:
                     else:
                         self.found_stream = True
                         break
+            if not self.found_stream:
+                break
 
-        if self.found_stream:
-            assert buffer is not None
-            self.out_stream.write(buffer)
-            if len(buffer) < self.input_buffer_sizes:
-                self.found_stream = False
-            return len(self.format_parts) > 0
-
+        assert buffer is None and not self.format_parts
         self.out_stream.flush()
         return False
 
@@ -1167,7 +1174,7 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
     except ScrepFetchError as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{doc.path}{di_ci_context}: failed to download '{truncate(link)}': {str(ex)}")
-        return None
+        return None, DownloadFormat.STREAM
 
 
 def gen_dl_temp_name(ctx, final_filepath):
@@ -1190,7 +1197,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
     if doc_url.netloc != link_url.netloc:
         log(mc.ctx, Verbosity.ERROR,
             f"{link}{di_ci_context}: failed to download: seldl=internal does not work across origins")
-        return None
+        return None, DownloadFormat.TEMP_FILE
 
     script_source = """
         const url = arguments[0];
@@ -1211,7 +1218,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
         else:
             log(mc.ctx, Verbosity.ERROR,
                 f"{link}{di_ci_context}: selenium download failed: {str(ex)}")
-        return None
+        return None, DownloadFormat.TEMP_FILE
     i = 0
     while True:
         if os.path.exists(tmp_path):
@@ -1224,7 +1231,7 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
             if i > 15:
                 i = 10
                 if selenium_has_died(mc.ctx):
-                    return None
+                    return None, DownloadFormat.TEMP_FILE
 
         i += 1
     return tmp_path, DownloadFormat.TEMP_FILE
@@ -1263,7 +1270,7 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
     except WebDriverException as ex:
         if selenium_has_died(mc.ctx):
             warn_selenium_died(mc.ctx)
-            return None
+            return None, DownloadFormat.BYTES
         err = str(ex)
     if "error" in res:
         err = res["error"]
@@ -1273,7 +1280,7 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
             cors_warn = " (potential CORS issue)"
         log(mc.ctx, Verbosity.ERROR,
             f"{doc.path}{di_ci_context}: selenium download of '{link}' failed{cors_warn}: {err}")
-        return None
+        return None, DownloadFormat.BYTES
     return binascii.a2b_base64(res["ok"]), DownloadFormat.BYTES
 
 
