@@ -8,9 +8,9 @@
     "stdout": "Foo\nBar\nBaz\n",
     "stderr": [
         " [INFO]: handling file './test/res/multidoc.html'",
-        " [INFO]: handling file 'test/res/resources.html'",
-        " [INFO]: handling file 'test/res/non_unicode.html'",
+        " [INFO]: handling file 'test/res/empty.html'",
         " [INFO]: handling file 'test/res/basic.html'",
-        " [INFO]: handling file 'test/res/empty.html'"
+        " [INFO]: handling file 'test/res/non_unicode.html'",
+        " [INFO]: handling file 'test/res/resources.html'"
     ]
 }

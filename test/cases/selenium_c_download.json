@@ -1,8 +1,9 @@
 {
     "args": [
-        "file=./test/res/multidoc.html",
-        "dx=//iframe/@src",
-        "cx=//div[@id='resources']//embed/@src",
+        "file0=./test/res/multidoc.html",
+        "dx0=//iframe/@src",
+        "doc0=1-2",
+        "cx1-2=//div[@id='resources']//embed/@src",
         "sel=c",
         "cl=t",
         "cpf={content}",

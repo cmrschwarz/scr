@@ -1989,7 +1989,7 @@ def handle_match_chain(mc, doc):
     return waiting, interactive
 
 
-def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
+def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc, new_docs):
     if not mc.ci_continuous:
         mc.ci = mc.cimin
     if not content_skip_doc:
@@ -2012,7 +2012,6 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
                 )
                 break
     if not documents_skip_doc:
-        accepted_document_matches = []
         for d in mc.document_matches:
             res = handle_document_match(mc, d)
             if res == InteractiveResult.SKIP_CHAIN:
@@ -2021,12 +2020,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc):
                 documents_skip_doc = True
                 break
             if res == InteractiveResult.ACCEPT:
-                accepted_document_matches.append(d)
-
-        if mc.ctx.documents_bfs:
-            mc.ctx.docs.extend(accepted_document_matches)
-        else:
-            mc.ctx.docs.extendleft(accepted_document_matches)
+                new_docs.append(d)
     mc.document_matches.clear()
     mc.content_matches.clear()
     mc.handled_document_matches.clear()
@@ -2072,10 +2066,7 @@ def parse_xml(ctx, doc):
 def dl(ctx):
     doc = None
     while ctx.docs:
-        if ctx.documents_bfs:
-            doc = ctx.docs.popright()
-        else:
-            doc = ctx.docs.popleft()
+        doc = ctx.docs.popleft()
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
@@ -2159,14 +2150,19 @@ def dl(ctx):
                 if static_content:
                     break
                 time.sleep(ctx.selenium_poll_frequency_secs)
+        new_docs = []
         content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
             if not mc.satisfied:
                 # ignore skipped chains
                 continue
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
-                mc, doc, content_skip_doc, doc_skip_doc
+                mc, doc, content_skip_doc, doc_skip_doc, new_docs
             )
+        if mc.ctx.documents_bfs:
+            mc.ctx.docs.extend(new_docs)
+        else:
+            mc.ctx.docs.extendleft(reversed(new_docs))
     return doc
 
 
