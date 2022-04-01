@@ -598,6 +598,7 @@ class MatchChain:
         self.has_content_matching = False
         self.has_interactive_matching = None
         self.need_content_download = False
+        self.need_output_multipass = False
         self.content_refs_write = 0
         self.content_refs_print = 0
         self.content_matches = []
@@ -973,12 +974,6 @@ def setup_match_chain(mc, ctx):
     for l in locators:
         l.setup()
 
-    # if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-    #    if mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-    #        mc.selenium_download_variant = SeleniumDownloadStrategy.FETCH
-    #        log(ctx, Verbosity.WARN,
-    #            f"match chain {mc.chain_id}: switching to 'fetch' download strategy since 'external' is incompatible with sel=tor")
-
     if mc.dimin > mc.dimax:
         raise ScrepSetupError(f"dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
@@ -1053,6 +1048,10 @@ def setup_match_chain(mc, ctx):
     )
     mc.need_content_download = (
         mc.content_refs_print + mc.content_refs_write) > 0
+    mc.need_output_multipass = (
+        mc.content_refs_print > 1
+        or mc.content_refs_write > 1
+    )
     if not mc.has_content_matching and not mc.has_document_matching:
         if not (mc.chain_id == 0 and mc.ctx.repl):
             raise ScrepSetupError(
@@ -1120,10 +1119,6 @@ def setup(ctx, for_repl=False):
             d.match_chains.extend(
                 ctx.match_chains[d.expand_match_chains_above:])
 
-    # the default strategy changes if we are using tor
-    # if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-    #    ctx.defaults_mc.selenium_download_strategy = SeleniumDownloadStrategy.FETCH
-
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
 
@@ -1141,10 +1136,8 @@ def setup(ctx, for_repl=False):
             for mc in ctx.match_chains
         )
 
-        # TODO: better check for this, handle csf reuse
         have_dls_to_temp = any(
-            mc.content_refs_print > 1 or mc.content_refs_write > 1
-            for mc in ctx.match_chains
+            mc.need_output_multipass for mc in ctx.match_chains
         )
 
         if (have_dls_to_temp or have_internal_dls):
@@ -1490,7 +1483,6 @@ def download_content(cm, save_path):
     save_file = None
     multipass_file = None
     content_stream = content if content_format == ContentFormat.STREAM else None
-    need_multipass = mc.content_refs_print > 1 or mc.content_refs_write > 1
     try:
         if content_format in [ContentFormat.FILE, ContentFormat.TEMP_FILE]:
             try:
@@ -1502,7 +1494,7 @@ def download_content(cm, save_path):
             if content_format == ContentFormat.TEMP_FILE:
                 temp_file_path = content
             content = content_stream
-            if need_multipass:
+            if mc.need_output_multipass:
                 multipass_file = content_stream
 
         output_formatters = []
@@ -1514,7 +1506,7 @@ def download_content(cm, save_path):
         if save_path:
             try:
                 use_as_multipass = (
-                    need_multipass
+                    mc.need_output_multipass
                     and multipass_file is None
                     and mc.content_write_format == DEFAULT_CWF
                 )
@@ -1545,7 +1537,7 @@ def download_content(cm, save_path):
                 assert res == False
             return
 
-        if need_multipass and multipass_file is None:
+        if mc.need_output_multipass and multipass_file is None:
             try:
                 temp_file_path, _filename = gen_dl_temp_name(
                     mc.ctx, save_path)
