@@ -7,7 +7,7 @@
         "cr3=^.*\\.txt$",
         "sel=f",
         "cl=t",
-        "cpf={content}",
+        "cpf1-3={content}",
         "seldl1=e",
         "seldl2=f",
         "seldl3=i"

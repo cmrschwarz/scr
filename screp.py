@@ -942,11 +942,23 @@ def setup_match_chain(mc, ctx):
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
 
-    if not mc.content_write_format:
+    if mc.content_save_format and not mc.content_write_format:
         mc.content_write_format = DEFAULT_CWF
 
-    if not mc.content_print_format and not mc.content_save_format:
+    mc.has_xpath_matching = any(l.xpath is not None for l in locators)
+    mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
+    mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
+    mc.has_document_matching = mc.has_document_matching or mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
+    mc.has_content_matching = mc.has_content_matching or mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
+    mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
+
+    if mc.content_print_format or mc.content_save_format:
+        mc.has_content_matching = True
+
+    if mc.has_content_matching and not mc.content_print_format and not mc.content_save_format:
         mc.content_print_format = DEFAULT_CPF
+
+
 
     if mc.content_print_format:
         mc.content_print_format = unescape_string(
@@ -955,13 +967,6 @@ def setup_match_chain(mc, ctx):
         mc.content_save_format = unescape_string(mc.content_save_format, "csf")
         mc.content_write_format = unescape_string(
             mc.content_write_format, "cwf")
-
-    mc.has_xpath_matching = any(l.xpath is not None for l in locators)
-    mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
-    mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
-    mc.has_document_matching = mc.has_document_matching or mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
-    mc.has_content_matching = mc.has_content_matching or mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
-    mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
