@@ -995,13 +995,7 @@ def setup_match_chain(mc, ctx):
     mc.need_content_download = (
         mc.content_refs_print + mc.content_refs_write) > 0
     if not mc.has_content_matching and not mc.has_document_matching:
-        err_unused = True
-        if mc.chain_id == 0:
-            if mc.ctx.repl:
-                err_unused = False
-            else:
-                err_unused = any(mc in d.match_chains for d in mc.ctx.docs)
-        if err_unused:
+        if not (mc.chain_id == 0 and mc.ctx.repl):
             log(ctx, Verbosity.ERROR,
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching")
             raise ValueError()
