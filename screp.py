@@ -27,7 +27,7 @@ import warnings
 import copy
 import shlex
 import binascii
-from io import BytesIO
+from io import DEFAULT_BUFFER_SIZE, BytesIO
 import shutil
 import mimetypes
 import urllib3.exceptions  # for selenium MaxRetryError
@@ -208,6 +208,15 @@ class ResponseStreamWrapper(object):
 
     def __exit__(self):
         self.close()
+
+
+class DownloadFormat(Enum):
+    STRING = 0,
+    BYTES = 1,
+    STREAM = 2,
+    FILE = 3,
+    TEMP_FILE = 4,
+    UNNEEDED = 5,
 
 
 class ContentMatch:
@@ -426,6 +435,86 @@ def obj_apply_defaults(obj, defaults, recurse_on={}):
             obj_apply_defaults(obj.__dict__[k], def_val, recurse_on)
 
 
+class OutputFormatter:
+    def __init__(
+        self, mc, format_str, label, di, ci, content_link, content,
+        label_regex_match, content_regex_match, doc, out_stream,
+        input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
+    ):
+        opts_list = []
+        opts_dict = {}
+        if mc.document.multimatch:
+            opts_list.append(di)
+            opts_dict["di"] = di
+        if mc.content.multimatch:
+            opts_list.append(ci)
+            opts_dict["ci"] = ci
+        if content_link is not None:
+            opts_list.append(content_link)
+            opts_dict["link"] = content_link
+        if content is not None:
+            opts_dict["content"] = content
+
+        if label_regex_match is None:
+            label_regex_match = RegexMatch(None)
+        if content_regex_match is None:
+            content_regex_match = RegexMatch(None)
+
+        args_list = label_regex_match.group_list + content_regex_match.group_list
+        args_dict = dict(
+            list(content_regex_match.group_dict.items())
+            + list(label_regex_match.group_dict.items())
+            + list(opts_dict.items())
+            + list(
+                {
+                    "label": label,
+                    "encoding": doc.encoding,
+                    "document": doc.path,
+                    "escape": mc.content_escape_sequence
+                }.items()
+            )
+        )
+        args_list.reverse()
+        self.format_parts = list(reversed(list(Formatter().parse(format_str))))
+        self.args_list = args_list
+        self.args_dict = args_dict
+        self.out_stream = out_stream
+        self.found_stream = False
+        self.input_buffer_sizes = input_buffer_sizes
+
+    def advance(self, buffer=None):
+        if not self.found_stream:
+            while self.format_parts:
+                (text, key, format_args, b) = self.format_parts.pop()
+                if text:
+                    self.out_stream.write(text.encode("utf-8"))
+                if key is not None:
+                    if key == "":
+                        val = self.args_list.pop()
+                    else:
+                        val = self.args_dict[key]
+                    if type(val) is bytes:
+                        self.out_stream.write(val)
+                    elif type(val) is str:
+                        self.out_stream.write(
+                            format(val, format_args)
+                            .encode("utf-8", errors="surrogateescape")
+                        )
+                    else:
+                        self.found_stream = True
+                        break
+
+        if self.found_stream:
+            assert buffer is not None
+            self.out_stream.write(buffer)
+            if len(buffer) < self.input_buffer_sizes:
+                self.found_stream = False
+            return len(self.format_parts) > 0
+
+        self.out_stream.flush()
+        return False
+
+
 class MatchChain:
     def __init__(self, ctx, chain_id, blank=False):
         self.cimin = 1
@@ -478,7 +567,9 @@ class MatchChain:
         self.has_document_matching = False
         self.has_content_matching = False
         self.has_interactive_matching = None
-        self.content_download_required = False
+        self.need_content_download = False
+        self.content_refs_write = 0
+        self.content_refs_print = 0
         self.content_matches = []
         self.document_matches = []
         self.handled_content_matches = set()
@@ -537,8 +628,8 @@ class DlContext:
         self.selenium_log_path = os.path.devnull
         self.selenium_poll_frequency_secs = 0.3
         self.selenium_content_count_pad_length = 6
-        self.selenium_download_dir = None
-        self.selenium_dl_index = 0
+        self.downloads_temp_dir = None
+        self.download_tmp_index = 0
 
         self.fallback_document_scheme = "https"
 
@@ -688,11 +779,11 @@ def selenium_apply_firefox_options(ctx, ff_options):
 
     prefs = {}
     # setup download dir and disable save path popup
-    if ctx.selenium_download_dir is not None:
+    if ctx.downloads_temp_dir is not None:
         mimetypes.init()
         save_mimetypes = ";".join(set(mimetypes.types_map.values()))
         prefs.update({
-            "browser.download.dir": ctx.selenium_download_dir,
+            "browser.download.dir": ctx.downloads_temp_dir,
             "browser.download.useDownloadDir": True,
             "browser.download.folderList": 2,
             "browser.download.manager.showWhenStarting": False,
@@ -752,9 +843,9 @@ def setup_selenium_chrome(ctx):
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
 
-    if ctx.selenium_download_dir is not None:
+    if ctx.downloads_temp_dir is not None:
         prefs = {
-            "download.default_directory": ctx.selenium_download_dir,
+            "download.default_directory": ctx.downloads_temp_dir,
             "download.prompt_for_download": False,
             "profile.default_content_setting_values.automatic_downloads": 1,
         }
@@ -780,15 +871,6 @@ def selenium_add_cookies_through_get(ctx):
 
 
 def setup_selenium(ctx):
-    have_internal_dls = any(
-        mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL
-        for mc in ctx.match_chains
-    )
-
-    if have_internal_dls and not ctx.selenium_download_dir:
-        ctx.selenium_download_dir = tempfile.mkdtemp(
-            prefix="screp_selenium_downloads_")
-
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
     elif ctx.selenium_variant == SeleniumVariant.CHROME:
@@ -814,13 +896,14 @@ def get_format_string_keys(fmt_string):
 
 def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     if fmt_string is None:
-        return False
+        return 0
     fmt_args = get_format_string_keys(fmt_string)
-    if arg_name is not None and arg_name in fmt_args:
-        return True
+    count = 0
+    if arg_name is not None:
+        count += fmt_args.count(arg_name)
     if arg_pos is not None and fmt_args.count("") > arg_pos:
-        return True
-    return False
+        count += 1
+    return count
 
 
 def setup_match_chain(mc, ctx):
@@ -897,15 +980,13 @@ def setup_match_chain(mc, ctx):
             form += f"{{di:0{didigits}}}"
 
         mc.label_default_format = form
-    if not mc.content_raw:
-        output_formats = [
-            mc.content_save_format,
-            mc.content_write_format,
-            mc.content_print_format
-        ]
-        mc.content_download_required = any(
-            format_string_uses_arg(of, None, "content") for of in output_formats
-        )
+
+    mc.content_refs_print = format_string_uses_arg(
+        mc.content_print_format, None, "content")
+    mc.content_refs_write = format_string_uses_arg(
+        mc.content_print_format, None, "content")
+    mc.need_content_download = (
+        mc.content_refs_print + mc.content_refs_write) > 0
     if not mc.has_content_matching and not mc.has_document_matching:
         err_unused = True
         if mc.chain_id == 0:
@@ -1003,13 +1084,26 @@ def setup(ctx, for_repl=False):
             log(ctx, Verbosity.ERROR, "must specify at least one url or (r)file")
             raise ValueError()
 
+    if not ctx.downloads_temp_dir:
+        have_internal_dls = any(
+            mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL
+            for mc in ctx.match_chains
+        )
+
+        # TODO: better check for this, handle csf reuse
+        have_dls_to_temp = any(
+            mc.content_refs_print > 1 or mc.content_refs_write > 1
+            for mc in ctx.match_chains
+        )
+
+        if (have_dls_to_temp or have_internal_dls):
+            ctx.downloads_temp_dir = tempfile.mkdtemp(
+                prefix="screp_downloads_")
+
     if ctx.selenium_variant == SeleniumVariant.DISABLED:
         for mc in ctx.match_chains:
             mc.selenium_strategy = SeleniumStrategy.DISABLED
-        return
-
-    # reuse selenium in repl mode
-    if ctx.selenium_driver is None:
+    elif ctx.selenium_driver is None:
         setup_selenium(ctx)
 
 
@@ -1055,12 +1149,7 @@ def selenium_download_from_local_file(mc, di_ci_context, doc, doc_url, link, fil
     if not os.path.isabs(link):
         cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
         filepath = os.path.join(cur_path, link)
-    try:
-        return open(filepath, "rb")
-    except IOError as ex:
-        log(mc.ctx, Verbosity.ERROR,
-            f"{doc.path}{di_ci_context}: failed to open file '{truncate(link)}': {truncate(str(ex))}")
-        return None
+    return filepath, DownloadFormat.FILE
 
 
 def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
@@ -1072,25 +1161,29 @@ def selenium_download_external(mc, di_ci_context, doc, doc_url, link, filepath):
             "data": None
         }
     try:
-        data, _enc = requests_dl(
+        stream, _enc = requests_dl(
             mc.ctx, link, mc.ctx.selenium_driver.get_cookies(), proxies=proxies, stream=True)
-        return data
+        return stream, DownloadFormat.STREAM
     except ScrepFetchError as ex:
         log(mc.ctx, Verbosity.ERROR,
             f"{doc.path}{di_ci_context}: failed to download '{truncate(link)}': {str(ex)}")
         return None
 
 
-def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
-    dl_index = mc.ctx.selenium_dl_index
-    mc.ctx.selenium_dl_index += 1
+def gen_dl_temp_name(ctx, final_filepath):
+    dl_index = ctx.download_tmp_index
+    ctx.download_tmp_index += 1
     tmp_filename = f"dl{dl_index}"
-    if filepath is not None:
-        tmp_filename += "_" + os.path.basename(filepath)
+    if final_filepath is not None:
+        tmp_filename += "_" + os.path.basename(final_filepath)
     else:
         tmp_filename += ".bin"
+    tmp_path = os.path.join(ctx.downloads_temp_dir, tmp_filename)
+    return tmp_path, tmp_filename
 
-    tmp_path = os.path.join(mc.ctx.selenium_download_dir, tmp_filename)
+
+def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=None):
+    tmp_path, tmp_filename = gen_dl_temp_name(mc.ctx, filepath)
 
     link_url = urllib.parse.urlparse(link)
     doc_url = urllib.parse.urlparse(doc_url)
@@ -1134,17 +1227,10 @@ def selenium_download_internal(mc, di_ci_context, doc, doc_url, link, filepath=N
                     return None
 
         i += 1
-    f = open(tmp_path, "rb")
-    if sys.platform in ["linux", "darwin"]:
-        # windows doesn't handle the deletion of files with open handles
-        # the way we want. so we clean up on screp exit
-        os.remove(tmp_path)
-    return f
+    return tmp_path, DownloadFormat.TEMP_FILE
 
 
 def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None):
-    dl_index = mc.ctx.selenium_dl_index
-    mc.ctx.selenium_dl_index += 1
     script_source = """
         const url = arguments[0];
         return (async () => {
@@ -1188,7 +1274,7 @@ def selenium_download_fetch(mc, di_ci_context, doc, doc_url, link, filepath=None
         log(mc.ctx, Verbosity.ERROR,
             f"{doc.path}{di_ci_context}: selenium download of '{link}' failed{cors_warn}: {err}")
         return None
-    return BytesIO(binascii.a2b_base64(res["ok"]))
+    return binascii.a2b_base64(res["ok"]), DownloadFormat.BYTES
 
 
 def selenium_download(mc, doc, di_ci_context, link, filepath=None):
@@ -1233,7 +1319,7 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
         )
         if stream:
             return ResponseStreamWrapper(res), res.encoding
-        data = res.read()
+        data = res.content
         encoding = res.encoding
         res.close()
         return data, encoding
@@ -1257,65 +1343,115 @@ def report_selenium_error(ctx, ex):
 
 
 def download_content(mc, doc, di_ci_context, content_match, di, ci, label, content, content_path, save_path):
-    if not mc.content_raw:
-        if mc.content_download_required:
+    context = f"{truncate(doc.path)}{di_ci_context}"
+    if mc.content_raw:
+        download_format = DownloadFormat.STRING
+    else:
+        if not mc.need_content_download:
+            download_format = DownloadFormat.UNNEEDED
+        else:
             if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
-                content_stream = selenium_download(
+                content, download_format = selenium_download(
                     mc, doc, di_ci_context, content_path, save_path)
-                if content_stream is None:
+                if content is None:
                     return InteractiveResult.ACCEPT
             else:
                 if doc.document_type.derived_type() is DocumentType.FILE and urllib.parse.urlparse(content_path).scheme != "data":
-                    try:
-                        content_stream = open(content_path, "rb")
-                    except FileNotFoundError as ex:
-                        log(mc.ctx, Verbosity.ERROR,
-                            f"{doc.path}{di_ci_context}: failed to fetch '{truncate(content_path)}': file not found")
-                        return None
-                    except IOError as ex:
-                        log(mc.ctx, Verbosity.ERROR,
-                            f"{doc.path}{di_ci_context}: failed to fetch '{truncate(content_path)}': {truncate(str(ex))}")
-                        return None
+                    content = content_path
+                    download_format = DownloadFormat.FILE
                 else:
                     try:
-                        content_stream, _enc = requests_dl(
+                        content, _enc = requests_dl(
                             mc.ctx, content_path, stream=True)
+                        download_format = DownloadFormat.STREAM
                     except ScrepFetchError as ex:
                         log(mc.ctx, Verbosity.ERROR,
-                            f"{doc.path}{di_ci_context}: failed to download '{truncate(content_path)}': {str(ex)}")
-                        return None
-            content = content_stream.read()
+                            f"{context}: failed to download '{truncate(content_path)}': {str(ex)}")
+                        return
+    temp_file = None
+    content_stream = None
+    save_file = None
+    try:
+        if download_format == DownloadFormat.STREAM:
+            content_stream = content
+            if (mc.content_refs_print > 1 or mc.content_refs_write > 1):
+                try:
+                    temp_file_path, _filename = gen_dl_temp_name(
+                        mc.ctx, save_path)
+                    temp_file = open(temp_file_path, "xb+")
+                except IOError as ex:
+                    log(mc.ctx, Verbosity.ERROR,
+                        f": failed to create temp file '{temp_file_path}': {truncate(str(ex))}")
+                    return
+
+        output_formatters = []
+        if mc.content_print_format:
+            output_formatters.append(OutputFormatter(
+                mc, mc.content_print_format, label, di, ci, content_path,
+                content, content_match.label_regex_match, content_match.content_regex_match,
+                doc, sys.stdout.buffer
+            ))
+
+        if save_path:
+            try:
+                save_file = open(
+                    save_path, ("w" if mc.overwrite_files else "x") + "b")
+            except FileExistsError:
+                log(mc.ctx, Verbosity.ERROR,
+                    f"{doc.path}{di_ci_context}: file already exists: {save_path}")
+                return InteractiveResult.ACCEPT
+            except OSError as ex:
+                log(mc.ctx, Verbosity.ERROR,
+                    f"{doc.path}{di_ci_context}: failed to write to file '{save_path}': {ex.msg}")
+                return InteractiveResult.ACCEPT
+
+            output_formatters.append(OutputFormatter(
+                mc, mc.content_write_format, label, di, ci, content_path,
+                content, content_match.label_regex_match, content_match.content_regex_match,
+                doc, save_file
+            ))
+
+        if content_stream is None:
+            for of in output_formatters:
+                res = of.advance()
+                assert res == False
+            return
+
+        def run_output_formatters(output_formatters, buf):
+            i = 0
+            while i < len(output_formatters):
+                if output_formatters[i].advance(buf):
+                    i += 1
+                else:
+                    del output_formatters[i]
+
+        if content_stream:
+            while True:
+                buf = content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+                run_output_formatters(output_formatters, buf)
+                if temp_file:
+                    temp_file.write(buf)
+                if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                    content_stream.close()
+                    content_stream = None
+                    break
+
+        if temp_file:
+            while output_formatters:
+                temp_file.seek(0)
+                while True:
+                    buf = temp_file.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+                    run_output_formatters(output_formatters, buf)
+                    if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                        break
+
+    finally:
+        if content_stream:
             content_stream.close()
-    if mc.content_print_format:
-        print_data = gen_final_content_format(
-            mc, mc.content_print_format, label, di, ci, content_path,
-            content, content_match.label_regex_match, content_match.content_regex_match,
-            doc
-        )
-        sys.stdout.buffer.write(print_data)
-        sys.stdout.flush()
-
-    if save_path:
-        try:
-            f = open(save_path, ("w" if mc.overwrite_files else "x") + "b")
-        except FileExistsError:
-            log(mc.ctx, Verbosity.ERROR,
-                f"{doc.path}{di_ci_context}: file already exists: {save_path}")
-            return InteractiveResult.ACCEPT
-        except OSError as ex:
-            log(mc.ctx, Verbosity.ERROR,
-                f"{doc.path}{di_ci_context}: failed to write to file '{save_path}': {ex.msg}")
-            return InteractiveResult.ACCEPT
-
-        write_data = gen_final_content_format(
-            mc, mc.content_write_format, label, di, ci, content_path,
-            content, content_match.label_regex_match, content_match.content_regex_match,
-            doc
-        )
-        f.write(write_data)
-        f.close()
-        log(mc.ctx, Verbosity.INFO,
-            f"{doc.path}{di_ci_context}: wrote content into {save_path}")
+        if temp_file:
+            temp_file.close()
+        if save_file:
+            save_file.close()
 
 
 class ScrepFetchError(Exception):
@@ -1367,55 +1503,13 @@ def fetch_doc(ctx, doc):
 
 
 def gen_final_content_format(mc, format_str, label, di, ci, content_link, content, label_regex_match, content_regex_match, doc):
-    opts_list = []
-    opts_dict = {}
-    if mc.document.multimatch:
-        opts_list.append(di)
-        opts_dict["di"] = di
-    if mc.content.multimatch:
-        opts_list.append(ci)
-        opts_dict["ci"] = ci
-    if content_link is not None:
-        opts_list.append(content_link)
-        opts_dict["link"] = content_link
-    if content is not None:
-        opts_dict["content"] = content
-
-    if label_regex_match is None:
-        label_regex_match = RegexMatch(None)
-    if content_regex_match is None:
-        content_regex_match = RegexMatch(None)
-
-    args_list = label_regex_match.group_list + content_regex_match.group_list
-    args_dict = dict(
-        list(content_regex_match.group_dict.items())
-        + list(label_regex_match.group_dict.items())
-        + list(opts_dict.items())
-        + list(
-            {
-                "label": label,
-                "encoding": doc.encoding,
-                "document": doc.path,
-                "escape": mc.content_escape_sequence
-            }.items()
-        )
-    )
-    res = b''
-    args_list.reverse()
-    for (text, key, format_args, b) in Formatter().parse(format_str):
-        if text is not None:
-            res += text.encode("utf-8")
-        if key is not None:
-            if key == "":
-                val = args_list.pop()
-            else:
-                val = args_dict[key]
-            if type(val) is bytes:
-                res += val
-            else:
-                res += format(val, format_args).encode("utf-8",
-                                                       errors="surrogateescape")
-    return res
+    with BytesIO(b"") as buf:
+        of = OutputFormatter(mc, format_str, label, di, ci, content_link,
+                             content, label_regex_match, content_regex_match, doc, buf)
+        while of.advance():
+            pass
+        buf.seek(0)
+        return buf.read()
 
 
 def normalize_link(ctx, mc, src_doc, doc_path, link):
@@ -1622,10 +1716,10 @@ def handle_content_match(mc, doc, content_match):
                 if res != InteractiveResult.EDIT:
                     return res
             save_path = input("enter new save path: ")
+    mc.ci += 1
     download_content(mc, doc, di_ci_context, content_match, di,
                      ci, label, content, content_link, save_path)
 
-    mc.ci += 1
     return InteractiveResult.ACCEPT
 
 
@@ -2053,11 +2147,11 @@ def finalize_selenium(ctx):
             pass
         finally:
             ctx.selenium_driver = None
-    if ctx.selenium_download_dir:
+    if ctx.downloads_temp_dir:
         try:
-            shutil.rmtree(ctx.selenium_download_dir)
+            shutil.rmtree(ctx.downloads_temp_dir)
         finally:
-            ctx.selenium_download_dir = None
+            ctx.downloads_temp_dir = None
 
 
 def begins(string, begin):

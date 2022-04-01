@@ -1,0 +1,9 @@
+{
+    "args": [
+        "file=./test/res/resources.html",
+        "cl=1",
+        "cx=//embed[contains(@src, '.txt')]/@src",
+        "cpf={content}:::{content}"
+    ],
+    "stdout": "a\n:::a\n"
+}

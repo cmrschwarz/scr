@@ -1,0 +1,13 @@
+{
+    "args": [
+        "url=echo.d.cmrs.io?echo=echo.d.cmrs.io?echo=foo",
+        "cl=1",
+        "cr=^.+$",
+        "cpf={content}:::{content}",
+        "csf=foo.txt"
+    ],
+    "tags": [
+        "need-cmrs.io"
+    ],
+    "stdout": "foo\n:::foo\n"
+}
