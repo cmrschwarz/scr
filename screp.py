@@ -356,9 +356,10 @@ class Document:
 class ConfigDataClass:
     _config_slots_: list[str] = []
     _subconfig_slots_: list[str] = []
-    _final_values_: dict[str, Any] = {}
+    _final_values_: dict[str, str]
 
     def __init__(self, blank=False) -> None:
+        self._final_values_ = {}
         if not blank:
             return
         for k in self.__class__._config_slots_:
@@ -382,6 +383,17 @@ class ConfigDataClass:
                 self.__dict__[cs] = def_val
         for scs in self.__class__._subconfig_slots_:
             self.__dict__[scs].apply_defaults(defaults.__dict__[scs])
+
+    def try_set_config_option(self, attrib_path: list[str], value: Any, arg: str) -> Optional[str]:
+        conf = self
+        for attr in attrib_path[:-1]:
+            conf = conf.__dict__[attr]
+        attr = attrib_path[-1]
+        if attr in conf._final_values_:
+            return conf._final_values_[attr]
+        conf._final_values_[attr] = arg
+        conf.__dict__[attr] = value
+        return None
 
 
 class Locator(ConfigDataClass):
@@ -560,7 +572,7 @@ class MatchChain(ConfigDataClass):
     selenium_strategy: SeleniumStrategy = SeleniumStrategy.FIRST
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
 
-    document_output_chains: list['MatchChain'] = []
+    document_output_chains: list['MatchChain']
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(
@@ -588,10 +600,10 @@ class MatchChain(ConfigDataClass):
     need_output_multipass: bool = False
     content_refs_write: int = 0
     content_refs_print: int = 0
-    content_matches: list['ContentMatch'] = []
-    document_matches: list[Document] = []
-    handled_content_matches: set['ContentMatch'] = set()
-    handled_document_matches: set[Document] = set()
+    content_matches: list['ContentMatch']
+    document_matches: list[Document]
+    handled_content_matches: set['ContentMatch']
+    handled_document_matches: set[Document]
     satisfied: bool = True
     labels_none_for_n: int = 0
 
@@ -600,10 +612,16 @@ class MatchChain(ConfigDataClass):
 
         self.ctx = ctx
         self.chain_id = chain_id
+        self.document_output_chains = []
 
         self.content = Locator("content", blank)
         self.label = Locator("label", blank)
         self.document = Locator("document", blank)
+
+        self.content_matches = []
+        self.document_matches = []
+        self.handled_content_matches = set()
+        self.handled_document_matches = set()
 
     def accepts_content_matches(self) -> bool:
         return self.di <= self.dimax
@@ -690,7 +708,7 @@ class DlContext(ConfigDataClass):
 
     # not really config, but recycled in repl mode
     cookie_jar: Optional[MozillaCookieJar] = None
-    cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
+    cookie_dict: dict[str, dict[str, dict[str, Any]]]
     selenium_driver: Optional[SeleniumWebDriver] = None
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
@@ -699,8 +717,8 @@ class DlContext(ConfigDataClass):
     )
 
     # non config members
-    match_chains: list[MatchChain] = []
-    docs: deque[Document] = deque()
+    match_chains: list[MatchChain]
+    docs: deque[Document]
     reused_doc: Optional[Document] = None
     changed_selenium: bool = False
     defaults_mc: MatchChain
@@ -709,6 +727,9 @@ class DlContext(ConfigDataClass):
 
     def __init__(self, blank=False):
         super().__init__(blank)
+        self.cookie_dict = {}
+        self.match_chains = []
+        self.docs = deque()
         self.defaults_mc = MatchChain(self, None)
         self.origin_mc = MatchChain(self, None, blank=True)
         # turn ctx to none temporarily for origin so it can be deepcopied
@@ -2656,12 +2677,6 @@ def parse_mc_arg(
     return parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
 
-def follow_attribute_path_spec(obj, spec):
-    for s in spec:
-        obj = obj.__dict__[s]
-    return obj
-
-
 def parse_mc_arg_as_range(ctx: DlContext, argname: str, argval: str) -> list[MatchChain]:
     return list(parse_mc_range(ctx, argval, argname))
 
@@ -2681,24 +2696,18 @@ def apply_mc_arg(
     # so the lowest possible chain generates potential errors
     mcs.sort(key=lambda mc: mc.chain_id if mc.chain_id else float("inf"))
     for mc in mcs:
-        t = follow_attribute_path_spec(mc, config_opt_names[:-1])
-        ident = config_opt_names[-1]
-        if not "_final_values" in t.__dict__:
-            t._final_values = {ident: arg}
-        else:
-            if ident in t._final_values:
-                if mc is ctx.origin_mc:
-                    chainid = str(max(len(ctx.match_chains), 1))
-                elif mc is ctx.defaults_mc:
-                    chainid = ""
-                else:
-                    chainid = str(mc.chain_id)
-                raise ScrepSetupError(
-                    f"{argname}{chainid} specified twice in: "
-                    + f"'{t._final_values[ident]}' and '{arg}'"
-                )
-            t._final_values[ident] = arg
-        t.__dict__[ident] = value
+        prev = mc.try_set_config_option(config_opt_names, value, arg)
+        if prev is not None:
+            if mc is ctx.origin_mc:
+                chainid = str(max(len(ctx.match_chains), 1))
+            elif mc is ctx.defaults_mc:
+                chainid = ""
+            else:
+                chainid = str(mc.chain_id)
+            raise ScrepSetupError(
+                f"{argname}{chainid} specified twice in: "
+                + f"'{prev}' and '{arg}'"
+            )
 
     return True
 
