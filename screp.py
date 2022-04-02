@@ -9,8 +9,6 @@ import binascii
 import shlex
 import copy
 from abc import abstractmethod
-from optparse import Option
-from tokenize import Number
 import lxml
 import lxml.etree
 import lxml.html
@@ -38,7 +36,6 @@ import tempfile
 import itertools
 import warnings
 import urllib.request
-
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -76,6 +73,7 @@ DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
+INTERNAL_USER_AGENT = "screp/0.2.0"
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
@@ -1330,7 +1328,7 @@ def setup(ctx: DlContext, for_repl: bool = False) -> None:
             RANDOM_USER_AGENT_INSTANCE = UserAgent()
         ctx.user_agent = RANDOM_USER_AGENT_INSTANCE.get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
-        ctx.user_agent = "screp/0.2.0"
+        ctx.user_agent = INTERNAL_USER_AGENT
 
     # if no chains are specified, use the origin chain as chain 0
     if not ctx.match_chains:
