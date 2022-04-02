@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from abc import abstractmethod
 from optparse import Option
 import lxml
 import lxml.etree
@@ -14,11 +15,14 @@ import urllib.parse
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
-from selenium import webdriver
+import selenium.webdriver
 import selenium.webdriver.chrome.service
+import selenium.webdriver.chrome.options
 import selenium.webdriver.firefox.service
+import selenium.webdriver.firefox.options
 import selenium.webdriver.remote.webdriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
+from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
 from collections import deque
 from enum import Enum, IntEnum
 import time
@@ -32,7 +36,12 @@ from io import BytesIO, SEEK_SET
 import shutil
 import mimetypes
 import urllib3.exceptions  # for selenium MaxRetryError
-from typing import Any, Optional, Union
+from typing import Any, Optional, TypeVar, BinaryIO, Union
+from abc import ABC, abstractmethod
+
+T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
 
 
 def prefixes(str: str) -> list[str]:
@@ -179,7 +188,25 @@ verbosities_display_dict: dict[Verbosity, str] = {
 }
 
 
-class ResponseStreamWrapper(object):
+class MinimalInputStream(ABC):
+    @abstractmethod
+    def read(self, size: Optional[int]) -> bytes:
+        pass
+
+    @abstractmethod
+    def close(self) -> None:
+        pass
+
+    @abstractmethod
+    def __enter__(self) -> None:
+        pass
+
+    @abstractmethod
+    def __exit__(self) -> None:
+        pass
+
+
+class ResponseStreamWrapper(MinimalInputStream):
     def __init__(
         self, request_response: requests.models.Response,
         buffer_size: int = DEFAULT_RESPONSE_BUFFER_SIZE
@@ -188,9 +215,6 @@ class ResponseStreamWrapper(object):
         self._response = request_response
         self._iterator = self._response.iter_content(buffer_size)
         self._pos = 0
-
-    def tell(self) -> int:
-        return self._pos
 
     def read(self, size: int = None) -> bytes:
         if size is None:
@@ -219,11 +243,6 @@ class ResponseStreamWrapper(object):
         res = self._bytes_buffer[0:buf_pos]
         self._bytes_buffer = self._bytes_buffer[buf_pos:]
         return res
-
-    def seek(self, position: int, whence: int = SEEK_SET) -> None:
-        raise NotImplementedError(
-            "ResponseStreamWrapper does not support seek"
-        )
 
     def close(self) -> None:
         self._response.close()
@@ -667,76 +686,90 @@ class DlContext(ConfigDataClass):
 
 
 class OutputFormatter:
+    _args_dict: dict[str, Any]
+    _args_list: list[Any]
+    _format_parts: list[tuple[str, Union[str, None],
+                              Union[str, None], Union[str, None]]]
+    _out_stream: BinaryIO
+    _found_stream: bool = False
+    _input_buffer_sizes: int
+
     def __init__(
         self, format_str: str, cm: ContentMatch, content,
-        out_stream, input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
+        out_stream: BinaryIO,
+        input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
-        self.args_dict = content_match_build_format_args(cm, content)
-        self.args_list = []  # no positional args right now
+        self._args_dict = content_match_build_format_args(cm, content)
+        self._args_list = []  # no positional args right now
 
         # we reverse these lists so we can take out elements using pop()
-        self.format_parts = list(reversed(list(Formatter().parse(format_str))))
-        self.args_list = reversed(self.args_list)
+        self._format_parts = list(
+            reversed(list(Formatter().parse(format_str)))
+        )
+        self._args_list = reversed(self._args_list)
 
-        self.out_stream = out_stream
-        self.found_stream = False
-        self.input_buffer_sizes = input_buffer_sizes
+        self._out_stream = out_stream
+        self._found_stream = False
+        self._input_buffer_sizes = input_buffer_sizes
 
-    def advance(self, buffer=None):
+    # returns True if it has not reached the end yet
+    def advance(self, buffer: Optional[bytes] = None) -> bool:
         while True:
-            if self.found_stream:
+            if self._found_stream:
                 if buffer is None:
                     return True
                 if buffer:  # avoid length zero buffers which may cause errors
-                    self.out_stream.write(buffer)
-                if len(buffer) == self.input_buffer_sizes:
+                    self._out_stream.write(buffer)
+                if len(buffer) == self._input_buffer_sizes:
                     return True
-                self.found_stream = False
+                self._found_stream = False
                 buffer = None
-                if not len(self.format_parts):
+                if not len(self._format_parts):
                     break
 
-            while self.format_parts:
-                (text, key, format_args, b) = self.format_parts.pop()
+            while self._format_parts:
+                (text, key, format_args, b) = self._format_parts.pop()
                 if text:
-                    self.out_stream.write(text.encode("utf-8"))
+                    self._out_stream.write(text.encode("utf-8"))
                 if key is not None:
                     if key == "":
-                        val = self.args_list.pop()
+                        val = self._args_list.pop()
                     else:
-                        val = self.args_dict[key]
+                        val = self._args_dict[key]
                     if type(val) is bytes:
-                        self.out_stream.write(val)
+                        self._out_stream.write(val)
                     elif type(val) is str:
-                        self.out_stream.write(
+                        self._out_stream.write(
                             format(val, format_args)
                             .encode("utf-8", errors="surrogateescape")
                         )
                     else:
                         assert key == "c"
-                        self.found_stream = True
+                        self._found_stream = True
                         break
-            if not self.found_stream:
+            if not self._found_stream:
                 break
 
-        assert buffer is None and not self.format_parts
-        self.out_stream.flush()
+        assert buffer is None and not self._format_parts
+        self._out_stream.flush()
         return False
 
 
-def empty_string_to_none(string):
+def empty_string_to_none(string: str) -> Optional[str]:
     if string == "":
         return None
     return string
 
 
-def dict_update_unless_none(current, updates):
+def dict_update_unless_none(current: dict[K, V], updates: dict[K, V]) -> None:
     current.update({
         k: v for k, v in updates.items() if v is not None
     })
 
 
-def content_match_build_format_args(cm, content=None):
+def content_match_build_format_args(
+    cm: ContentMatch, content: Optional[Union[str, bytes, MinimalInputStream]] = None
+) -> dict[str, Any]:
     args_dict = {
         "cenc": cm.doc.encoding,
         "cesc": cm.mc.content_escape_sequence,
@@ -776,25 +809,25 @@ def content_match_build_format_args(cm, content=None):
     return args_dict
 
 
-def log_raw(verbosity, msg):
+def log_raw(verbosity: Verbosity, msg: str) -> None:
     sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
 
 
-def unescape_string(txt, context):
+def unescape_string(txt: str, err_context: str):
     try:
         return txt.encode("utf-8").decode("unicode_escape")
     except (UnicodeEncodeError, UnicodeDecodeError) as ex:
-        raise ScrepSetupError(f"failed to unescape {context}: {str(ex)}")
+        raise ScrepSetupError(f"failed to unescape {err_context}: {str(ex)}")
 
 
-def log(ctx, verbosity, msg):
+def log(ctx: DlContext, verbosity: Verbosity, msg: str) -> None:
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
     if ctx.verbosity >= verbosity:
         log_raw(verbosity, msg)
 
 
-def help(err=False):
+def help(err: bool = False) -> None:
     global DEFAULT_CPF
     global DEFAULT_CWF
     text = f"""{sys.argv[0]} [OPTIONS]
@@ -922,20 +955,27 @@ def help(err=False):
         print(text)
 
 
-def add_cwd_to_path():
+def add_cwd_to_path() -> str:
     cwd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
     os.environ["PATH"] += ":" + cwd
     return cwd
 
 
-def truncate(text, max_len=DEFAULT_TRUNCATION_LENGTH, trailer="..."):
+def truncate(
+    text: str,
+    max_len: int = DEFAULT_TRUNCATION_LENGTH,
+    trailer: str = "..."
+) -> str:
     if len(text) > max_len:
         assert(max_len > len(trailer))
         return text[0:max_len - len(trailer)] + trailer
     return text
 
 
-def selenium_apply_firefox_options(ctx, ff_options):
+def selenium_apply_firefox_options(
+    ctx: DlContext,
+    ff_options: selenium.webdriver.FirefoxOptions
+) -> None:
     if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
         if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -968,7 +1008,7 @@ def selenium_apply_firefox_options(ctx, ff_options):
         ff_options.set_preference(pk, pv)
 
 
-def setup_selenium_tor(ctx):
+def setup_selenium_tor(ctx: DlContext) -> None:
     # use bundled geckodriver if available
     cwd = add_cwd_to_path()
     if ctx.tor_browser_dir is None:
@@ -978,32 +1018,32 @@ def setup_selenium_tor(ctx):
         else:
             raise ScrepSetupError(f"no tbdir specified, check --help")
     try:
-        options = webdriver.firefox.options.Options()
+        options = selenium.webdriver.FirefoxOptions()
         selenium_apply_firefox_options(ctx, options)
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
 
-    except WebDriverException as ex:
+    except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
-def setup_selenium_firefox(ctx):
+def setup_selenium_firefox(ctx: DlContext) -> None:
     # use bundled geckodriver if available
     add_cwd_to_path()
-    options = webdriver.FirefoxOptions()
+    options = selenium.webdriver.FirefoxOptions()
     selenium_apply_firefox_options(ctx, options)
     try:
-        ctx.selenium_driver = webdriver.Firefox(
+        ctx.selenium_driver = selenium.webdriver.Firefox(
             options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
-    except WebDriverException as ex:
+    except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start geckodriver: {str(ex)}")
 
 
-def setup_selenium_chrome(ctx):
+def setup_selenium_chrome(ctx: DlContext) -> None:
     # allow usage of bundled chromedriver
     add_cwd_to_path()
-    options = webdriver.ChromeOptions()
+    options = selenium.webdriver.ChromeOptions()
     options.add_argument("--incognito")
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
@@ -1017,25 +1057,28 @@ def setup_selenium_chrome(ctx):
         options.add_experimental_option("prefs", prefs)
 
     try:
-        ctx.selenium_driver = webdriver.Chrome(
-            options=options, service=selenium.webdriver.chrome.service.Service(log_path=ctx.selenium_log_path))
-    except WebDriverException as ex:
+        ctx.selenium_driver = selenium.webdriver.Chrome(
+            options=options,
+            service=selenium.webdriver.chrome.service.Service(
+                log_path=ctx.selenium_log_path)
+        )
+    except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start chromedriver: {str(ex)}")
 
 
-def selenium_add_cookies_through_get(ctx):
+def selenium_add_cookies_through_get(ctx: DlContext) -> None:
     # ctx.selenium_driver.set_page_load_timeout(0.01)
     for domain, cookies in ctx.cookie_dict.items():
         try:
             ctx.selenium_driver.get(f"https://{domain}")
-        except selenium.common.exceptions.TimeoutException:
+        except SeleniumTimeoutException:
             raise ScrepSetupError(
                 "Failed to apply cookies for https://{domain}: page failed to load")
         for c in cookies.values():
             ctx.selenium_driver.add_cookie(c)
 
 
-def setup_selenium(ctx):
+def setup_selenium(ctx: DlContext) -> None:
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
     elif ctx.selenium_variant == SeleniumVariant.CHROME:
@@ -1055,11 +1098,11 @@ def setup_selenium(ctx):
         selenium_add_cookies_through_get(ctx)
 
 
-def get_format_string_keys(fmt_string):
+def get_format_string_keys(fmt_string) -> list[str]:
     return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
 
 
-def format_string_uses_arg(fmt_string, arg_pos, arg_name):
+def format_string_uses_arg(fmt_string, arg_pos, arg_name) -> int:
     if fmt_string is None:
         return 0
     fmt_args = get_format_string_keys(fmt_string)
@@ -1071,8 +1114,8 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
     return count
 
 
-def setup_match_chain(mc, ctx):
-    # we need ctx because mc.ctx is stil None before we apply_defaults
+# we need ctx because mc.ctx is stil None before we apply_defaults
+def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
     mc.apply_defaults(ctx.defaults_mc)
 
     locators = [mc.content, mc.label, mc.document]
@@ -1167,7 +1210,7 @@ def setup_match_chain(mc, ctx):
             )
 
 
-def load_cookie_jar(ctx):
+def load_cookie_jar(ctx: DlContext) -> None:
     try:
         ctx.cookie_jar = MozillaCookieJar()
         ctx.cookie_jar.load(
@@ -1197,7 +1240,7 @@ def load_cookie_jar(ctx):
         ctx.cookie_list.append(ck)
 
 
-def setup(ctx, for_repl=False):
+def setup(ctx: DlContext, for_repl: bool = False) -> None:
     global DEFAULT_CPF
     ctx.apply_defaults(DlContext())
 
@@ -1260,21 +1303,24 @@ def setup(ctx, for_repl=False):
         setup_selenium(ctx)
 
 
-def parse_prompt_option(val, options, default=None, unparsable_val=None):
+def parse_prompt_option(
+    val: str, options: dict[str: T],
+    default: Optional[T] = None
+) -> Optional[T]:
     val = val.strip().lower()
     if val == "":
         return default
     for opt, matchings in options:
         if val in matchings:
             return opt
-    return unparsable_val
+    return None
 
 
-def parse_bool_string(val, default=None, unparsable_val=None):
-    return parse_prompt_option(val, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default, None)
+def parse_bool_string(val: str, default: Optional[bool] = None) -> Optional[bool]:
+    return parse_prompt_option(val, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def prompt(prompt_text, options, default=None):
+def prompt(prompt_text: str, options: dict[str, T], default: Optional[T] = None) -> Optional[T]:
     assert len(options) > 1
     while True:
         res = parse_prompt_option(input(prompt_text), options, default)
@@ -1286,37 +1332,55 @@ def prompt(prompt_text, options, default=None):
         return res
 
 
-def prompt_yes_no(prompt_text, default=None):
+def prompt_yes_no(prompt_text: str, default: Optional[bool] = None) -> Optional[bool]:
     return prompt(prompt_text, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def selenium_get_url(ctx):
+def selenium_get_url(ctx: DlContext) -> str:
     try:
         return ctx.selenium_driver.current_url
-    except (WebDriverException, urllib3.exceptions.MaxRetryError) as e:
+    except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
         # TODO: can this fail in any other way?
         report_selenium_died(ctx)
 
 
-def selenium_has_died(ctx):
+def selenium_has_died(ctx: DlContext) -> bool:
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except (WebDriverException, urllib3.exceptions.MaxRetryError) as e:
+    except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
         return True
 
 
-def selenium_download_from_local_file(cm, filepath):
+def gen_dl_temp_name(
+    ctx: DlContext, final_filepath: Optional[str]
+) -> tuple[str, str]:
+    dl_index = ctx.download_tmp_index
+    ctx.download_tmp_index += 1
+    tmp_filename = f"dl{dl_index}"
+    if final_filepath is not None:
+        tmp_filename += "_" + os.path.basename(final_filepath)
+    else:
+        tmp_filename += ".bin"
+    tmp_path = os.path.join(ctx.downloads_temp_dir, tmp_filename)
+    return tmp_path, tmp_filename
+
+
+def selenium_download_from_local_file(
+    cm: ContentMatch, filepath: Optional[str]
+) -> tuple[Optional[str], ContentFormat]:
     doc_url = selenium_get_url(cm.mc.ctx)
     if doc_url is None:
-        return None, None
+        return None, ContentFormat.FILE
     if not os.path.isabs(cm.cmatch):
         cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
         filepath = os.path.join(cur_path, cm.cmatch)
     return filepath, ContentFormat.FILE
 
 
-def selenium_download_external(cm, filepath):
+def selenium_download_external(
+    cm: ContentMatch, filepath: Optional[str]
+) -> tuple[Optional[str], ContentFormat]:
     proxies = None
     if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         proxies = {
@@ -1339,22 +1403,12 @@ def selenium_download_external(cm, filepath):
         return None, ContentFormat.STREAM
 
 
-def gen_dl_temp_name(ctx, final_filepath):
-    dl_index = ctx.download_tmp_index
-    ctx.download_tmp_index += 1
-    tmp_filename = f"dl{dl_index}"
-    if final_filepath is not None:
-        tmp_filename += "_" + os.path.basename(final_filepath)
-    else:
-        tmp_filename += ".bin"
-    tmp_path = os.path.join(ctx.downloads_temp_dir, tmp_filename)
-    return tmp_path, tmp_filename
-
-
-def selenium_download_internal(cm, filepath):
+def selenium_download_internal(
+    cm: ContentMatch, filepath: Optional[str]
+) -> tuple[Optional[str], ContentFormat]:
     doc_url = selenium_get_url(cm.mc.ctx)
     if doc_url is None:
-        return None, None
+        return None, ContentFormat.TEMP_FILE
     doc_url = urllib.parse.urlparse(doc_url)
     link_url = urllib.parse.urlparse(cm.cmatch)
 
@@ -1364,7 +1418,7 @@ def selenium_download_internal(cm, filepath):
             f"{cm.cmatch}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
             + f"failed to download: seldl=internal does not work across origins"
         )
-        return None, None
+        return None, ContentFormat.TEMP_FILE
 
     tmp_path, tmp_filename = gen_dl_temp_name(cm.mc.ctx, filepath)
     script_source = """
@@ -1381,7 +1435,7 @@ def selenium_download_internal(cm, filepath):
         cm.mc.ctx.selenium_driver.execute_script(
             script_source, cm.cmatch, tmp_filename
         )
-    except WebDriverException as ex:
+    except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
             report_selenium_died(cm.mc.ctx)
         else:
@@ -1390,7 +1444,7 @@ def selenium_download_internal(cm, filepath):
                 f"{cm.cmatch}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
                 + f"selenium download failed: {str(ex)}"
             )
-        return None, None
+        return None, ContentFormat.TEMP_FILE
     i = 0
     while True:
         if os.path.exists(tmp_path):
@@ -1409,7 +1463,9 @@ def selenium_download_internal(cm, filepath):
     return tmp_path, ContentFormat.TEMP_FILE
 
 
-def selenium_download_fetch(cm, filepath):
+def selenium_download_fetch(
+    cm: ContentMatch, filepath: Optional[str]
+) -> tuple[Optional[str], ContentFormat]:
     script_source = """
         const url = arguments[0];
         return (async () => {
@@ -1441,10 +1497,10 @@ def selenium_download_fetch(cm, filepath):
         res = cm.mc.ctx.selenium_driver.execute_script(
             script_source, cm.cmatch
         )
-    except WebDriverException as ex:
+    except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
             report_selenium_died(cm.mc.ctx)
-            return None, None
+            return None, ContentFormat.BYTES
         err = str(ex)
     if "error" in res:
         err = res["error"]
@@ -1457,11 +1513,13 @@ def selenium_download_fetch(cm, filepath):
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
             + f"selenium download of '{cm.cmatch}' failed{cors_warn}: {err}"
         )
-        return None, None
+        return None, ContentFormat.BYTES
     return binascii.a2b_base64(res["ok"]), ContentFormat.BYTES
 
 
-def selenium_download(cm, filepath=None):
+def selenium_download(
+    cm: ContentMatch, filepath: Optional[str] = None
+) -> tuple[Optional[str], ContentFormat]:
     if cm.doc.document_type == DocumentType.FILE and urllib.parse.urlparse(cm.cmatch).scheme in ["", "file"]:
         return selenium_download_from_local_file(cm, filepath)
 
@@ -1476,7 +1534,7 @@ def selenium_download(cm, filepath=None):
     return selenium_download_fetch(cm, filepath)
 
 
-def fetch_file(ctx, path, stream=False):
+def fetch_file(ctx: DlContext, path: str, stream: bool = False) -> Any:
     try:
         f = open(path, "rb")
         if stream:
@@ -1491,7 +1549,11 @@ def fetch_file(ctx, path, stream=False):
         raise ScrepFetchError(truncate(str(ex))) from ex
 
 
-def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
+def requests_dl(
+    ctx: DlContext, path: str,
+    cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
+    proxies=None, stream=False
+) -> tuple[requests.Response, str]:
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
         res = urllib.request.urlopen(path, timeout=ctx.request_timeout_seconds)
@@ -1534,12 +1596,12 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
         raise ScrepFetchError(truncate(str(ex)))
 
 
-def report_selenium_died(ctx, is_err=True):
+def report_selenium_died(ctx: DlContext, is_err: bool = True) -> None:
     log(ctx, Verbosity.ERROR if is_err else Verbosity.WARN,
         "the selenium instance was closed unexpectedly")
 
 
-def report_selenium_error(ctx, ex):
+def report_selenium_error(ctx: DlContext, ex):
     log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
@@ -1690,7 +1752,7 @@ def download_content(cm, save_path):
             save_file.close()
 
 
-def fetch_doc(ctx, doc):
+def fetch_doc(ctx: DlContext, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
             selpath = doc.path
@@ -1698,7 +1760,7 @@ def fetch_doc(ctx, doc):
                 selpath = "file:" + os.path.realpath(selpath)
             try:
                 ctx.selenium_driver.get(selpath)
-            except selenium.common.exceptions.TimeoutException:
+            except SeleniumTimeoutException:
                 ScrepFetchError("selenium timeout")
 
         decide_document_encoding(ctx, doc)
@@ -1733,7 +1795,7 @@ def gen_final_content_format(format_str, cm):
         return buf.read()
 
 
-def normalize_link(ctx, mc, src_doc, doc_path, link):
+def normalize_link(ctx: DlContext, mc, src_doc, doc_path, link):
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
         return link
@@ -1805,7 +1867,7 @@ def handle_content_match(cm):
             else:
                 try:
                     doc_url = cm.mc.ctx.selenium_driver.current_url
-                except WebDriverException as ex:
+                except SeleniumWebDriverException as ex:
                     # selenium died, abort
                     if selenium_has_died(cm.mc.ctx):
                         report_selenium_died(cm.mc.ctx)
@@ -1944,7 +2006,7 @@ def handle_content_match(cm):
     return InteractiveResult.ACCEPT
 
 
-def handle_document_match(ctx, doc):
+def handle_document_match(ctx: DlContext, doc):
     if not ctx.document.interactive:
         return InteractiveResult.ACCEPT
     while True:
@@ -2065,7 +2127,7 @@ def gen_document_matches(mc, doc):
     return document_matches
 
 
-def make_padding(ctx, count_number):
+def make_padding(ctx: DlContext, count_number):
     content_count_pad_len = (
         ctx.selenium_content_count_pad_length
         - min(len(str(count_number)), ctx.selenium_content_count_pad_length)
@@ -2075,7 +2137,7 @@ def make_padding(ctx, count_number):
     return lpad * " ", rpad * " "
 
 
-def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg):
+def handle_interactive_chains(ctx: DlContext, interactive_chains, doc, try_number, last_msg):
     content_count = 0
     docs_count = 0
     labels_none_for_n = 0
@@ -2238,7 +2300,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc, new_do
     return content_skip_doc, documents_skip_doc
 
 
-def decide_document_encoding(ctx, doc):
+def decide_document_encoding(ctx: DlContext, doc):
     forced = False
     mc = doc.src_mc
     if not mc:
@@ -2254,7 +2316,7 @@ def decide_document_encoding(ctx, doc):
     doc.forced_encoding = forced
 
 
-def parse_xml(ctx, doc):
+def parse_xml(ctx: DlContext, doc):
     try:
         src_bytes = doc.text.encode(doc.encoding, errors="surrogateescape")
         if doc.text.strip() == "":
@@ -2272,7 +2334,7 @@ def parse_xml(ctx, doc):
             f"{doc.path}: failed to parse as xml: {str(ex)}")
 
 
-def dl(ctx):
+def dl(ctx: DlContext):
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
@@ -2295,7 +2357,7 @@ def dl(ctx):
         try_number = 0
         try:
             fetch_doc(ctx, doc)
-        except WebDriverException as ex:
+        except SeleniumWebDriverException as ex:
             if selenium_has_died(ctx):
                 report_selenium_died(ctx)
             else:
@@ -2317,7 +2379,7 @@ def dl(ctx):
                     src_new = ctx.selenium_driver.page_source
                     same_content = (src_new == doc.text)
                     doc.text = src_new
-                except WebDriverException as e:
+                except SeleniumWebDriverException as e:
                     if selenium_has_died(ctx):
                         report_selenium_died(ctx)
                     else:
@@ -2375,11 +2437,11 @@ def dl(ctx):
     return doc
 
 
-def finalize_selenium(ctx):
+def finalize_selenium(ctx: DlContext):
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
-        except WebDriverException:
+        except SeleniumWebDriverException:
             pass
         finally:
             ctx.selenium_driver = None
@@ -2394,7 +2456,7 @@ def begins(string, begin):
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 
 
-def parse_mc_range_int(ctx, v, arg):
+def parse_mc_range_int(ctx: DlContext, v, arg):
     try:
         return int(v)
     except ValueError as ex:
@@ -2403,7 +2465,7 @@ def parse_mc_range_int(ctx, v, arg):
         )
 
 
-def extend_match_chain_list(ctx, needed_id):
+def extend_match_chain_list(ctx: DlContext, needed_id):
     if len(ctx.match_chains) > needed_id:
         return
     for i in range(len(ctx.match_chains), needed_id+1):
@@ -2412,7 +2474,7 @@ def extend_match_chain_list(ctx, needed_id):
         ctx.match_chains.append(mc)
 
 
-def parse_simple_mc_range(ctx, mc_spec, arg):
+def parse_simple_mc_range(ctx: DlContext, mc_spec, arg):
     sections = mc_spec.split(",")
     ranges = []
     for s in sections:
@@ -2450,7 +2512,7 @@ def parse_simple_mc_range(ctx, mc_spec, arg):
     return itertools.chain(*ranges)
 
 
-def parse_mc_range(ctx, mc_spec, arg):
+def parse_mc_range(ctx: DlContext, mc_spec, arg):
     if mc_spec == "":
         return [ctx.defaults_mc]
 
@@ -2475,7 +2537,7 @@ def parse_mc_range(ctx, mc_spec, arg):
     return ({*include} - {*exclude})
 
 
-def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
+def parse_mc_arg(ctx: DlContext, argname, arg, support_blank=False, blank_value=""):
     if not begins(arg, argname):
         return False, None, None
     argname_len = len(argname)
@@ -2503,7 +2565,7 @@ def follow_attribute_path_spec(obj, spec):
     return obj
 
 
-def parse_mc_range_as_arg(ctx, argname, argval):
+def parse_mc_range_as_arg(ctx: DlContext, argname, argval):
     return list(parse_mc_range(ctx, argval, argname))
 
 
@@ -2612,7 +2674,7 @@ def verify_encoding(encoding):
         return False
 
 
-def apply_doc_arg(ctx, argname, doctype, arg):
+def apply_doc_arg(ctx: DlContext, argname, doctype, arg):
     success, mcs, path = parse_mc_arg(ctx, argname, arg)
     if not success:
         return False
@@ -2642,7 +2704,7 @@ def apply_doc_arg(ctx, argname, doctype, arg):
     return True
 
 
-def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, support_blank=False, blank_val=""):
+def apply_ctx_arg(ctx: DlContext, optname, argname, arg, value_parse=lambda v, _arg: v, support_blank=False, blank_val=""):
     if not begins(arg, optname):
         return False
     if len(optname) == len(arg):
@@ -2667,7 +2729,7 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
     return True
 
 
-def resolve_repl_defaults(ctx_new, ctx, last_doc):
+def resolve_repl_defaults(ctx_new: DlContext, ctx: DlContext, last_doc):
     if ctx_new.user_agent_random and not ctx_new.user_agent:
         ctx.user_agent = None
 
@@ -2682,7 +2744,7 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
         try:
             if ctx.selenium_driver:
                 ctx.selenium_driver.close()
-        except WebDriverException:
+        except SeleniumWebDriverException:
             pass
         finally:
             ctx_new.selenium_driver = None
@@ -2692,7 +2754,7 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
         doc_url = None
         try:
             doc_url = ctx_new.selenium_driver.current_url
-        except WebDriverException as ex:
+        except SeleniumWebDriverException as ex:
             # selenium died, abort
             if selenium_has_died(ctx_new):
                 report_selenium_died(ctx_new)
@@ -2724,7 +2786,7 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
         last_doc.xml = None
 
 
-def run_repl(ctx):
+def run_repl(ctx: DlContext):
     try:
         # run with initial args
         last_doc = dl(ctx)
@@ -2776,7 +2838,7 @@ def run_repl(ctx):
         finalize_selenium(ctx)
 
 
-def parse_args(ctx, args):
+def parse_args(ctx: DlContext, args):
     for arg in args:
         if (
             arg in ["-h", "--help", "help"]

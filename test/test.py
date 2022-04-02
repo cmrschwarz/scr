@@ -22,6 +22,12 @@ ANSI_CLEAR = "\033[0m"
 DASH_BAR = "-" * 80
 
 
+class TestOptions:
+    tags_need: list[str] = []
+    tags_avoid: list[str] = []
+    parallelism: int = cpu_count()
+
+
 def get_key_with_default(obj, key, default=""):
     return obj[key] if key in obj else default
 
@@ -71,7 +77,7 @@ class TestResult(Enum):
     SKIPPED = 2
 
 
-def run_test(name, tags_need, tags_avoid, parallelism):
+def run_test(name, to: TestOptions):
     with open(name, "r") as f:
         try:
             tc = json.load(f)
@@ -81,7 +87,7 @@ def run_test(name, tags_need, tags_avoid, parallelism):
     tags = tc.get("tags", [])
     tags.append(name)
     discard = False
-    for tn in tags_need:
+    for tn in to.tags_need:
         for t in tags:
             if tn in t:
                 break
@@ -89,7 +95,7 @@ def run_test(name, tags_need, tags_avoid, parallelism):
             discard = True
             break
     else:
-        for ta in tags_avoid:
+        for ta in to.tags_avoid:
             for t in tags:
                 if ta in t:
                     discard = True
@@ -104,7 +110,7 @@ def run_test(name, tags_need, tags_avoid, parallelism):
     stdin = join_lines(tc.get("stdin", ""))
     expected_stdout = join_lines(tc.get("stdout", ""))
     expected_stderr = join_lines(tc.get("stderr", ""))
-    if parallelism < 2:
+    if to.parallelism < 2:
         msg_inprogress = f"{ANSI_YELLOW}RUNNING {name}{ANSI_CLEAR}"
         sys.stdout.write(msg_inprogress)
         sys.stdout.flush()
@@ -133,7 +139,7 @@ def run_test(name, tags_need, tags_avoid, parallelism):
 
         msg = f"{ANSI_RED}FAILED {name} [{exec_time_str}]: {reason} "
 
-    if parallelism < 2:
+    if to.parallelism < 2:
         if len(msg) < len(msg_inprogress):
             msg = "\r" + " " * len(msg) + "\r" + msg
         else:
@@ -147,21 +153,21 @@ def run_test_wrapper(args):
     return run_test(*args)
 
 
-def run_tests(tags_need, tags_avoid, parallelism):
+def run_tests(to: TestOptions):
     results = {
         TestResult.SKIPPED: 0,
         TestResult.FAILED: 0,
         TestResult.SUCCESS: 0
     }
     tests = glob.glob("./test/cases/*.json")
-    if parallelism < 2:
+    if to.parallelism < 2:
         for name in tests:
-            res = run_test(name, tags_need, tags_avoid, parallelism)
+            res = run_test(name, to)
             results[res] += 1
         return results
 
-    pool = Pool(parallelism)
-    test_args = [(name, tags_need, tags_avoid, parallelism) for name in tests]
+    pool = Pool(to.parallelism)
+    test_args = [(name, to) for name in tests]
     results_list = pool.map(run_test_wrapper, test_args)
     for res in results_list:
         results[res] += 1
@@ -169,32 +175,29 @@ def run_tests(tags_need, tags_avoid, parallelism):
 
 
 def main():
-    tags_need = []
-    tags_avoid = []
-    parallelism = cpu_count()
+    to = TestOptions()
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
         if arg == "-x":
-            tags_avoid.extend(sys.argv[i+1].split(","))
+            to.tags_avoid.extend(sys.argv[i+1].split(","))
             i += 1
         elif arg == "-o":
-            tags_need.extend(sys.argv[i+1].split(","))
+            to.tags_need.extend(sys.argv[i+1].split(","))
             i += 1
         elif arg == "-s":
-            parallelism = 1
+            to.parallelism = 1
         elif arg == "-j":
-            parallelism = int(sys.argv[i+1])
+            to.parallelism = int(sys.argv[i+1])
             i += 1
         else:
             raise ValueError(f"unknown cli argument {arg}")
         i += 1
 
-    if parallelism < 1:
-        parallelism = 1
+    if to.parallelism < 1:
+        to.parallelism = 1
 
-    results, exec_time_str = timed_exec(
-        lambda: run_tests(tags_need, tags_avoid, parallelism))
+    results, exec_time_str = timed_exec(lambda: run_tests(to))
 
     if results[TestResult.SKIPPED]:
         skip_notice = f", {results[TestResult.SKIPPED]} test(s) skipped"
