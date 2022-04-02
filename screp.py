@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
+from abc import ABC, abstractmethod
+from typing import Any, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
+import urllib3.exceptions  # for selenium MaxRetryError
+import mimetypes
+import shutil
+from io import BytesIO, SEEK_SET
+import binascii
+import shlex
+import copy
 from abc import abstractmethod
 from optparse import Option
+from tokenize import Number
 import lxml
 import lxml.etree
 import lxml.html
@@ -16,11 +26,9 @@ from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
 import selenium.webdriver
-import selenium.webdriver.chrome.service
-import selenium.webdriver.chrome.options
-import selenium.webdriver.firefox.service
-import selenium.webdriver.firefox.options
-import selenium.webdriver.remote.webdriver
+from selenium.webdriver.firefox.service import Service as SeleniumFirefoxService
+from selenium.webdriver.chrome.service import Service as SeleniumChromeService
+from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
 from collections import deque
@@ -29,27 +37,28 @@ import time
 import tempfile
 import itertools
 import warnings
-import copy
-import shlex
-import binascii
-from io import BytesIO, SEEK_SET
-import shutil
-import mimetypes
-import urllib3.exceptions  # for selenium MaxRetryError
-from typing import Any, Optional, TypeVar, BinaryIO, Union
-from abc import ABC, abstractmethod
+import urllib.request
+
 
 T = TypeVar("T")
 K = TypeVar("K")
 V = TypeVar("V")
 
 
-def prefixes(str: str) -> list[str]:
-    return [str[:i] for i in range(len(str), 0, -1)]
+def prefixes(str: str) -> set[str]:
+    return set(str[:i] for i in range(len(str), 0, -1))
 
 
-YES_INDICATING_STRINGS = prefixes("yes") + prefixes("true") + ["1", "+"]
-NO_INDICATING_STRINGS = prefixes("no") + prefixes("false") + ["0", "-"]
+def set_join(*args: Iterable[T]) -> set[T]:
+    res: set[T] = set()
+    for s in args:
+        res.update(s)
+    return res
+
+
+YES_INDICATING_STRINGS = set_join(
+    prefixes("yes"), prefixes("true"), ["1", "+"])
+NO_INDICATING_STRINGS = set_join(prefixes("no"), prefixes("false"), ["0", "-"])
 SKIP_INDICATING_STRINGS = prefixes("skip")
 CHAIN_SKIP_INDICATING_STRINGS = prefixes("chainskip")
 DOC_SKIP_INDICATING_STRINGS = prefixes("docskip")
@@ -69,7 +78,7 @@ DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
 
 # very slow to initialize, so we do it lazily cached
-RANDOM_USER_AGENT_INSTANCE = None
+RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
 
 
 class ScrepSetupError(Exception):
@@ -207,14 +216,18 @@ class MinimalInputStream(ABC):
 
 
 class ResponseStreamWrapper(MinimalInputStream):
+    _bytes_buffer: bytearray
+    _request_response: requests.models.Response
+    _iterator: Iterator[bytes]
+    _pos: int = 0
+
     def __init__(
         self, request_response: requests.models.Response,
         buffer_size: int = DEFAULT_RESPONSE_BUFFER_SIZE
     ) -> None:
-        self._bytes_buffer = []
-        self._response = request_response
-        self._iterator = self._response.iter_content(buffer_size)
-        self._pos = 0
+        self._bytes_buffer = bytearray()
+        self._request_response = request_response
+        self._iterator = self._request_response.iter_content(buffer_size)
 
     def read(self, size: int = None) -> bytes:
         if size is None:
@@ -227,17 +240,19 @@ class ResponseStreamWrapper(MinimalInputStream):
             try:
                 buf = next(self._iterator)
             except StopIteration:
+                goal_position = loaded_until
                 break
             loaded_until += len(buf)
             if self._bytes_buffer:
                 self._bytes_buffer.extend(buf)
             else:
-                self._bytes_buffer = buf
+                self._bytes_buffer = bytearray(buf)
         if loaded_until <= goal_position:
             self._pos = loaded_until
             res = self._bytes_buffer
-            self._bytes_buffer = []
+            self._bytes_buffer = bytearray()
             return res
+        assert type(goal_position) is int
         buf_pos = goal_position - self._pos
         self._pos = goal_position
         res = self._bytes_buffer[0:buf_pos]
@@ -245,7 +260,7 @@ class ResponseStreamWrapper(MinimalInputStream):
         return res
 
     def close(self) -> None:
-        self._response.close()
+        self._request_response.close()
 
     def __enter__(self) -> None:
         pass
@@ -286,9 +301,9 @@ class RegexMatch:
     def __hash__(self) -> int:
         return hash(self.__key())
 
-    def group_list_to_dict(self, name_prefix: str) -> dict[str, str]:
+    def unnamed_group_list_to_dict(self, name_prefix: str) -> dict[str, str]:
         group_dict = {f"{name_prefix}0": self.rmatch}
-        for i, g in enumerate(self.group_list):
+        for i, g in enumerate(self.unnamed_cgroups):
             group_dict[f"{name_prefix}{i+1}"] = g
         return group_dict
 
@@ -306,7 +321,7 @@ class Document:
 
     def __init__(
         self, document_type: DocumentType, path: str,
-        src_mc: 'MatchChain',
+        src_mc: Optional['MatchChain'],
         match_chains: list['MatchChain'] = None,
         expand_match_chains_above: Optional[int] = None,
         regex_match: Optional[RegexMatch] = None
@@ -327,7 +342,7 @@ class Document:
                 match_chains, key=lambda mc: mc.chain_id)
         self.expand_match_chains_above = expand_match_chains_above
 
-    def __key(self) -> tuple[str, str]:
+    def __key(self) -> tuple[DocumentType, str]:
         return (self.document_type, self.path)
 
     def __eq__(self, other) -> bool:
@@ -348,12 +363,13 @@ class ConfigDataClass:
         for k in self.__class__._config_slots_:
             self.__dict__[k] = None
 
+    @staticmethod
     def _previous_annotations_as_config_slots(
         annotations: dict[str, Any],
         subconfig_slots: list[str]
     ) -> list[str]:
-        subconfig_slots = set(subconfig_slots)
-        return list(k for k in annotations.keys() if k not in subconfig_slots)
+        subconfig_slots_dict = set(subconfig_slots + ["__annotations__"])
+        return list(k for k in annotations.keys() if k not in subconfig_slots_dict)
 
     def apply_defaults(self, defaults):
         for cs in self.__class__._config_slots_:
@@ -370,10 +386,11 @@ class ConfigDataClass:
 class Locator(ConfigDataClass):
     name: str
     xpath: Optional[str] = None
-    regex: Optional[str] = None
+    regex: Optional[Union[str, re.Pattern]] = None
     format: Optional[str] = None
     multimatch: bool = True
     interactive: bool = False
+    __annotations__: dict[str, type]
 
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(
@@ -397,11 +414,13 @@ class Locator(ConfigDataClass):
     def compile_format(self) -> None:
         if self.format is None:
             return
+
         self.format = unescape_string(self.format, f"{self.name[0]}f")
         try:
             if self.regex:
-                capture_group_keys = list(self.regex.groupindex.keys())
-                unnamed_regex_group_count = self.regex.groups - \
+                rgx = cast(re.Pattern, self.regex)
+                capture_group_keys = list(rgx.groupindex.keys())
+                unnamed_regex_group_count = rgx.groups - \
                     len(capture_group_keys)
             else:
                 capture_group_keys = []
@@ -430,14 +449,16 @@ class Locator(ConfigDataClass):
 
     def setup(self) -> None:
         self.xpath = empty_string_to_none(self.xpath)
+        assert self.regex is None or type(self.regex) is str
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
         self.compile_regex()
         self.compile_format()
 
     def match_xpath(
-        self, ctx: 'DlContext', src_xml: str, path: str,
-        default: tuple[list[str], Optional[list[lxml.html.HtmlElement]]] = [],
+        self, ctx: 'DlContext', src_xml: lxml.html.HtmlElement, path: str,
+        default: tuple[list[str], Optional[list[lxml.html.HtmlElement]]] = ([], [
+        ]),
         return_xml: bool = False
     ) -> tuple[list[str], Optional[list[lxml.html.HtmlElement]]]:
         if self.xpath is None:
@@ -486,7 +507,7 @@ class Locator(ConfigDataClass):
         if self.regex is None or xmatch is None:
             return default
         res = []
-        for m in self.regex.finditer(xmatch):
+        for m in cast(re.Pattern, self.regex).finditer(xmatch):
             res.append(
                 RegexMatch(xmatch, m.string, list(m.groups()), m.groupdict())
             )
@@ -538,7 +559,7 @@ class MatchChain(ConfigDataClass):
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
 
     document_output_chains: list['MatchChain'] = []
-
+    __annotations__: dict[str, type]
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(
             __annotations__, [])
@@ -553,8 +574,8 @@ class MatchChain(ConfigDataClass):
 
     # non config members
     chain_id: int
-    di: Optional[int] = None
-    ci: Optional[int] = None
+    di: int
+    ci: int
     has_xpath_matching: bool = False
     has_label_matching: bool = False
     has_content_xpaths: bool = False
@@ -592,6 +613,7 @@ class MatchChain(ConfigDataClass):
         )
 
     def need_content_matches(self) -> bool:
+        assert self.ci is not None and self.di is not None
         return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
 
     def is_valid_label(self, label) -> bool:
@@ -628,8 +650,12 @@ class ContentMatch:
         self.mc = mc
         self.doc = doc
 
-    def __key(self) -> list[Any]:
-        return (self.label_match.__key(), self.content)
+    def __key(self) -> Any:
+        return (
+            self.doc,
+            self.label_regex_match.__key() if self.label_regex_match else None,
+            self.content_regex_match.__key() if self.content_regex_match else None
+        )
 
     def __eq__(x, y):
         return isinstance(y, x.__class__) and x.__key() == y.__key()
@@ -644,7 +670,7 @@ class DlContext(ConfigDataClass):
     exit: bool = False
     selenium_variant: SeleniumVariant = SeleniumVariant.DISABLED
     tor_browser_dir: Optional[str] = None
-    user_agent_random: bool = False
+    user_agent_random: Optional[bool] = False
     user_agent: Optional[str] = None
     verbosity: Verbosity = Verbosity.WARN
     documents_bfs: bool = False
@@ -661,8 +687,8 @@ class DlContext(ConfigDataClass):
     # not really config, but recycled in repl mode
     cookie_jar: Optional[MozillaCookieJar] = None
     cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
-    selenium_driver: Optional[selenium.webdriver.remote.webdriver.WebDriver] = None
-
+    selenium_driver: Optional[SeleniumWebDriver] = None
+    __annotations__: dict[str, type]
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(
             __annotations__, [])
@@ -706,7 +732,7 @@ class OutputFormatter:
         self._format_parts = list(
             reversed(list(Formatter().parse(format_str)))
         )
-        self._args_list = reversed(self._args_list)
+        self._args_list = list(reversed(self._args_list))
 
         self._out_stream = out_stream
         self._found_stream = False
@@ -740,7 +766,7 @@ class OutputFormatter:
                         self._out_stream.write(val)
                     elif type(val) is str:
                         self._out_stream.write(
-                            format(val, format_args)
+                            format(val, format_args if format_args else "")
                             .encode("utf-8", errors="surrogateescape")
                         )
                     else:
@@ -755,13 +781,13 @@ class OutputFormatter:
         return False
 
 
-def empty_string_to_none(string: str) -> Optional[str]:
+def empty_string_to_none(string: Optional[str]) -> Optional[str]:
     if string == "":
         return None
     return string
 
 
-def dict_update_unless_none(current: dict[K, V], updates: dict[K, V]) -> None:
+def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> None:
     current.update({
         k: v for k, v in updates.items() if v is not None
     })
@@ -775,12 +801,16 @@ def content_match_build_format_args(
         "cesc": cm.mc.content_escape_sequence,
         "dl":   cm.doc.path,
     }
-    regex_matches = [
+    potential_regex_matches = [
         ("d", cm.doc.regex_match),
         ("l", cm.label_regex_match),
         ("c", cm.content_regex_match)
     ]
-    regex_matches = filter(lambda rm: rm[1] is not None, regex_matches)
+    # remove None regex matches (and type cast this to make mypy happy)
+    regex_matches = list(map(lambda p: cast(tuple[str, RegexMatch], p),
+                             filter(
+                                 lambda rm: rm[1] is not None, potential_regex_matches)
+                             ))
     for p, rm in regex_matches:
         args_dict.update({
             f"{p}x": rm.xmatch,
@@ -800,11 +830,11 @@ def content_match_build_format_args(
 
     # apply the unnamed groups first in case somebody overwrote it with a named group
     for p, rm in regex_matches:
-        args_dict.update(rm.group_list_to_dict(f"{p}g"))
+        args_dict.update(rm.unnamed_group_list_to_dict(f"{p}g"))
 
     # finally apply the named groups
     for p, rm in regex_matches:
-        args_dict.update(rm.label_regex_match.group_dict)
+        args_dict.update(rm.named_cgroups)
 
     return args_dict
 
@@ -972,10 +1002,10 @@ def truncate(
     return text
 
 
-def selenium_apply_firefox_options(
-    ctx: DlContext,
-    ff_options: selenium.webdriver.FirefoxOptions
-) -> None:
+def selenium_build_firefox_options(
+    ctx: DlContext
+) -> selenium.webdriver.FirefoxOptions:
+    ff_options = selenium.webdriver.FirefoxOptions()
     if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
         if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -1006,6 +1036,7 @@ def selenium_apply_firefox_options(
     # apply prefs
     for pk, pv in prefs.items():
         ff_options.set_preference(pk, pv)
+    return ff_options
 
 
 def setup_selenium_tor(ctx: DlContext) -> None:
@@ -1018,10 +1049,10 @@ def setup_selenium_tor(ctx: DlContext) -> None:
         else:
             raise ScrepSetupError(f"no tbdir specified, check --help")
     try:
-        options = selenium.webdriver.FirefoxOptions()
-        selenium_apply_firefox_options(ctx, options)
         ctx.selenium_driver = TorBrowserDriver(
-            ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path, options=options)
+            ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path,
+            options=selenium_build_firefox_options(ctx)
+        )
 
     except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start tor browser: {str(ex)}")
@@ -1031,11 +1062,11 @@ def setup_selenium_tor(ctx: DlContext) -> None:
 def setup_selenium_firefox(ctx: DlContext) -> None:
     # use bundled geckodriver if available
     add_cwd_to_path()
-    options = selenium.webdriver.FirefoxOptions()
-    selenium_apply_firefox_options(ctx, options)
     try:
-        ctx.selenium_driver = selenium.webdriver.Firefox(
-            options=options, service=selenium.webdriver.firefox.service.Service(log_path=ctx.selenium_log_path))
+        ctx.selenium_driver = selenium.webdriver.Firefox(  
+            options=selenium_build_firefox_options(ctx),
+            service=SeleniumFirefoxService(log_path=ctx.selenium_log_path), # type: ignore
+        )
     except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start geckodriver: {str(ex)}")
 
@@ -1059,8 +1090,7 @@ def setup_selenium_chrome(ctx: DlContext) -> None:
     try:
         ctx.selenium_driver = selenium.webdriver.Chrome(
             options=options,
-            service=selenium.webdriver.chrome.service.Service(
-                log_path=ctx.selenium_log_path)
+            service=SeleniumChromeService(log_path=ctx.selenium_log_path) # type: ignore
         )
     except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start chromedriver: {str(ex)}")
@@ -1068,6 +1098,7 @@ def setup_selenium_chrome(ctx: DlContext) -> None:
 
 def selenium_add_cookies_through_get(ctx: DlContext) -> None:
     # ctx.selenium_driver.set_page_load_timeout(0.01)
+    assert ctx.selenium_driver is not None
     for domain, cookies in ctx.cookie_dict.items():
         try:
             ctx.selenium_driver.get(f"https://{domain}")
@@ -1087,6 +1118,7 @@ def setup_selenium(ctx: DlContext) -> None:
         setup_selenium_firefox(ctx)
     else:
         assert False
+    assert ctx.selenium_driver is not None
     if ctx.user_agent is None:
         ctx.user_agent = ctx.selenium_driver.execute_script(
             "return navigator.userAgent;")
@@ -1140,9 +1172,6 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
 
-    if mc.content_save_format and not mc.content_write_format:
-        mc.content_write_format = DEFAULT_CWF
-
     mc.has_xpath_matching = any(l.xpath is not None for l in locators)
     mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
     mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
@@ -1161,6 +1190,8 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
             mc.content_print_format, "cpf"
         )
     if mc.content_save_format:
+        if mc.content_write_format is None:
+            mc.content_write_format = DEFAULT_CWF
         mc.content_save_format = unescape_string(mc.content_save_format, "csf")
         mc.content_write_format = unescape_string(
             mc.content_write_format, "cwf"
@@ -1210,12 +1241,27 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
             )
 
 
+def load_selenium_cookies(ctx: DlContext) -> dict[str, dict[str, dict[str, Any]]]:
+    assert ctx.selenium_driver is not None
+    cookies: list[dict[str, Any]] = ctx.selenium_driver.get_cookies()
+    cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
+    for ck in cookies:
+        if cast(str, ck["domain"]) not in cookie_dict:
+            cookie_dict[ck["domain"]] = {}
+        cookie_dict[ck["domain"]][ck["name"]] = ck
+    return cookie_dict
+
+
 def load_cookie_jar(ctx: DlContext) -> None:
+    if ctx.cookie_file is None:
+        return
     try:
         ctx.cookie_jar = MozillaCookieJar()
         ctx.cookie_jar.load(
             os.path.expanduser(ctx.cookie_file),
-            ignore_discard=True, ignore_expires=True)
+            ignore_discard=True,
+            ignore_expires=True
+        )
     # this exception handling is really ugly but this is how this library
     # does it internally
     except OSError:
@@ -1223,7 +1269,7 @@ def load_cookie_jar(ctx: DlContext) -> None:
     except Exception as ex:
         raise ScrepSetupError(f"failed to read cookie file: {str(ex)}")
     for cookie in ctx.cookie_jar:
-        ck = {
+        ck: dict[str, Any] = {
             'domain': cookie.domain,
             'name': cookie.name,
             'value': cookie.value,
@@ -1237,7 +1283,6 @@ def load_cookie_jar(ctx: DlContext) -> None:
             ctx.cookie_dict[cookie.domain][cookie.name] = ck
         else:
             ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
-        ctx.cookie_list.append(ck)
 
 
 def setup(ctx: DlContext, for_repl: bool = False) -> None:
@@ -1247,8 +1292,7 @@ def setup(ctx: DlContext, for_repl: bool = False) -> None:
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
-    if ctx.cookie_file is not None:
-        load_cookie_jar(ctx)
+    load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
         raise ScrepSetupError(f"the options ua and uar are incompatible")
@@ -1304,7 +1348,7 @@ def setup(ctx: DlContext, for_repl: bool = False) -> None:
 
 
 def parse_prompt_option(
-    val: str, options: dict[str: T],
+    val: str, options: list[tuple[T, set[str]]],
     default: Optional[T] = None
 ) -> Optional[T]:
     val = val.strip().lower()
@@ -1320,12 +1364,24 @@ def parse_bool_string(val: str, default: Optional[bool] = None) -> Optional[bool
     return parse_prompt_option(val, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def prompt(prompt_text: str, options: dict[str, T], default: Optional[T] = None) -> Optional[T]:
+def get_representative_indicating_string(indicating_strings: set[str]) -> str:
+    candidates = sorted(indicating_strings)
+    i = 0
+    while i + 1 < len(candidates):
+        if begins(candidates[i+1], candidates[i]):
+            del i
+        else:
+            i += 1
+    return sorted(candidates, key=lambda c: len(c))[-1]
+
+
+def prompt(prompt_text: str, options: list[tuple[T, set[str]]], default: Optional[T] = None) -> Optional[T]:
     assert len(options) > 1
     while True:
         res = parse_prompt_option(input(prompt_text), options, default)
         if res is None:
-            option_names = [matchings[0] for _opt, matchings in options]
+            option_names = [get_representative_indicating_string(
+                matchings) for _opt, matchings in options]
             print("please answer with " +
                   ", ".join(option_names[:-1]) + " or " + option_names[-1])
             continue
@@ -1336,15 +1392,18 @@ def prompt_yes_no(prompt_text: str, default: Optional[bool] = None) -> Optional[
     return prompt(prompt_text, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def selenium_get_url(ctx: DlContext) -> str:
+def selenium_get_url(ctx: DlContext) -> Optional[str]:
+    assert ctx.selenium_driver is not None
     try:
         return ctx.selenium_driver.current_url
     except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
         # TODO: can this fail in any other way?
         report_selenium_died(ctx)
+        return None
 
 
 def selenium_has_died(ctx: DlContext) -> bool:
+    assert ctx.selenium_driver is not None
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
@@ -1355,6 +1414,7 @@ def selenium_has_died(ctx: DlContext) -> bool:
 def gen_dl_temp_name(
     ctx: DlContext, final_filepath: Optional[str]
 ) -> tuple[str, str]:
+    assert ctx.downloads_temp_dir is not None
     dl_index = ctx.download_tmp_index
     ctx.download_tmp_index += 1
     tmp_filename = f"dl{dl_index}"
@@ -1372,33 +1432,37 @@ def selenium_download_from_local_file(
     doc_url = selenium_get_url(cm.mc.ctx)
     if doc_url is None:
         return None, ContentFormat.FILE
-    if not os.path.isabs(cm.cmatch):
+    path = cast(str, cm.cmatch)
+    if not os.path.isabs(path):
         cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
-        filepath = os.path.join(cur_path, cm.cmatch)
+        filepath = os.path.join(cur_path, path)
     return filepath, ContentFormat.FILE
 
 
 def selenium_download_external(
     cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[str], ContentFormat]:
+) -> tuple[Optional[MinimalInputStream], ContentFormat]:
     proxies = None
+    path = cast(str, cm.cmatch)
     if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+        tbdriver = cast(TorBrowserDriver, cm.mc.ctx.selenium_driver)
         proxies = {
-            "http": f"socks5h://localhost:{cm.mc.ctx.selenium_driver.socks_port}",
-            "https": f"socks5h://localhost:{cm.mc.ctx.selenium_driver.socks_port}",
+            "http": f"socks5h://localhost:{tbdriver.socks_port}",
+            "https": f"socks5h://localhost:{tbdriver.socks_port}",
             "data": None
         }
     try:
         stream, _enc = requests_dl(
-            cm.mc.ctx, cm.cmatch, cm.mc.ctx.selenium_driver.get_cookies(),
+            cm.mc.ctx, path,
+            load_selenium_cookies(cm.mc.ctx),
             proxies=proxies, stream=True
         )
-        return stream, ContentFormat.STREAM
+        return cast(MinimalInputStream, stream), ContentFormat.STREAM
     except ScrepFetchError as ex:
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
-            + f"failed to download '{truncate(cm.cmatch)}': {str(ex)}"
+            + f"failed to download '{truncate(path)}': {str(ex)}"
         )
         return None, ContentFormat.STREAM
 
@@ -1406,10 +1470,10 @@ def selenium_download_external(
 def selenium_download_internal(
     cm: ContentMatch, filepath: Optional[str]
 ) -> tuple[Optional[str], ContentFormat]:
-    doc_url = selenium_get_url(cm.mc.ctx)
-    if doc_url is None:
+    doc_url_str = selenium_get_url(cm.mc.ctx)
+    if doc_url_str is None:
         return None, ContentFormat.TEMP_FILE
-    doc_url = urllib.parse.urlparse(doc_url)
+    doc_url = urllib.parse.urlparse(doc_url_str)
     link_url = urllib.parse.urlparse(cm.cmatch)
 
     if doc_url.netloc != link_url.netloc:
@@ -1432,7 +1496,7 @@ def selenium_download_internal(
         document.body.removeChild(a);
     """
     try:
-        cm.mc.ctx.selenium_driver.execute_script(
+        cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver).execute_script(
             script_source, cm.cmatch, tmp_filename
         )
     except SeleniumWebDriverException as ex:
@@ -1465,7 +1529,7 @@ def selenium_download_internal(
 
 def selenium_download_fetch(
     cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[str], ContentFormat]:
+) -> tuple[Optional[bytes], ContentFormat]:
     script_source = """
         const url = arguments[0];
         return (async () => {
@@ -1492,9 +1556,10 @@ def selenium_download_fetch(
         })();
     """
     err = None
+    driver = cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver)
     try:
-        doc_url = cm.mc.ctx.selenium_driver.current_url
-        res = cm.mc.ctx.selenium_driver.execute_script(
+        doc_url = driver.current_url
+        res = driver.execute_script(
             script_source, cm.cmatch
         )
     except SeleniumWebDriverException as ex:
@@ -1519,7 +1584,7 @@ def selenium_download_fetch(
 
 def selenium_download(
     cm: ContentMatch, filepath: Optional[str] = None
-) -> tuple[Optional[str], ContentFormat]:
+) -> tuple[Optional[Union[str, bytes, MinimalInputStream]], ContentFormat]:
     if cm.doc.document_type == DocumentType.FILE and urllib.parse.urlparse(cm.cmatch).scheme in ["", "file"]:
         return selenium_download_from_local_file(cm, filepath)
 
@@ -1553,7 +1618,7 @@ def requests_dl(
     ctx: DlContext, path: str,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
     proxies=None, stream=False
-) -> tuple[requests.Response, str]:
+) -> tuple[Union[MinimalInputStream, bytes], Optional[str]]:
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
         res = urllib.request.urlopen(path, timeout=ctx.request_timeout_seconds)
@@ -1564,16 +1629,14 @@ def requests_dl(
         finally:
             res.close()
         return data, None
-
+    hostname = url.hostname if url.hostname else ""
     if cookie_dict is None:
-        cookie_dict = ctx.cookie_dict.get(url.hostname, {})
+        cookie_dict = ctx.cookie_dict
     cookies = {
         name: ck["value"]
-        for name, ck in cookie_dict
-        if ck.get("domain", url.hostname) == url.hostname
+        for name, ck in cookie_dict.get(hostname, {}).items()
     }
     headers = {'User-Agent': ctx.user_agent}
-    ex = None
     try:
         res = requests.get(
             path, cookies=cookies, headers=headers, allow_redirects=True,
@@ -1759,12 +1822,12 @@ def fetch_doc(ctx: DlContext, doc):
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.realpath(selpath)
             try:
-                ctx.selenium_driver.get(selpath)
+                cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
                 ScrepFetchError("selenium timeout")
 
         decide_document_encoding(ctx, doc)
-        doc.text = ctx.selenium_driver.page_source
+        doc.text = cast(SeleniumWebDriver, ctx.selenium_driver).page_source
         return
     if doc is ctx.reused_doc:
         ctx.reused_doc = None
@@ -1795,7 +1858,7 @@ def gen_final_content_format(format_str, cm):
         return buf.read()
 
 
-def normalize_link(ctx: DlContext, mc, src_doc, doc_path, link):
+def normalize_link(ctx: DlContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str):
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
         return link
@@ -2006,8 +2069,8 @@ def handle_content_match(cm):
     return InteractiveResult.ACCEPT
 
 
-def handle_document_match(ctx: DlContext, doc):
-    if not ctx.document.interactive:
+def handle_document_match(mc: MatchChain, doc):
+    if not mc.document.interactive:
         return InteractiveResult.ACCEPT
     while True:
         res = prompt(
@@ -2182,7 +2245,7 @@ def handle_interactive_chains(ctx: DlContext, interactive_chains, doc, try_numbe
     else:
         msg_full = None
 
-    rlist = []
+    rlist: list[TextIO] = []
     if try_number > 1:
         rlist, _, _ = select.select(
             [sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
@@ -2199,7 +2262,7 @@ def handle_interactive_chains(ctx: DlContext, interactive_chains, doc, try_numbe
         result = parse_prompt_option(
             sys.stdin.readline(),
             [(InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
-             (InteractiveResult.SKIP_DOC, SKIP_INDICATING_STRINGS + NO_INDICATING_STRINGS)],
+             (InteractiveResult.SKIP_DOC, set_join(SKIP_INDICATING_STRINGS, NO_INDICATING_STRINGS))],
             InteractiveResult.ACCEPT
         )
         if result is None:
@@ -2376,10 +2439,11 @@ def dl(ctx: DlContext):
             if try_number > 1 and not static_content:
                 assert(ctx.selenium_variant != SeleniumVariant.DISABLED)
                 try:
-                    src_new = ctx.selenium_driver.page_source
+                    src_new = cast(SeleniumWebDriver,
+                                   ctx.selenium_driver).page_source
                     same_content = (src_new == doc.text)
                     doc.text = src_new
-                except SeleniumWebDriverException as e:
+                except SeleniumWebDriverException as ex:
                     if selenium_has_died(ctx):
                         report_selenium_died(ctx)
                     else:
@@ -2421,7 +2485,7 @@ def dl(ctx: DlContext):
                 if static_content:
                     break
                 time.sleep(ctx.selenium_poll_frequency_secs)
-        new_docs = []
+        new_docs: list[Document] = []
         content_skip_doc, doc_skip_doc = False, False
         for mc in doc.match_chains:
             if not mc.satisfied:
@@ -2692,7 +2756,7 @@ def apply_doc_arg(ctx: DlContext, argname, doctype, arg):
         normalize_link(
             ctx,
             None,
-            Document(doctype.url_handling_type(), None, None),
+            Document(doctype.url_handling_type(), "", None),
             None,
             path
         ),
