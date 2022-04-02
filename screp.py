@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
+from concurrent.futures import thread
+import multiprocessing
+import queue
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
 import urllib3.exceptions  # for selenium MaxRetryError
 import mimetypes
 import shutil
 from io import BytesIO, SEEK_SET
 import binascii
+import threading
 import shlex
+import heapq
 import copy
 from abc import abstractmethod
 import lxml
@@ -29,7 +34,7 @@ from selenium.webdriver.chrome.service import Service as SeleniumChromeService
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
-from collections import deque
+from collections import deque, OrderedDict
 from enum import Enum, IntEnum
 import time
 import tempfile
@@ -772,6 +777,7 @@ class ScrepContext(ConfigDataClass):
     download_tmp_index: int = 0
 
     # not really config, but recycled in repl mode
+    dl_manager: Optional['DownloadManager'] = None
     cookie_jar: Optional[MozillaCookieJar] = None
     cookie_dict: dict[str, dict[str, dict[str, Any]]]
     selenium_driver: Optional[SeleniumWebDriver] = None
@@ -870,6 +876,157 @@ class OutputFormatter:
         assert buffer is None and not self._format_parts
         self._out_stream.flush()
         return False
+
+
+class PrintOutputManager:
+    printing_buffers: OrderedDict[int, list[bytes]]
+    finished_queues: set[int]
+    lock: threading.Lock
+    dl_ids: int = 0
+    active_id: int = 0
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.printing_buffers = OrderedDict()
+        self.finished_queues = set()
+
+    def print(self, id: int, buffer: bytes):
+        print_directly = False
+        with self.lock:
+            if id == self.active_id:
+                print_directly = True
+            else:
+                self.printing_buffers[id].append(buffer)
+        if print_directly:
+            sys.stdout.buffer.write(buffer)
+
+    def request_print_access(self) -> int:
+        with self.lock:
+            id = self.dl_ids
+            self.dl_ids += 1
+            if id != self.active_id:
+                self.printing_buffers[id] = []
+        return id
+
+    def declare_done(self, id: int):
+        buffers_to_print = []
+        new_active_id = None
+        with self.lock:
+            if self.active_id == id:
+                new_active_id = self.active_id + 1
+                while new_active_id in self.finished_queues:
+                    self.finished_queues.remove(new_active_id)
+                    buffers_to_print.append(
+                        self.printing_buffers.pop(new_active_id)
+                    )
+                    new_active_id += 1
+            else:
+                self.finished_queues.add(id)
+        if not new_active_id:
+            return
+        for bl in buffers_to_print:
+            for b in bl:
+                sys.stdout.buffer.write(b)
+        sys.stdout.flush()
+        with self.lock:
+            self.active_id = new_active_id
+
+    def flush(self, id: int):
+        with self.lock:
+            if not id != self.active_id:
+                return
+        sys.stdout.flush()
+
+
+class PrintOutputStream:
+    pom: PrintOutputManager
+    id: int
+
+    def __init__(self, pom: PrintOutputManager):
+        self.pom = pom
+        self.id = pom.request_print_access()
+
+    def write(self, buffer: bytes) -> int:
+        self.pom.print(self.id, buffer)
+        return len(buffer)
+
+    def flush(self):
+        self.pom.flush(self.id)
+
+    def close(self):
+        self.pom.declare_done(self.id)
+
+
+class DownloadJob:
+    cm: ContentMatch
+    save_path: Optional[str]
+    expected_size: int = 0
+    fetched_size: int = 0
+
+    def __init__(self, cm: ContentMatch, save_path: Optional[str]) -> None:
+        self.cm = cm
+        self.save_path = save_path
+
+    def run(self):
+        pass
+
+
+class DownloadManager:
+    ctx: ScrepContext
+    threads: list[threading.Thread]
+    max_threads: int
+    queued_jobs: list[DownloadJob]
+    started_jobs: list[DownloadJob]
+    finished_jobs: list[DownloadJob]
+    lock: threading.Lock
+    queue_slots: threading.Semaphore
+
+    def __init__(self, ctx: ScrepContext, max_threads: int = 0):
+        self.ctx = ctx
+        self.max_threads = (
+            max_threads if max_threads > 0 else multiprocessing.cpu_count()
+        )
+        self.queued_jobs = []
+        self.started_jobs = []
+        self.finished_jobs = []
+        self.threads = []
+        self.idle_threads: int = 0
+        self.lock = threading.Lock()
+        self.queue_slots = threading.Semaphore(value=0)
+
+    def submit(self, dj: DownloadJob):
+        t = None
+        with self.lock:
+            self.queued_jobs.append(dj)
+            if len(self.threads) < self.max_threads and self.idle_threads == 0:
+                t = threading.Thread(target=self.run_worker)
+                self.threads.append(t)
+        self.queue_slots.release()
+        if t:
+            t.start()
+
+    def run_worker(self):
+        while True:
+            job = None
+            with self.lock:
+                self.idle_threads += 1
+            self.queue_slots.acquire()
+            with self.lock:
+                if not self.queued_jobs:
+                    # the semaphore only lets us through without present jobs
+                    # if the process wants to terminate
+                    return
+                job = self.queued_jobs.pop(0)
+                self.idle_threads -= 1
+            download_content(job.cm, job.save_path)
+
+    def terminate(self, cancel_running: bool = False):
+        if cancel_running:
+            with self.lock:
+                self.queued_jobs.clear()
+        self.queue_slots.release(self.max_threads)
+        for t in self.threads:
+            t.join()
 
 
 def empty_string_to_none(string: Optional[str]) -> Optional[str]:
@@ -1511,6 +1668,9 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
             mc.selenium_strategy = SeleniumStrategy.DISABLED
     elif ctx.selenium_driver is None:
         setup_selenium(ctx)
+
+    # TODO: for now we always construct one, later this should be conditional
+    ctx.dl_manager = DownloadManager(ctx)
 
 
 def parse_prompt_option(
@@ -2237,7 +2397,10 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return res
             save_path = input("enter new save path: ")
     cm.mc.ci += 1
-    download_content(cm, save_path)
+    if cm.mc.ctx.dl_manager is not None:
+        cm.mc.ctx.dl_manager.submit(DownloadJob(cm, save_path))
+    else:
+        download_content(cm, save_path)
 
     return InteractiveResult.ACCEPT
 
@@ -2689,7 +2852,9 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
     return doc
 
 
-def finalize_selenium(ctx: ScrepContext) -> None:
+def finalize(ctx: ScrepContext) -> None:
+    if ctx.dl_manager:
+        ctx.dl_manager.terminate()
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
@@ -3094,7 +3259,7 @@ def run_repl(ctx: ScrepContext) -> int:
                 print("")
                 continue
     finally:
-        finalize_selenium(ctx)
+        finalize(ctx)
 
 
 def parse_args(ctx: ScrepContext, args: Iterable[str]) -> None:
@@ -3265,7 +3430,7 @@ def main() -> int:
         except ScrepMatchError as ex:
             log(ctx, Verbosity.ERROR, str(ex))
         finally:
-            finalize_selenium(ctx)
+            finalize(ctx)
         ec = ctx.error_code
     return ec
 
