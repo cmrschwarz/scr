@@ -1,0 +1,7 @@
+{
+    "args": [
+        "cpf={xxx}"
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: unavailable key '{xxx}' in cpf={xxx}\n"
+}

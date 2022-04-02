@@ -1,0 +1,9 @@
+{
+    "args": [
+        "lr=.",
+        "csf={lm}",
+        "cwf={xxx}"
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: unavailable key '{xxx}' in cwf={xxx}\n"
+}

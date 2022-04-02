@@ -1,0 +1,9 @@
+{
+    "args": [
+        "rfile=xxx",
+        "cpf={c}",
+        "lf={lm}"
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: unavailable key '{lm}' in lf={lm}\n"
+}

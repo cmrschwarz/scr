@@ -445,6 +445,8 @@ class Locator(ConfigDataClass):
         )
     )
 
+    validated: bool = False
+
     def __init__(self, name: str, blank: bool = False) -> None:
         super().__init__(blank)
         self.name = name
@@ -502,6 +504,7 @@ class Locator(ConfigDataClass):
         self.compile_xpath(mc)
         self.compile_regex(mc)
         self.compile_format(mc)
+        self.validated = True
 
     def match_xpath(
         self, ctx: 'DlContext', src_xml: lxml.html.HtmlElement, path: str,
@@ -663,7 +666,7 @@ class MatchChain(ConfigDataClass):
         self.handled_document_matches = set()
 
     def gen_dummy_content_match(self):
-        return ContentMatch(
+        dcm = ContentMatch(
             self.label.gen_dummy_regex_match(),
             self.content.gen_dummy_regex_match(),
             self,
@@ -672,6 +675,18 @@ class MatchChain(ConfigDataClass):
                 regex_match=self.document.gen_dummy_regex_match()
             )
         )
+        if dcm.content_regex_match or (
+            self.content.format and self.content.validated
+        ):
+            dcm.cfmatch = ""
+            dcm.cmatch = ""
+
+        if dcm.label_regex_match or (
+            self.label.format and self.label.validated
+        ):
+            dcm.lfmatch = ""
+            dcm.lmatch = ""
+        return dcm
 
     def accepts_content_matches(self) -> bool:
         return self.di <= self.dimax
@@ -1337,11 +1352,11 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
     if mc.content_save_format:
+        validate_format(mc, ["content_save_format"], dummy_cm, True, False)
         if mc.content_write_format is None:
             mc.content_write_format = DEFAULT_CWF
         else:
-            validate_format(mc, ["content_print_format"], dummy_cm, True, True)
-        validate_format(mc, ["content_save_format"], dummy_cm, True, False)
+            validate_format(mc, ["content_write_format"], dummy_cm, True, True)
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
