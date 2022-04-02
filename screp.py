@@ -933,18 +933,18 @@ def content_match_build_format_args(
 def log_raw(verbosity: Verbosity, msg: str) -> None:
     sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
 
-
+BSE_U_REGEX_MATCH = re.compile("[0-9A-Fa-f]{4}")
 def parse_bse_u(match: re.Match) -> str:
     code = match[3]
-    if not re.match("[0-9A-Fa-f]{4}", code):
+    if not BSE_U_REGEX_MATCH.match(code):
         raise ValueError(f"invalid escape code \\u{code}")
     code = (b"\\u" + code.encode("ascii")).decode("unicodeescape")
     return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
 
-
+BSE_X_REGEX_MATCH = re.compile("[0-9A-Fa-f]{2}")
 def parse_bse_x(match: re.Match) -> str:
     code = match[3]
-    if not re.match("[0-9A-Fa-f]{2}", code):
+    if not BSE_X_REGEX_MATCH.match(code):
         raise ValueError(f"invalid escape code \\x{code}")
     code = (b"\\udc" + code.encode("ascii")).decode("unicode_escape")
     return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
