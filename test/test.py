@@ -7,6 +7,7 @@ import sys
 import time
 import subprocess
 from enum import Enum
+from typing import Any, Union, TypeVar, Callable
 from multiprocessing import Pool, cpu_count
 
 # cd into parent of scriptdir
@@ -21,25 +22,33 @@ ANSI_CLEAR = "\033[0m"
 
 DASH_BAR = "-" * 80
 
+T = TypeVar('T')
+
 
 class TestOptions:
-    tags_need: list[str] = []
-    tags_avoid: list[str] = []
+    tags_need: list[str]
+    tags_avoid: list[str]
     parallelism: int = cpu_count()
 
+    def __init__(self) -> None:
+        self.tags_need = []
+        self.tags_avoid = []
 
-def get_key_with_default(obj, key, default=""):
+
+def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
     return obj[key] if key in obj else default
 
 
-def get_cmd_string(tc):
+def get_cmd_string(tc: dict[str, Any]) -> str:
     cmd = tc.get("command", "screp")
-    for arg in tc.get("args", []):
+    args: list[str] = tc.get("args", [])
+    assert type(args) is list
+    for arg in args:
         cmd += " " + shellescape.quote(arg)
     return cmd
 
 
-def timed_exec(func):
+def timed_exec(func: Callable[[], T]) -> tuple[T, str]:
     start = time.monotonic_ns()
     res = func()
     end = time.monotonic_ns()
@@ -51,7 +60,7 @@ def timed_exec(func):
     return res, time_notice
 
 
-def execute_test(command, args, stdin):
+def execute_test(command: str, args: list[str], stdin: str) -> tuple[int, str, str]:
     proc = subprocess.Popen(
         [command] + args,
         stdin=subprocess.PIPE,
@@ -65,7 +74,7 @@ def execute_test(command, args, stdin):
     return proc.returncode, stdout, stderr
 
 
-def join_lines(lines):
+def join_lines(lines: Union[list[str], str]) -> str:
     if not isinstance(lines, list):
         return lines
     return "\n".join(lines) + "\n"
@@ -77,7 +86,7 @@ class TestResult(Enum):
     SKIPPED = 2
 
 
-def run_test(name, to: TestOptions):
+def run_test(name: str, to: TestOptions) -> TestResult:
     with open(name, "r") as f:
         try:
             tc = json.load(f)
@@ -153,7 +162,7 @@ def run_test_wrapper(args):
     return run_test(*args)
 
 
-def run_tests(to: TestOptions):
+def run_tests(to: TestOptions) -> dict[TestResult, int]:
     results = {
         TestResult.SKIPPED: 0,
         TestResult.FAILED: 0,
@@ -174,7 +183,7 @@ def run_tests(to: TestOptions):
     return results
 
 
-def main():
+def main() -> int:
     to = TestOptions()
     i = 1
     while i < len(sys.argv):
