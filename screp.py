@@ -396,6 +396,16 @@ class ConfigDataClass:
         attr = attrib_path[-1]
         return conf, attr
 
+    def resolve_attrib_path(self, attrib_path: list[str]) -> tuple['ConfigDataClass', str]:
+        conf, attr = self.follow_attrib_path(attrib_path)
+        if attr in conf.__dict__:
+            return conf.__dict__[attr]
+        return conf.__class__.__dict__[attr]
+
+    def has_custom_value(self, attrib_path: list[str]):
+        conf, attr = self.follow_attrib_path(attrib_path)
+        return attr in conf._value_sources
+
     def get_configuring_argument(self, attrib_path: list[str]):
         conf, attr = self.follow_attrib_path(attrib_path)
         return conf._value_sources_[attr]
@@ -471,37 +481,8 @@ class Locator(ConfigDataClass):
     def compile_format(self, mc: 'MatchChain') -> None:
         if self.format is None:
             return
-
         self.format = unescape_string(self.format, f"{self.name[0]}f")
-        try:
-            # TODO: use content_match_build_format_args to get list of args here
-            known_keys = content_match_build_format_args(
-                ContentMatch(
-                    mc.label.gen_dummy_regex_match(),
-                    mc.content.gen_dummy_regex_match(),
-                    mc,
-                    Document(DocumentType.FILE, "", None,
-                             regex_match=mc.document.gen_dummy_regex_match())
-                )
-            )
-            unnamed_key_count = 0
-            fmt_keys = get_format_string_keys(self.format)
-            named_arg_count = 0
-            for k in fmt_keys:
-                if k == "":
-                    named_arg_count += 1
-                    if named_arg_count > unnamed_key_count:
-                        raise ScrepSetupError(
-                            f"'{self.get_configuring_argument(['format'])}': exceeded number of ordered keys"
-                        )
-                elif k not in known_keys:
-                    raise ScrepSetupError(
-                        f"'{self.get_configuring_argument(['format'])}': unavailable key '{{{k}}}'"
-                    )
-        except (re.error, ValueError) as ex:
-            raise ScrepSetupError(
-                f"'{self.get_configuring_argument(['format'])}': {str(ex)}"
-            )
+        validate_format(self, ["format"], mc.gen_dummy_content_match())
 
     def setup(self, mc: 'MatchChain') -> None:
         self.xpath = empty_string_to_none(self.xpath)
@@ -670,6 +651,17 @@ class MatchChain(ConfigDataClass):
         self.document_matches = []
         self.handled_content_matches = set()
         self.handled_document_matches = set()
+
+    def gen_dummy_content_match(self):
+        return ContentMatch(
+            self.label.gen_dummy_regex_match(),
+            self.content.gen_dummy_regex_match(),
+            self,
+            Document(
+                DocumentType.FILE, "", None,
+                regex_match=self.document.gen_dummy_regex_match()
+            )
+        )
 
     def accepts_content_matches(self) -> bool:
         return self.di <= self.dimax
@@ -1222,7 +1214,34 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name) -> int:
     return count
 
 
+def validate_format(conf: ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch, has_content: bool = False) -> None:
+    try:
+        # TODO: use content_match_build_format_args to get list of args here
+        known_keys = content_match_build_format_args(
+            dummy_cm, "" if has_content else None)
+        unnamed_key_count = 0
+        fmt_keys = get_format_string_keys(
+            conf.resolve_attrib_path(attrib_path))
+        named_arg_count = 0
+        for k in fmt_keys:
+            if k == "":
+                named_arg_count += 1
+                if named_arg_count > unnamed_key_count:
+                    raise ScrepSetupError(
+                        f"'{conf.get_configuring_argument(attrib_path)}': exceeded number of ordered keys"
+                    )
+            elif k not in known_keys:
+                raise ScrepSetupError(
+                    f"'{conf.get_configuring_argument(attrib_path)}': unavailable key '{{{k}}}'"
+                )
+    except (re.error, ValueError) as ex:
+        raise ScrepSetupError(
+            f"'{conf.get_configuring_argument(attrib_path)}': {str(ex)}"
+        )
+
 # we need ctx because mc.ctx is stil None before we apply_defaults
+
+
 def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
     mc.apply_defaults(ctx.defaults_mc)
 
@@ -1261,17 +1280,23 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
     if mc.has_content_matching and not mc.content_print_format and not mc.content_save_format:
         mc.content_print_format = DEFAULT_CPF
 
+    dummy_cm = mc.gen_dummy_content_match()
     if mc.content_print_format:
         mc.content_print_format = unescape_string(
             mc.content_print_format, "cpf"
         )
+        validate_format(mc, ["content_print_format"], dummy_cm, True)
+
     if mc.content_save_format:
         if mc.content_write_format is None:
             mc.content_write_format = DEFAULT_CWF
+        else:
+            mc.content_write_format = unescape_string(
+                mc.content_write_format, "cwf"
+            )
+            validate_format(mc, ["content_print_format"], dummy_cm, True)
         mc.content_save_format = unescape_string(mc.content_save_format, "csf")
-        mc.content_write_format = unescape_string(
-            mc.content_write_format, "cwf"
-        )
+        validate_format(mc, ["content_save_format"], dummy_cm, False)
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
@@ -1297,7 +1322,6 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
             form += f"{{di:0{didigits}}}"
 
         mc.label_default_format = form
-
     mc.content_refs_print = format_string_uses_arg(
         mc.content_print_format, None, "c"
     )
