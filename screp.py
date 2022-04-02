@@ -291,16 +291,16 @@ class RegexMatch:
             for (k, v) in named_cgroups.items()
         }
 
-    def __key(self) -> tuple[str, str]:
+    def __key__(self) -> tuple[str, str]:
         # we only ever compare regex matches from the same match chain
         # therefore it is enough that the complete match is equivalent
         return (self.xmatch, self.rmatch)
 
     def __eq__(self, other) -> bool:
-        return isinstance(other, self.__class__) and self.__key() == other.__key()
+        return isinstance(other, self.__class__) and self.__key__() == other.__key__()
 
     def __hash__(self) -> int:
-        return hash(self.__key())
+        return hash(self.__key__())
 
     def unnamed_group_list_to_dict(self, name_prefix: str) -> dict[str, str]:
         group_dict = {f"{name_prefix}0": self.rmatch}
@@ -343,14 +343,14 @@ class Document:
                 match_chains, key=lambda mc: mc.chain_id)
         self.expand_match_chains_above = expand_match_chains_above
 
-    def __key(self) -> tuple[DocumentType, str]:
+    def __key__(self) -> tuple[DocumentType, str]:
         return (self.document_type, self.path)
 
     def __eq__(self, other) -> bool:
-        return isinstance(self, other.__class__) and self.__key() == other.__key()
+        return isinstance(self, other.__class__) and self.__key__() == other.__key__()
 
     def __hash__(self) -> int:
-        return hash(self.__key())
+        return hash(self.__key__())
 
 
 class ConfigDataClass:
@@ -672,18 +672,18 @@ class ContentMatch:
         self.mc = mc
         self.doc = doc
 
-    def __key(self) -> Any:
+    def __key__(self) -> Any:
         return (
             self.doc,
-            self.label_regex_match.__key() if self.label_regex_match else None,
-            self.content_regex_match.__key() if self.content_regex_match else None
+            self.label_regex_match.__key__() if self.label_regex_match else None,
+            self.content_regex_match.__key__() if self.content_regex_match else None
         )
 
     def __eq__(x, y):
-        return isinstance(y, x.__class__) and x.__key() == y.__key()
+        return isinstance(y, x.__class__) and x.__key__() == y.__key__()
 
     def __hash__(self):
-        return hash(self.__key())
+        return hash(self.__key__())
 
 
 class DlContext(ConfigDataClass):
@@ -2260,7 +2260,7 @@ def handle_interactive_chains(
         if mc.need_content_matches():
             have_content_matching = True
 
-    msg = f'"{doc.path}": use page with potentially'
+    msg = f"{doc.path}: use page with potentially"
     if have_content_matching:
         lpad, rpad = make_padding(ctx, content_count)
         msg += f'{lpad}< {content_count} >{rpad} content'

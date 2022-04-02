@@ -1,0 +1,19 @@
+{
+    "args": [
+        "rfile=./test/res/redundant.html",
+        "cx= //ul/li/text()",
+        "sel=f",
+        "selstrat=dedup"
+    ],
+    "tags": [
+        "selenium",
+        "firefox"
+    ],
+    "stdin": "y\n",
+    "stdout": [
+        "./test/res/redundant.html: use page with potentially   < 4 >   contents [Yes/skip]? Foo",
+        "Bar",
+        "Baz",
+        "Quux"
+    ]
+}
