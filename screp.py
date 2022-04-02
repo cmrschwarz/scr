@@ -54,7 +54,8 @@ def set_join(*args: Iterable[T]) -> set[T]:
 
 
 YES_INDICATING_STRINGS = set_join(
-    prefixes("yes"), prefixes("true"), ["1", "+"])
+    prefixes("yes"), prefixes("true"), ["1", "+"]
+)
 NO_INDICATING_STRINGS = set_join(prefixes("no"), prefixes("false"), ["0", "-"])
 SKIP_INDICATING_STRINGS = prefixes("skip")
 CHAIN_SKIP_INDICATING_STRINGS = prefixes("chainskip")
@@ -354,10 +355,12 @@ class Document:
 class ConfigDataClass:
     _config_slots_: list[str] = []
     _subconfig_slots_: list[str] = []
-    _final_values_: dict[str, str]
+    _final_values_: set[str]
+    _value_sources_: dict[str, str]
 
     def __init__(self, blank=False) -> None:
-        self._final_values_ = {}
+        self._final_values_ = set()
+        self._value_sources_ = {}
         if not blank:
             return
         for k in self.__class__._config_slots_:
@@ -379,24 +382,37 @@ class ConfigDataClass:
                 def_val = defaults.__class__.__dict__[cs]
             if cs not in self.__dict__ or self.__dict__[cs] is None:
                 self.__dict__[cs] = def_val
+                self._value_sources_[
+                    cs] = defaults._value_sources_.get(cs, None)
+
         for scs in self.__class__._subconfig_slots_:
             self.__dict__[scs].apply_defaults(defaults.__dict__[scs])
 
-    def try_set_config_option(self, attrib_path: list[str], value: Any, arg: str) -> Optional[str]:
+    def follow_attrib_path(self, attrib_path: list[str]) -> tuple['ConfigDataClass', str]:
+        assert(len(attrib_path))
         conf = self
         for attr in attrib_path[:-1]:
             conf = conf.__dict__[attr]
         attr = attrib_path[-1]
+        return conf, attr
+
+    def get_configuring_argument(self, attrib_path: list[str]):
+        conf, attr = self.follow_attrib_path(attrib_path)
+        return conf._value_sources_[attr]
+
+    def try_set_config_option(self, attrib_path: list[str], value: Any, arg: str) -> Optional[str]:
+        conf, attr = self.follow_attrib_path(attrib_path)
         if attr in conf._final_values_:
-            return conf._final_values_[attr]
-        conf._final_values_[attr] = arg
+            return conf._value_sources_[attr]
+        conf._final_values_.add(attr)
+        conf._value_sources_[attr] = arg
         conf.__dict__[attr] = value
         return None
 
 
 class Locator(ConfigDataClass):
     name: str
-    xpath: Optional[str] = None
+    xpath: Optional[Union[str, lxml.etree.XPath]] = None
     regex: Optional[Union[str, re.Pattern]] = None
     format: Optional[str] = None
     multimatch: bool = True
@@ -405,77 +421,111 @@ class Locator(ConfigDataClass):
 
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(
-            __annotations__, [])
+            __annotations__, []
+        )
     )
 
     def __init__(self, name: str, blank: bool = False) -> None:
         super().__init__(blank)
         self.name = name
 
-    def compile_regex(self) -> None:
+    def compile_xpath(self, mc: 'MatchChain') -> None:
+        if self.xpath is None:
+            return
+        try:
+            xp = lxml.etree.XPath(self.xpath)
+            xp.evaluate(lxml.html.HtmlElement("<div>test</div>"))
+        except (lxml.etree.XPathSyntaxError, lxml.etree.XPathEvalError):
+            # don't use the XPathSyntaxError message because they are spectacularily bad
+            # e.g. XPath("/div/text(") -> XPathSyntaxError("Missing closing CURLY BRACE")
+            raise ScrepSetupError(
+                f"{self.get_configuring_argument(['xpath'])}: invalid xpath"
+            )
+        self.xpath = xp
+
+    def gen_dummy_regex_match(self):
+        if self.regex is None:
+            return None
+        if type(self.regex) is not re.Pattern:
+            return None
+        capture_group_keys = list(self.regex.groupindex.keys())
+        unnamed_regex_group_count = (
+            self.regex.groups - len(capture_group_keys)
+        )
+        return RegexMatch(
+            "", "",
+            [""] * unnamed_regex_group_count,
+            {k: "" for k in capture_group_keys}
+        )
+
+    def compile_regex(self, mc: 'MatchChain') -> None:
         if self.regex is None:
             return
         try:
             self.regex = re.compile(self.regex, re.MULTILINE)
         except re.error as err:
             raise ScrepSetupError(
-                f"{self.name[0]}r is not a valid regex: {err.msg}"
+                f"'{self.get_configuring_argument(['regex'])}': invalid regex: {err.msg}"
             )
 
-    def compile_format(self) -> None:
+    def compile_format(self, mc: 'MatchChain') -> None:
         if self.format is None:
             return
 
         self.format = unescape_string(self.format, f"{self.name[0]}f")
         try:
-            if self.regex:
-                rgx = cast(re.Pattern, self.regex)
-                capture_group_keys = list(rgx.groupindex.keys())
-                unnamed_regex_group_count = rgx.groups - \
-                    len(capture_group_keys)
-            else:
-                capture_group_keys = []
-                unnamed_regex_group_count = 0
             # TODO: use content_match_build_format_args to get list of args here
-            known_keys = capture_group_keys
-            key_count = len(known_keys) + unnamed_regex_group_count
+            known_keys = content_match_build_format_args(
+                ContentMatch(
+                    mc.label.gen_dummy_regex_match(),
+                    mc.content.gen_dummy_regex_match(),
+                    mc,
+                    Document(DocumentType.FILE, "", None,
+                             regex_match=mc.document.gen_dummy_regex_match())
+                )
+            )
+            unnamed_key_count = 0
             fmt_keys = get_format_string_keys(self.format)
             named_arg_count = 0
             for k in fmt_keys:
                 if k == "":
                     named_arg_count += 1
-                    if named_arg_count > key_count:
+                    if named_arg_count > unnamed_key_count:
                         raise ScrepSetupError(
-                            f"exceeded number of keys in "
-                            + f"{self.name[0]}f={self.format}"
+                            f"'{self.get_configuring_argument(['format'])}': exceeded number of ordered keys"
                         )
                 elif k not in known_keys:
                     raise ScrepSetupError(
-                        f"unknown key {{{k}}} in {self.name[0]}f={self.format}"
+                        f"'{self.get_configuring_argument(['format'])}': unavailable key '{{{k}}}'"
                     )
-        except re.error as ex:
+        except (re.error, ValueError) as ex:
             raise ScrepSetupError(
-                f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}"
+                f"'{self.get_configuring_argument(['format'])}': {str(ex)}"
             )
 
-    def setup(self) -> None:
+    def setup(self, mc: 'MatchChain') -> None:
         self.xpath = empty_string_to_none(self.xpath)
         assert self.regex is None or type(self.regex) is str
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
-        self.compile_regex()
-        self.compile_format()
+        self.compile_xpath(mc)
+        self.compile_regex(mc)
+        self.compile_format(mc)
 
     def match_xpath(
         self, ctx: 'DlContext', src_xml: lxml.html.HtmlElement, path: str,
-        default: tuple[list[str], Optional[list[lxml.html.HtmlElement]]] = ([], [
-        ]),
+        default: tuple[
+            list[str],
+            Optional[list[lxml.html.HtmlElement]]
+        ] = ([], []),
         return_xml: bool = False
     ) -> tuple[list[str], Optional[list[lxml.html.HtmlElement]]]:
         if self.xpath is None:
             return default
         try:
-            xpath_matches = src_xml.xpath(self.xpath)
+            xpath_matches = (
+                cast(lxml.etree.XPath, self.xpath).evaluate(src_xml)
+            )
         except lxml.etree.XPathEvalError as ex:
             raise ScrepMatchError(f"invalid xpath: '{self.xpath}'")
         except lxml.etree.LxmlError as ex:
@@ -833,8 +883,8 @@ def content_match_build_format_args(
     # remove None regex matches (and type cast this to make mypy happy)
     regex_matches = list(map(lambda p: cast(tuple[str, RegexMatch], p),
                              filter(
-                                 lambda rm: rm[1] is not None, potential_regex_matches)
-                             ))
+        lambda rm: rm[1] is not None, potential_regex_matches)
+    ))
     for p, rm in regex_matches:
         args_dict.update({
             f"{p}x": rm.xmatch,
@@ -1178,7 +1228,7 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
 
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
-        l.setup()
+        l.setup(mc)
 
     if mc.dimin > mc.dimax:
         raise ScrepSetupError(f"dimin can't exceed dimax")
