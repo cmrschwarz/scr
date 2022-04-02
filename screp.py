@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
-from typing import Any, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
 import urllib3.exceptions  # for selenium MaxRetryError
 import mimetypes
 import shutil
@@ -101,6 +101,7 @@ class InteractiveResult(Enum):
     SKIP_CHAIN = 4
     SKIP_DOC = 5
     ACCEPT_CHAIN = 6
+    ERROR = 0
 
 
 class SeleniumVariant(Enum):
@@ -515,8 +516,9 @@ class Locator(ConfigDataClass):
                 break
         return res
 
-    def apply_format(self, cm: 'ContentMatch', rm: RegexMatch) -> str:
+    def apply_format(self, cm: 'ContentMatch', rm: Optional[RegexMatch]) -> str:
         if not self.format:
+            assert rm is not None
             return rm.rmatch
         return self.format.format(**content_match_build_format_args(cm))
 
@@ -642,8 +644,10 @@ class ContentMatch:
     cmatch: Optional[str] = None
 
     def __init__(
-        self, label_regex_match: RegexMatch,
-        content_regex_match: RegexMatch, mc: MatchChain, doc: Document
+        self,
+        label_regex_match: Optional[RegexMatch],
+        content_regex_match: Optional[RegexMatch],
+        mc: MatchChain, doc: Document
     ):
         self.label_regex_match = label_regex_match
         self.content_regex_match = content_regex_match
@@ -721,8 +725,9 @@ class OutputFormatter:
     _input_buffer_sizes: int
 
     def __init__(
-        self, format_str: str, cm: ContentMatch, content,
+        self, format_str: str, cm: ContentMatch,
         out_stream: BinaryIO,
+        content: Union[str, bytes, MinimalInputStream, BinaryIO, None],
         input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
         self._args_dict = content_match_build_format_args(cm, content)
@@ -794,7 +799,7 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
 
 
 def content_match_build_format_args(
-    cm: ContentMatch, content: Optional[Union[str, bytes, MinimalInputStream]] = None
+    cm: ContentMatch, content: Union[str, bytes, MinimalInputStream, BinaryIO, None] = None
 ) -> dict[str, Any]:
     args_dict = {
         "cenc": cm.doc.encoding,
@@ -1063,9 +1068,10 @@ def setup_selenium_firefox(ctx: DlContext) -> None:
     # use bundled geckodriver if available
     add_cwd_to_path()
     try:
-        ctx.selenium_driver = selenium.webdriver.Firefox(  
+        ctx.selenium_driver = selenium.webdriver.Firefox(
             options=selenium_build_firefox_options(ctx),
-            service=SeleniumFirefoxService(log_path=ctx.selenium_log_path), # type: ignore
+            service=SeleniumFirefoxService(
+                log_path=ctx.selenium_log_path),  # type: ignore
         )
     except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start geckodriver: {str(ex)}")
@@ -1090,7 +1096,8 @@ def setup_selenium_chrome(ctx: DlContext) -> None:
     try:
         ctx.selenium_driver = selenium.webdriver.Chrome(
             options=options,
-            service=SeleniumChromeService(log_path=ctx.selenium_log_path) # type: ignore
+            service=SeleniumChromeService(
+                log_path=ctx.selenium_log_path)  # type: ignore
         )
     except SeleniumWebDriverException as ex:
         raise ScrepSetupError(f"failed to start chromedriver: {str(ex)}")
@@ -1375,7 +1382,7 @@ def get_representative_indicating_string(indicating_strings: set[str]) -> str:
     return sorted(candidates, key=lambda c: len(c))[-1]
 
 
-def prompt(prompt_text: str, options: list[tuple[T, set[str]]], default: Optional[T] = None) -> Optional[T]:
+def prompt(prompt_text: str, options: list[tuple[T, set[str]]], default: Optional[T] = None) -> T:
     assert len(options) > 1
     while True:
         res = parse_prompt_option(input(prompt_text), options, default)
@@ -1584,7 +1591,7 @@ def selenium_download_fetch(
 
 def selenium_download(
     cm: ContentMatch, filepath: Optional[str] = None
-) -> tuple[Optional[Union[str, bytes, MinimalInputStream]], ContentFormat]:
+) -> tuple[Union[str, bytes, MinimalInputStream, None], ContentFormat]:
     if cm.doc.document_type == DocumentType.FILE and urllib.parse.urlparse(cm.cmatch).scheme in ["", "file"]:
         return selenium_download_from_local_file(cm, filepath)
 
@@ -1599,7 +1606,7 @@ def selenium_download(
     return selenium_download_fetch(cm, filepath)
 
 
-def fetch_file(ctx: DlContext, path: str, stream: bool = False) -> Any:
+def fetch_file(ctx: DlContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
     try:
         f = open(path, "rb")
         if stream:
@@ -1664,11 +1671,11 @@ def report_selenium_died(ctx: DlContext, is_err: bool = True) -> None:
         "the selenium instance was closed unexpectedly")
 
 
-def report_selenium_error(ctx: DlContext, ex):
+def report_selenium_error(ctx: DlContext, ex: Exception) -> None:
     log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
-def advance_output_formatters(output_formatters, buf):
+def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Optional[bytes]) -> None:
     i = 0
     while i < len(output_formatters):
         if output_formatters[i].advance(buf):
@@ -1677,9 +1684,11 @@ def advance_output_formatters(output_formatters, buf):
             del output_formatters[i]
 
 
-def download_content(cm, save_path):
+def download_content(cm: ContentMatch, save_path: Optional[str]) -> None:
     mc = cm.mc
+    content: Union[str, bytes, BinaryIO, MinimalInputStream, None]
     context = f"{truncate(cm.doc.path)}{get_ci_di_context(mc, cm.di, cm.ci)}"
+    path = cast(str, cm.cmatch)
     if mc.content_raw:
         content = cm.cmatch
         content_format = ContentFormat.STRING
@@ -1691,15 +1700,15 @@ def download_content(cm, save_path):
             if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
                 content, content_format = selenium_download(cm, save_path)
                 if content is None:
-                    return InteractiveResult.ACCEPT
+                    return
             else:
                 if (
                     cm.doc.document_type.derived_type() is DocumentType.FILE
                     and urllib.parse.urlparse(cm.cmatch).scheme != "data"
                 ):
-                    if not os.path.isabs(cm.cmatch):
+                    if not os.path.isabs(path):
                         content = os.path.normpath(os.path.join(
-                            os.path.dirname(cm.doc.path), cm.cmatch))
+                            os.path.dirname(cm.doc.path), path))
                     else:
                         content = cm.doc.path
 
@@ -1707,21 +1716,26 @@ def download_content(cm, save_path):
                 else:
                     try:
                         content, _enc = requests_dl(
-                            mc.ctx, cm.cmatch, stream=True)
+                            mc.ctx, path, stream=True)
                         content_format = ContentFormat.STREAM
                     except ScrepFetchError as ex:
                         log(mc.ctx, Verbosity.ERROR,
-                            f"{context}: failed to download '{truncate(cm.cmatch)}': {str(ex)}")
+                            f"{context}: failed to download '{truncate(path)}': {str(ex)}")
                         return
     temp_file = None
     temp_file_path = None
-    save_file = None
+    save_file: Optional[BinaryIO] = None
     multipass_file = None
-    content_stream = content if content_format == ContentFormat.STREAM else None
+    content_stream: Union[BinaryIO, MinimalInputStream, None] = (
+        cast(Union[BinaryIO, MinimalInputStream],
+             content) if content_format == ContentFormat.STREAM else None
+    )
     try:
         if content_format in [ContentFormat.FILE, ContentFormat.TEMP_FILE]:
+            assert type(content) is str
             try:
-                content_stream = fetch_file(mc.ctx, content, stream=True)
+                content_stream = cast(BinaryIO, fetch_file(
+                    mc.ctx, content, stream=True))
             except ScrepFetchError as ex:
                 log(mc.ctx, Verbosity.ERROR,
                     f"{context}: failed to open file '{truncate(content)}': {str(ex)}")
@@ -1735,7 +1749,7 @@ def download_content(cm, save_path):
         output_formatters = []
         if mc.content_print_format:
             output_formatters.append(OutputFormatter(
-                mc.content_print_format, cm, content, sys.stdout.buffer
+                mc.content_print_format, cm, sys.stdout.buffer, content
             ))
 
         if save_path:
@@ -1745,25 +1759,27 @@ def download_content(cm, save_path):
                     and multipass_file is None
                     and mc.content_write_format == DEFAULT_CWF
                 )
-                save_file = open(
+                save_file = cast(BinaryIO, open(
                     save_path,
                     ("w" if mc.overwrite_files else "x")
                     + "b"
                     + ("+" if use_as_multipass else "")
-                )
+                ))
                 if use_as_multipass:
                     multipass_file = save_file
             except FileExistsError:
                 log(mc.ctx, Verbosity.ERROR,
                     f"{context}: file already exists: {save_path}")
-                return InteractiveResult.ACCEPT
+                return
             except OSError as ex:
-                log(mc.ctx, Verbosity.ERROR,
-                    f"{context}: failed to write to file '{save_path}': {ex.msg}")
-                return InteractiveResult.ACCEPT
+                log(
+                    mc.ctx, Verbosity.ERROR,
+                    f"{context}: failed to write to file '{save_path}': {str(ex)}"
+                )
+                return
 
             output_formatters.append(OutputFormatter(
-                mc.content_write_format, cm, content, save_file
+                cast(str, mc.content_write_format), cm, save_file, content
             ))
 
         if content_stream is None:
@@ -1783,7 +1799,7 @@ def download_content(cm, save_path):
                 return
             multipass_file = temp_file
 
-        if content_stream:
+        if content_stream is not None:
             while True:
                 buf = content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
                 advance_output_formatters(output_formatters, buf)
@@ -1815,7 +1831,7 @@ def download_content(cm, save_path):
             save_file.close()
 
 
-def fetch_doc(ctx: DlContext, doc):
+def fetch_doc(ctx: DlContext, doc: Document) -> None:
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
             selpath = doc.path
@@ -1834,31 +1850,32 @@ def fetch_doc(ctx: DlContext, doc):
         if doc.text and not ctx.changed_selenium:
             return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
-        data = fetch_file(ctx, doc.path)
-        decide_document_encoding(ctx, doc)
-        doc.text = data.decode(doc.encoding, errors="surrogateescape")
+        data = cast(bytes, fetch_file(ctx, doc.path, stream=False))
+        encoding = decide_document_encoding(ctx, doc)
+        doc.text = data.decode(encoding, errors="surrogateescape")
         return
     assert doc.document_type == DocumentType.URL
 
-    data, encoding = requests_dl(ctx, doc.path)
+    data, encoding = cast(tuple[bytes, str], requests_dl(
+        ctx, doc.path, stream=False))
     if data is None:
         raise ScrepFetchError("empty response")
     doc.encoding = encoding
-    decide_document_encoding(ctx, doc)
-    doc.text = data.decode(doc.encoding, errors="surrogateescape")
+    encoding = decide_document_encoding(ctx, doc)
+    doc.text = data.decode(encoding, errors="surrogateescape")
     return
 
 
-def gen_final_content_format(format_str, cm):
+def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
     with BytesIO(b"") as buf:
-        of = OutputFormatter(format_str, cm, buf)
+        of = OutputFormatter(format_str, cm, buf, None)
         while of.advance():
             pass
         buf.seek(0)
         return buf.read()
 
 
-def normalize_link(ctx: DlContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str):
+def normalize_link(ctx: DlContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str) -> str:
     # todo: make this configurable
     if src_doc.document_type == DocumentType.FILE:
         return link
@@ -1885,7 +1902,7 @@ def normalize_link(ctx: DlContext, mc: Optional[MatchChain], src_doc: Document, 
     return res
 
 
-def get_ci_di_context(mc, di, ci):
+def get_ci_di_context(mc: MatchChain, di: Optional[int], ci: Optional[int]) -> str:
     if mc.has_document_matching:
         if mc.content.multimatch:
             di_ci_context = f" (di={di}, ci={ci})"
@@ -1898,19 +1915,19 @@ def get_ci_di_context(mc, di, ci):
     return di_ci_context
 
 
-def handle_content_match(cm):
+def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.cfmatch = cm.mc.content.apply_format(cm, cm.content_regex_match)
     cm.cmatch = cm.cfmatch
 
     if cm.label_regex_match is None:
-        cm.lfmatch = cm.mc.label_default_format.format(
-            [cm.di, cm.ci], di=cm.di, ci=cm.ci
+        cm.lfmatch = cast(str, cm.mc.label_default_format).format(
+            **content_match_build_format_args(cm)
         )
     else:
         cm.lfmatch = cm.mc.label.apply_format(
-            cm.label_regex_match, [cm.di, cm.ci], ["di", "ci"]
+            cm, cm.label_regex_match
         )
     cm.lmatch = cm.lfmatch
 
@@ -1928,15 +1945,10 @@ def handle_content_match(cm):
             if cm.mc.ctx.selenium_variant == SeleniumVariant.DISABLED:
                 doc_url = cm.doc.path
             else:
-                try:
-                    doc_url = cm.mc.ctx.selenium_driver.current_url
-                except SeleniumWebDriverException as ex:
-                    # selenium died, abort
-                    if selenium_has_died(cm.mc.ctx):
-                        report_selenium_died(cm.mc.ctx)
-                    else:
-                        report_selenium_error(cm.mc.ctx, ex)
-                    return InteractiveResult.REJECT
+                sel_url = selenium_get_url(cm.mc.ctx)
+                if sel_url is None:
+                    return InteractiveResult.ERROR
+                doc_url = sel_url
 
             cm.cmatch = normalize_link(
                 cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.cmatch
@@ -2029,9 +2041,11 @@ def handle_content_match(cm):
         if not cm.mc.is_valid_label(cm.lmatch):
             log(cm.mc.ctx, Verbosity.WARN,
                 f"matched label '{cm.lmatch}' would contain a slash, skipping this content from: {cm.doc.path}")
-        save_path = gen_final_content_format(cm.mc.content_save_format, cm)
+        save_path_bytes = gen_final_content_format(
+            cm.mc.content_save_format, cm)
         try:
-            save_path = save_path.decode("utf-8", errors="surrogateescape")
+            save_path = save_path_bytes.decode(
+                "utf-8", errors="surrogateescape")
         except UnicodeDecodeError:
             log(cm.mc.ctx, Verbosity.ERROR,
                 f"{cm.doc.path}{di_ci_context}: generated save path is not valid utf-8")
@@ -2042,7 +2056,7 @@ def handle_content_match(cm):
                     f"{cm.doc.path}{di_ci_context}: directory of generated save path does not exist")
                 save_path = None
             if not save_path and not cm.mc.save_path_interactive:
-                return False
+                return InteractiveResult.ERROR
             if not cm.mc.save_path_interactive:
                 break
             if save_path:
@@ -2069,7 +2083,7 @@ def handle_content_match(cm):
     return InteractiveResult.ACCEPT
 
 
-def handle_document_match(mc: MatchChain, doc):
+def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
     if not mc.document.interactive:
         return InteractiveResult.ACCEPT
     while True:
@@ -2090,19 +2104,20 @@ def handle_document_match(mc: MatchChain, doc):
         return res
 
 
-def gen_content_matches(mc, doc):
+def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatch], int]:
     content_matches = []
+    text = cast(str, doc.text)
     xmatches, xmatches_xml = mc.content.match_xpath(
         mc.ctx, doc.xml, doc.path,
-        ([doc.text], [doc.xml]), mc.has_content_xpaths
+        ([text], [doc.xml]), mc.has_content_xpaths
     )
     label_regex_matches = []
     if mc.has_label_matching and not mc.labels_inside_content:
         lxmatches, _xml = mc.label.match_xpath(
-            mc.ctx, doc.xml, doc.path, [doc.text])
+            mc.ctx, doc.xml, doc.path, ([text], []))
         for lxmatch in lxmatches:
             label_regex_matches.extend(mc.label.match_regex(
-                doc.text, doc.path, [RegexMatch(lxmatch, lxmatch)])
+                text, doc.path, [RegexMatch(lxmatch, lxmatch)])
             )
     match_index = 0
     labels_none_for_n = 0
@@ -2110,13 +2125,17 @@ def gen_content_matches(mc, doc):
         content_regex_matches = mc.content.match_regex(
             xmatch, doc.path, [RegexMatch(xmatch, xmatch)])
         if mc.labels_inside_content and mc.label.xpath:
-            xmatch_xml = xmatches_xml[match_index] if mc.has_content_xpaths else None
+            xmatch_xml = (
+                cast(list[lxml.html.HtmlElement], xmatches_xml)[match_index]
+                if mc.has_content_xpaths
+                else None
+            )
             label_regex_matches = []
             lxmatches, _xml = mc.label.match_xpath(
-                mc.ctx, xmatch_xml, doc.path, [doc.text])
+                mc.ctx, xmatch_xml, doc.path, ([text], []))
             for lxmatch in lxmatches:
                 label_regex_matches.extend(mc.label.match_regex(
-                    doc.text, doc.path, [RegexMatch(lxmatch, lxmatch)]))
+                    text, doc.path, [RegexMatch(lxmatch, lxmatch)]))
             if len(label_regex_matches) == 0:
                 if not mc.label_allow_missing:
                     labels_none_for_n += len(content_regex_matches)
@@ -2129,7 +2148,7 @@ def gen_content_matches(mc, doc):
             if mc.labels_inside_content:
                 if not mc.label.xpath:
                     label_regex_matches = mc.label.match_regex(
-                        crm.value, doc.path,
+                        crm.rmatch, doc.path,
                         [RegexMatch(crm.rmatch, crm.rmatch)]
                     )
                     if len(label_regex_matches) == 0:
@@ -2155,12 +2174,12 @@ def gen_content_matches(mc, doc):
     return content_matches, labels_none_for_n
 
 
-def gen_document_matches(mc, doc):
+def gen_document_matches(mc: MatchChain, doc: Document) -> list[Document]:
     # TODO: fix interactive matching for docs and give ci di chain to regex
     document_matches = []
     base_dir = os.path.dirname(doc.path)
     xmatches, _xml = mc.document.match_xpath(
-        mc.ctx, doc.xml, doc.path, [doc.text]
+        mc.ctx, doc.xml, doc.path, ([cast(str, doc.text)], [])
     )
     for xmatch in xmatches:
         rmatches = mc.document.match_regex(
@@ -2169,7 +2188,7 @@ def gen_document_matches(mc, doc):
         for rm in rmatches:
             ndoc = Document(
                 doc.document_type.derived_type(),
-                None,
+                "",
                 mc,
                 mc.document_output_chains,
                 None,
@@ -2190,7 +2209,7 @@ def gen_document_matches(mc, doc):
     return document_matches
 
 
-def make_padding(ctx: DlContext, count_number):
+def make_padding(ctx: DlContext, count_number: int) -> tuple[str, str]:
     content_count_pad_len = (
         ctx.selenium_content_count_pad_length
         - min(len(str(count_number)), ctx.selenium_content_count_pad_length)
@@ -2200,7 +2219,12 @@ def make_padding(ctx: DlContext, count_number):
     return lpad * " ", rpad * " "
 
 
-def handle_interactive_chains(ctx: DlContext, interactive_chains, doc, try_number, last_msg):
+def handle_interactive_chains(
+    ctx: DlContext,
+    interactive_chains: list[MatchChain],
+    doc: Document,
+    try_number: int, last_msg: str
+) -> tuple[Optional[InteractiveResult], str]:
     content_count = 0
     docs_count = 0
     labels_none_for_n = 0
@@ -2269,13 +2293,10 @@ def handle_interactive_chains(ctx: DlContext, interactive_chains, doc, try_numbe
             print('please answer with "yes" or "skip"')
             sys.stdout.write(msg)
             sys.stdout.flush()
-    if result:
-        return result, msg
-    else:
-        return result, msg
+    return result, msg
 
 
-def handle_match_chain(mc, doc):
+def handle_match_chain(mc: MatchChain, doc: Document) -> tuple[bool, bool]:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
             mc, doc)
@@ -2300,7 +2321,7 @@ def handle_match_chain(mc, doc):
         for dm in document_matches:
             if dm in mc.handled_document_matches:
                 continue
-            cm.handled_document_matches.add(dm)
+            cm.mc.handled_document_matches.add(dm)
             mc.document_matches.append(dm)
 
     waiting = True
@@ -2317,13 +2338,18 @@ def handle_match_chain(mc, doc):
             waiting = False
     else:
         assert mc.selenium_strategy in [
-            SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP]
+            SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP
+        ]
         interactive = True
 
     return waiting, interactive
 
 
-def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc, new_docs):
+def accept_for_match_chain(
+    mc: MatchChain, doc: Document,
+    content_skip_doc: bool, documents_skip_doc: bool,
+    new_docs: list[Document]
+) -> tuple[bool, bool]:
     if not mc.ci_continuous:
         mc.ci = mc.cimin
     if not content_skip_doc:
@@ -2363,7 +2389,7 @@ def accept_for_match_chain(mc, doc, content_skip_doc, documents_skip_doc, new_do
     return content_skip_doc, documents_skip_doc
 
 
-def decide_document_encoding(ctx: DlContext, doc):
+def decide_document_encoding(ctx: DlContext, doc: Document) -> str:
     forced = False
     mc = doc.src_mc
     if not mc:
@@ -2377,12 +2403,15 @@ def decide_document_encoding(ctx: DlContext, doc):
         enc = mc.default_document_encoding
     doc.encoding = enc
     doc.forced_encoding = forced
+    return enc
 
 
-def parse_xml(ctx: DlContext, doc):
+def parse_xml(ctx: DlContext, doc: Document) -> None:
     try:
-        src_bytes = doc.text.encode(doc.encoding, errors="surrogateescape")
-        if doc.text.strip() == "":
+        text = cast(str, doc.text)
+        src_bytes = text.encode(cast(str, doc.encoding),
+                                errors="surrogateescape")
+        if text.strip() == "":
             src_xml = lxml.etree.Element("html")
         elif doc.forced_encoding:
             src_xml = lxml.html.fromstring(
@@ -2397,7 +2426,7 @@ def parse_xml(ctx: DlContext, doc):
             f"{doc.path}: failed to parse as xml: {str(ex)}")
 
 
-def dl(ctx: DlContext):
+def dl(ctx: DlContext) -> Optional[Document]:
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
@@ -2501,7 +2530,7 @@ def dl(ctx: DlContext):
     return doc
 
 
-def finalize_selenium(ctx: DlContext):
+def finalize_selenium(ctx: DlContext) -> None:
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
@@ -2516,11 +2545,11 @@ def finalize_selenium(ctx: DlContext):
             ctx.downloads_temp_dir = None
 
 
-def begins(string, begin):
+def begins(string, begin) -> bool:
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 
 
-def parse_mc_range_int(ctx: DlContext, v, arg):
+def parse_mc_range_int(ctx: DlContext, v, arg) -> int:
     try:
         return int(v)
     except ValueError as ex:
@@ -2529,7 +2558,7 @@ def parse_mc_range_int(ctx: DlContext, v, arg):
         )
 
 
-def extend_match_chain_list(ctx: DlContext, needed_id):
+def extend_match_chain_list(ctx: DlContext, needed_id: int) -> None:
     if len(ctx.match_chains) > needed_id:
         return
     for i in range(len(ctx.match_chains), needed_id+1):
@@ -2538,7 +2567,7 @@ def extend_match_chain_list(ctx: DlContext, needed_id):
         ctx.match_chains.append(mc)
 
 
-def parse_simple_mc_range(ctx: DlContext, mc_spec, arg):
+def parse_simple_mc_range(ctx: DlContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
     sections = mc_spec.split(",")
     ranges = []
     for s in sections:
@@ -2576,7 +2605,7 @@ def parse_simple_mc_range(ctx: DlContext, mc_spec, arg):
     return itertools.chain(*ranges)
 
 
-def parse_mc_range(ctx: DlContext, mc_spec, arg):
+def parse_mc_range(ctx: DlContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
     if mc_spec == "":
         return [ctx.defaults_mc]
 
@@ -2590,7 +2619,8 @@ def parse_mc_range(ctx: DlContext, mc_spec, arg):
     lhs, rhs = esc_split
     if lhs == "":
         exclude = parse_simple_mc_range(ctx, rhs, arg)
-        include = itertools.chain(ctx.match_chains, [ctx.origin_mc])
+        include: Iterable[MatchChain] = itertools.chain(
+            ctx.match_chains, [ctx.origin_mc])
     else:
         exclude = parse_simple_mc_range(ctx, rhs, arg)
         chain_count = len(ctx.match_chains)
@@ -2601,14 +2631,17 @@ def parse_mc_range(ctx: DlContext, mc_spec, arg):
     return ({*include} - {*exclude})
 
 
-def parse_mc_arg(ctx: DlContext, argname, arg, support_blank=False, blank_value=""):
+def parse_mc_arg(
+    ctx: DlContext, argname: str, arg: str,
+    support_blank: bool = False, blank_value: str = ""
+) -> Optional[tuple[Iterable[MatchChain], str]]:
     if not begins(arg, argname):
-        return False, None, None
+        return None
     argname_len = len(argname)
     eq_pos = arg.find("=")
     if eq_pos == -1:
         if arg != argname:
-            return False, None, None
+            return None
         if not support_blank:
             raise ScrepSetupError("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
@@ -2617,10 +2650,10 @@ def parse_mc_arg(ctx: DlContext, argname, arg, support_blank=False, blank_value=
     else:
         mc_spec = arg[argname_len: eq_pos]
         if not CHAIN_REGEX.match(mc_spec):
-            return False, None, None
+            return None
         pre_eq_arg = arg[:eq_pos]
         value = arg[eq_pos+1:]
-    return True, parse_mc_range(ctx, mc_spec, pre_eq_arg), value
+    return parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
 
 def follow_attribute_path_spec(obj, spec):
@@ -2629,16 +2662,21 @@ def follow_attribute_path_spec(obj, spec):
     return obj
 
 
-def parse_mc_range_as_arg(ctx: DlContext, argname, argval):
+def parse_mc_arg_as_range(ctx: DlContext, argname: str, argval: str) -> list[MatchChain]:
     return list(parse_mc_range(ctx, argval, argname))
 
 
-def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg: x, support_blank=False, blank_value=""):
-    success, mcs, value = parse_mc_arg(
+def apply_mc_arg(
+    ctx: DlContext, argname: str, config_opt_names: list[str], arg: str,
+    value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
+    support_blank=False, blank_value: str = ""
+) -> bool:
+    parse_result = parse_mc_arg(
         ctx, argname, arg, support_blank, blank_value)
-    if not success:
+    if parse_result is None:
         return False
-    value = value_cast(value, arg)
+    mcs, value = parse_result
+    value = value_parse(value, arg)
     mcs = list(mcs)
     # so the lowest possible chain generates potential errors
     mcs.sort(key=lambda mc: mc.chain_id if mc.chain_id else float("inf"))
@@ -2650,11 +2688,11 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
         else:
             if ident in t._final_values:
                 if mc is ctx.origin_mc:
-                    chainid = max(len(ctx.match_chains), 1)
+                    chainid = str(max(len(ctx.match_chains), 1))
                 elif mc is ctx.defaults_mc:
                     chainid = ""
                 else:
-                    chainid = mc.chain_id
+                    chainid = str(mc.chain_id)
                 raise ScrepSetupError(
                     f"{argname}{chainid} specified twice in: "
                     + f"'{t._final_values[ident]}' and '{arg}'"
@@ -2665,11 +2703,11 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
     return True
 
 
-def get_arg_val(arg) -> str:
+def get_arg_val(arg: str) -> str:
     return arg[arg.find("=") + 1:]
 
 
-def parse_bool_arg(v, arg, blank_val=True) -> bool:
+def parse_bool_arg(v: str, arg: str, blank_val: bool = True) -> bool:
     v = v.strip().lower()
     if v == "" and blank_val is not None:
         return blank_val
@@ -2681,14 +2719,14 @@ def parse_bool_arg(v, arg, blank_val=True) -> bool:
     raise ScrepSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
 
 
-def parse_int_arg(v, arg) -> int:
+def parse_int_arg(v: str, arg: str) -> int:
     try:
         return int(v)
     except ValueError:
         raise ScrepSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
 
 
-def parse_non_negative_float_arg(v, arg) -> float:
+def parse_non_negative_float_arg(v: str, arg: str) -> float:
     try:
         f = float(v)
     except ValueError:
@@ -2698,13 +2736,13 @@ def parse_non_negative_float_arg(v, arg) -> float:
     return f
 
 
-def parse_encoding_arg(v, arg) -> str:
+def parse_encoding_arg(v: str, arg: str) -> str:
     if not verify_encoding(v):
         raise ScrepSetupError(f"unknown encoding in '{arg}'")
     return v
 
 
-def select_variant(val, variants_dict):
+def select_variant(val: str, variants_dict: dict[str, T]) -> Optional[T]:
     val = val.strip().lower()
     if val == "":
         return None
@@ -2719,7 +2757,7 @@ def select_variant(val, variants_dict):
     return match
 
 
-def parse_variant_arg(val, variants_dict, arg):
+def parse_variant_arg(val: str, variants_dict: dict[str, T], arg: str) -> T:
     res = select_variant(val, variants_dict)
     if res is None:
         raise ScrepSetupError(
@@ -2730,7 +2768,7 @@ def parse_variant_arg(val, variants_dict, arg):
     return res
 
 
-def verify_encoding(encoding):
+def verify_encoding(encoding: str) -> bool:
     try:
         "!".encode(encoding=encoding)
         return True
@@ -2738,10 +2776,13 @@ def verify_encoding(encoding):
         return False
 
 
-def apply_doc_arg(ctx: DlContext, argname, doctype, arg):
-    success, mcs, path = parse_mc_arg(ctx, argname, arg)
-    if not success:
+def apply_doc_arg(
+    ctx: DlContext, argname: str, doctype: DocumentType, arg: str
+) -> bool:
+    parse_result = parse_mc_arg(ctx, argname, arg)
+    if parse_result is None:
         return False
+    mcs, path = parse_result
     mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
@@ -2768,7 +2809,12 @@ def apply_doc_arg(ctx: DlContext, argname, doctype, arg):
     return True
 
 
-def apply_ctx_arg(ctx: DlContext, optname, argname, arg, value_parse=lambda v, _arg: v, support_blank=False, blank_val=""):
+def apply_ctx_arg(
+    ctx: DlContext, optname: str, argname: str, arg: str,
+    value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
+    support_blank: bool = False,
+    blank_val: str = ""
+) -> bool:
     if not begins(arg, optname):
         return False
     if len(optname) == len(arg):
@@ -2793,7 +2839,9 @@ def apply_ctx_arg(ctx: DlContext, optname, argname, arg, value_parse=lambda v, _
     return True
 
 
-def resolve_repl_defaults(ctx_new: DlContext, ctx: DlContext, last_doc):
+def resolve_repl_defaults(
+    ctx_new: DlContext, ctx: DlContext, last_doc: Optional[Document]
+) -> None:
     if ctx_new.user_agent_random and not ctx_new.user_agent:
         ctx.user_agent = None
 
@@ -2828,7 +2876,7 @@ def resolve_repl_defaults(ctx_new: DlContext, ctx: DlContext, last_doc):
                 path = doc_url[len("file:"):]
                 if not last_doc or os.path.realpath(last_doc.path) != os.path.realpath(path):
                     doctype = DocumentType.FILE
-                    if last_doc and last_doc.doctype == DocumentType.RFILE:
+                    if last_doc and last_doc.document_type == DocumentType.RFILE:
                         doctype = DocumentType.RFILE
                     last_doc = Document(
                         doctype, path, None, None, None
@@ -2850,7 +2898,7 @@ def resolve_repl_defaults(ctx_new: DlContext, ctx: DlContext, last_doc):
         last_doc.xml = None
 
 
-def run_repl(ctx: DlContext):
+def run_repl(ctx: DlContext) -> int:
     try:
         # run with initial args
         last_doc = dl(ctx)
@@ -2866,7 +2914,7 @@ def run_repl(ctx: DlContext):
                 except EOFError:
                     if tty:
                         print("")
-                    return
+                    return 0
                 args = shlex.split(line)
                 if not len(args):
                     continue
@@ -2902,14 +2950,13 @@ def run_repl(ctx: DlContext):
         finalize_selenium(ctx)
 
 
-def parse_args(ctx: DlContext, args):
+def parse_args(ctx: DlContext, args: Iterable[str]) -> None:
     for arg in args:
         if (
             arg in ["-h", "--help", "help"]
             or (begins(arg, "help=") and parse_bool_arg(arg[len("help="):], arg))
         ):
             help()
-            return 0
 
          # content args
         if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg):
@@ -2922,7 +2969,7 @@ def parse_args(ctx: DlContext, args):
             continue
         if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_range_as_arg(ctx, arg, v)):
+        if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
 
         if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg):
@@ -2977,7 +3024,7 @@ def parse_args(ctx: DlContext, args):
             continue
         if apply_mc_arg(ctx, "df", ["document", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_range_as_arg(ctx, arg, v)):
+        if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
         if apply_mc_arg(ctx, "dm", ["document", "multimatch"], arg, parse_bool_arg, True):
             continue
@@ -3047,7 +3094,7 @@ def parse_args(ctx: DlContext, args):
         raise ScrepSetupError(f"unrecognized option: '{arg}'")
 
 
-def main():
+def main() -> int:
     ctx = DlContext(blank=True)
     if len(sys.argv) < 2:
         log_raw(
