@@ -4,5 +4,5 @@
         "cx=??xxx"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: invalid xpath: '??xxx'\n"
+    "stderr": "[ERROR]: invalid xpath in cx=??xxx\n"
 }

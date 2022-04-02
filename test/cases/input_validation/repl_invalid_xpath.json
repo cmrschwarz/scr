@@ -4,12 +4,12 @@
     ],
     "stdin": [
         "rfile=./test/res/basic.html",
-        "cx=//foo@bar",
+        "cx0-2=//foo@bar",
         "exit"
     ],
     "tags": [
         "repl"
     ],
     "ec": 0,
-    "stderr": "[ERROR]: invalid xpath: '//foo@bar'\n"
+    "stderr": "[ERROR]: invalid xpath in cx0-2=//foo@bar\n"
 }

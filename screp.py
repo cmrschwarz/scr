@@ -64,7 +64,6 @@ DOC_SKIP_INDICATING_STRINGS = prefixes("edit")
 INSPECT_INDICATING_STRINGS = prefixes("inspect")
 ACCEPT_CHAIN_INDICATING_STRINGS = prefixes("acceptchain")
 CHAIN_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
-
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 DEFAULT_CPF = "{c}\\n"
 DEFAULT_CWF = "{c}"
@@ -382,8 +381,9 @@ class ConfigDataClass:
                 def_val = defaults.__class__.__dict__[cs]
             if cs not in self.__dict__ or self.__dict__[cs] is None:
                 self.__dict__[cs] = def_val
-                self._value_sources_[
-                    cs] = defaults._value_sources_.get(cs, None)
+                vs = defaults._value_sources_.get(cs, None)
+                if vs:
+                    self._value_sources_[cs] = vs
 
         for scs in self.__class__._subconfig_slots_:
             self.__dict__[scs].apply_defaults(defaults.__dict__[scs])
@@ -392,23 +392,33 @@ class ConfigDataClass:
         assert(len(attrib_path))
         conf = self
         for attr in attrib_path[:-1]:
+            assert attr in conf._subconfig_slots_
             conf = conf.__dict__[attr]
         attr = attrib_path[-1]
+        assert attr in conf._config_slots_
         return conf, attr
 
-    def resolve_attrib_path(self, attrib_path: list[str]) -> tuple['ConfigDataClass', str]:
+    def resolve_attrib_path(self, attrib_path: list[str], transform: Optional[Callable[[Any], Any]] = None) -> tuple['ConfigDataClass', str]:
         conf, attr = self.follow_attrib_path(attrib_path)
         if attr in conf.__dict__:
-            return conf.__dict__[attr]
-        return conf.__class__.__dict__[attr]
+            val = conf.__dict__[attr]
+            if transform:
+                val = transform(val)
+                conf.__dict__[attr] = val
+            return val
+        val = conf.__class__.__dict__[attr]
+        if transform:
+            val = transform(val)
+            conf.__class__.__dict__[attr] = val
+        return val
 
-    def has_custom_value(self, attrib_path: list[str]):
+    def has_custom_value(self, attrib_path: list[str]) -> bool:
         conf, attr = self.follow_attrib_path(attrib_path)
-        return attr in conf._value_sources
+        return attr in conf._value_sources_
 
-    def get_configuring_argument(self, attrib_path: list[str]):
+    def get_configuring_argument(self, attrib_path: list[str]) -> Optional[str]:
         conf, attr = self.follow_attrib_path(attrib_path)
-        return conf._value_sources_[attr]
+        return conf._value_sources_.get(attr, None)
 
     def try_set_config_option(self, attrib_path: list[str], value: Any, arg: str) -> Optional[str]:
         conf, attr = self.follow_attrib_path(attrib_path)
@@ -449,7 +459,7 @@ class Locator(ConfigDataClass):
             # don't use the XPathSyntaxError message because they are spectacularily bad
             # e.g. XPath("/div/text(") -> XPathSyntaxError("Missing closing CURLY BRACE")
             raise ScrepSetupError(
-                f"{self.get_configuring_argument(['xpath'])}: invalid xpath"
+                f"invalid xpath in {self.get_configuring_argument(['xpath'])}"
             )
         self.xpath = xp
 
@@ -475,14 +485,14 @@ class Locator(ConfigDataClass):
             self.regex = re.compile(self.regex, re.MULTILINE)
         except re.error as err:
             raise ScrepSetupError(
-                f"'{self.get_configuring_argument(['regex'])}': invalid regex: {err.msg}"
+                f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
             )
 
     def compile_format(self, mc: 'MatchChain') -> None:
         if self.format is None:
             return
-        self.format = unescape_string(self.format, f"{self.name[0]}f")
-        validate_format(self, ["format"], mc.gen_dummy_content_match())
+        validate_format(self, ["format"],
+                        mc.gen_dummy_content_match(), True, False)
 
     def setup(self, mc: 'MatchChain') -> None:
         self.xpath = empty_string_to_none(self.xpath)
@@ -909,11 +919,52 @@ def log_raw(verbosity: Verbosity, msg: str) -> None:
     sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
 
 
-def unescape_string(txt: str, err_context: str):
-    try:
-        return txt.encode("utf-8").decode("unicode_escape")
-    except (UnicodeEncodeError, UnicodeDecodeError) as ex:
-        raise ScrepSetupError(f"failed to unescape {err_context}: {str(ex)}")
+def parse_bse_u(match: re.Match) -> str:
+    code = match[3]
+    if not re.match("[0-9A-Fa-f]{4}", code):
+        raise ValueError(f"invalid escape code \\u{code}")
+    code = (b"\\u" + code.encode("ascii")).decode("unicodeescape")
+    return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
+
+
+def parse_bse_x(match: re.Match) -> str:
+    code = match[3]
+    if not re.match("[0-9A-Fa-f]{2}", code):
+        raise ValueError(f"invalid escape code \\x{code}")
+    code = (b"\\udc" + code.encode("ascii")).decode("unicode_escape")
+    return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
+
+
+def parse_bse_o(match: re.Match) -> str:
+    code = match[3]
+    res = {
+        "a": "\a",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "": None,
+    }.get(code, None)
+    if res is None:
+        if code == "":
+            raise ValueError(f"unterminated escape sequence '\\'")
+        raise ValueError(f"invalid escape code \\{code}")
+    return "".join(map(lambda x: x if x else "", [match[1], match[2], res]))
+
+
+BACKSLASHESCAPE_PATTERNS = [
+    (re.compile(r"(^|[^\\])(\\\\)*\\u(.{0,4})"), parse_bse_u),
+    (re.compile(r"(^|[^\\])(\\\\)*\\x(.{0,2})"), parse_bse_x),
+    (re.compile(
+        "(^|[^\\\\])(\\\\\\\\)*\\\\([rntfb\\'\\\"\\\\]|$)"), parse_bse_o),
+]
+
+
+def unescape_string(txt: str):
+    for regex, parser in BACKSLASHESCAPE_PATTERNS:
+        txt = regex.sub(parser, txt)
+    return txt
 
 
 def log(ctx: DlContext, verbosity: Verbosity, msg: str) -> None:
@@ -1064,7 +1115,7 @@ def truncate(
 ) -> str:
     if len(text) > max_len:
         assert(max_len > len(trailer))
-        return text[0:max_len - len(trailer)] + trailer
+        return text[0: max_len - len(trailer)] + trailer
     return text
 
 
@@ -1214,29 +1265,30 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name) -> int:
     return count
 
 
-def validate_format(conf: ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch, has_content: bool = False) -> None:
+def validate_format(conf: ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch, unescape: bool, has_content: bool = False) -> None:
     try:
-        # TODO: use content_match_build_format_args to get list of args here
         known_keys = content_match_build_format_args(
             dummy_cm, "" if has_content else None)
         unnamed_key_count = 0
         fmt_keys = get_format_string_keys(
-            conf.resolve_attrib_path(attrib_path))
+            conf.resolve_attrib_path(
+                attrib_path, unescape_string if unescape else None)
+        )
         named_arg_count = 0
         for k in fmt_keys:
             if k == "":
                 named_arg_count += 1
                 if named_arg_count > unnamed_key_count:
                     raise ScrepSetupError(
-                        f"'{conf.get_configuring_argument(attrib_path)}': exceeded number of ordered keys"
+                        f"exceeded number of ordered keys in {conf.get_configuring_argument(attrib_path)}"
                     )
             elif k not in known_keys:
                 raise ScrepSetupError(
-                    f"'{conf.get_configuring_argument(attrib_path)}': unavailable key '{{{k}}}'"
+                    f"unavailable key '{{{k}}}' in {conf.get_configuring_argument(attrib_path)}"
                 )
     except (re.error, ValueError) as ex:
         raise ScrepSetupError(
-            f"'{conf.get_configuring_argument(attrib_path)}': {str(ex)}"
+            f"{str(ex)} in {conf.get_configuring_argument(attrib_path)}"
         )
 
 # we need ctx because mc.ctx is stil None before we apply_defaults
@@ -1282,21 +1334,14 @@ def setup_match_chain(mc: MatchChain, ctx: DlContext) -> None:
 
     dummy_cm = mc.gen_dummy_content_match()
     if mc.content_print_format:
-        mc.content_print_format = unescape_string(
-            mc.content_print_format, "cpf"
-        )
-        validate_format(mc, ["content_print_format"], dummy_cm, True)
+        validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
     if mc.content_save_format:
         if mc.content_write_format is None:
             mc.content_write_format = DEFAULT_CWF
         else:
-            mc.content_write_format = unescape_string(
-                mc.content_write_format, "cwf"
-            )
-            validate_format(mc, ["content_print_format"], dummy_cm, True)
-        mc.content_save_format = unescape_string(mc.content_save_format, "csf")
-        validate_format(mc, ["content_save_format"], dummy_cm, False)
+            validate_format(mc, ["content_print_format"], dummy_cm, True, True)
+        validate_format(mc, ["content_save_format"], dummy_cm, True, False)
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
