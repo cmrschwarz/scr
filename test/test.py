@@ -159,7 +159,7 @@ def run_tests(to: TestOptions):
         TestResult.FAILED: 0,
         TestResult.SUCCESS: 0
     }
-    tests = glob.glob("./test/cases/*.json")
+    tests = glob.glob("./test/cases/**/*.json", recursive=True)
     if to.parallelism < 2:
         for name in tests:
             res = run_test(name, to)
