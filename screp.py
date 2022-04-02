@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+from optparse import Option
 import lxml
+import lxml.etree
 import lxml.html
 import requests
 import sys
@@ -15,6 +17,7 @@ from tbselenium.tbdriver import TorBrowserDriver
 from selenium import webdriver
 import selenium.webdriver.chrome.service
 import selenium.webdriver.firefox.service
+import selenium.webdriver.remote.webdriver
 from selenium.common.exceptions import WebDriverException
 from collections import deque
 from enum import Enum, IntEnum
@@ -25,25 +28,26 @@ import warnings
 import copy
 import shlex
 import binascii
-from io import BytesIO
+from io import BytesIO, SEEK_SET
 import shutil
 import mimetypes
 import urllib3.exceptions  # for selenium MaxRetryError
+from typing import Any, Optional, Union
 
 
-def prefixes(str):
+def prefixes(str: str) -> list[str]:
     return [str[:i] for i in range(len(str), 0, -1)]
 
 
-yes_indicating_strings = prefixes("yes") + prefixes("true") + ["1", "+"]
-no_indicating_strings = prefixes("no") + prefixes("false") + ["0", "-"]
-skip_indicating_strings = prefixes("skip")
-chain_skip_indicating_strings = prefixes("chainskip")
-doc_skip_indicating_strings = prefixes("docskip")
-edit_indicating_strings = prefixes("edit")
-inspect_indicating_strings = prefixes("inspect")
-accept_chain_indicating_strings = prefixes("acceptchain")
-chain_regex = re.compile("^[0-9\\-\\*\\^]*$")
+YES_INDICATING_STRINGS = prefixes("yes") + prefixes("true") + ["1", "+"]
+NO_INDICATING_STRINGS = prefixes("no") + prefixes("false") + ["0", "-"]
+SKIP_INDICATING_STRINGS = prefixes("skip")
+CHAIN_SKIP_INDICATING_STRINGS = prefixes("chainskip")
+DOC_SKIP_INDICATING_STRINGS = prefixes("docskip")
+DOC_SKIP_INDICATING_STRINGS = prefixes("edit")
+INSPECT_INDICATING_STRINGS = prefixes("inspect")
+ACCEPT_CHAIN_INDICATING_STRINGS = prefixes("acceptchain")
+CHAIN_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
 
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 DEFAULT_CPF = "{c}\\n"
@@ -53,9 +57,22 @@ DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
+FALLBACK_DOCUMENT_SCHEME = "https"
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE = None
+
+
+class ScrepSetupError(Exception):
+    pass
+
+
+class ScrepFetchError(Exception):
+    pass
+
+
+class ScrepMatchError(Exception):
+    pass
 
 
 class InteractiveResult(Enum):
@@ -66,6 +83,42 @@ class InteractiveResult(Enum):
     SKIP_CHAIN = 4
     SKIP_DOC = 5
     ACCEPT_CHAIN = 6
+
+
+class SeleniumVariant(Enum):
+    DISABLED = 0
+    CHROME = 1
+    FIREFOX = 2
+    TORBROWSER = 3
+
+
+class SeleniumDownloadStrategy(Enum):
+    EXTERNAL = 0
+    INTERNAL = 1
+    FETCH = 2
+
+
+class SeleniumStrategy(Enum):
+    DISABLED = 0
+    FIRST = 1
+    INTERACTIVE = 2
+    DEDUP = 3
+
+
+class Verbosity(IntEnum):
+    ERROR = 1
+    WARN = 2
+    INFO = 3
+    DEBUG = 4
+
+
+class ContentFormat(Enum):
+    STRING = 0,
+    BYTES = 1,
+    STREAM = 2,
+    FILE = 3,
+    TEMP_FILE = 4,
+    UNNEEDED = 5,
 
 
 class DocumentType(Enum):
@@ -85,71 +138,40 @@ class DocumentType(Enum):
         return self
 
 
-document_type_display_dict = {
+document_type_display_dict: dict[DocumentType, str] = {
     DocumentType.URL: "url",
     DocumentType.FILE: "file",
     DocumentType.RFILE: "rfile",
     DocumentType.CONTENT_MATCH: "content match from"
 }
 
-
-class SeleniumVariant(Enum):
-    DISABLED = 0
-    CHROME = 1
-    FIREFOX = 2
-    TORBROWSER = 3
-
-
-selenium_variants_dict = {
+selenium_variants_dict: dict[str, SeleniumVariant] = {
     "disabled": SeleniumVariant.DISABLED,
     "tor": SeleniumVariant.TORBROWSER,
     "firefox": SeleniumVariant.FIREFOX,
     "chrome": SeleniumVariant.CHROME
 }
 
-
-class SeleniumDownloadStrategy(Enum):
-    EXTERNAL = 0
-    INTERNAL = 1
-    FETCH = 2
-
-
-selenium_download_strategies_dict = {
+selenium_download_strategies_dict: dict[str, SeleniumDownloadStrategy] = {
     "external": SeleniumDownloadStrategy.EXTERNAL,
     "internal": SeleniumDownloadStrategy.INTERNAL,
     "fetch": SeleniumDownloadStrategy.FETCH,
 }
 
-
-class SeleniumStrategy(Enum):
-    DISABLED = 0
-    FIRST = 1
-    INTERACTIVE = 2
-    DEDUP = 3
-
-
-selenium_strats_dict = {
+selenium_strats_dict: dict[str, SeleniumStrategy] = {
     "first": SeleniumStrategy.FIRST,
     "interactive": SeleniumStrategy.INTERACTIVE,
     "dedup": SeleniumStrategy.DEDUP,
 }
 
-
-class Verbosity(IntEnum):
-    ERROR = 1
-    WARN = 2
-    INFO = 3
-    DEBUG = 4
-
-
-verbosities_dict = {
+verbosities_dict: dict[str, Verbosity] = {
     "error": Verbosity.ERROR,
     "warn": Verbosity.WARN,
     "info": Verbosity.INFO,
     "debug": Verbosity.DEBUG,
 }
 
-verbosities_display_dict = {
+verbosities_display_dict: dict[Verbosity, str] = {
     Verbosity.ERROR: "[ERROR]: ",
     Verbosity.WARN:  " [WARN]: ",
     Verbosity.INFO:  " [INFO]: ",
@@ -158,16 +180,19 @@ verbosities_display_dict = {
 
 
 class ResponseStreamWrapper(object):
-    def __init__(self, request_response, buffer_size=DEFAULT_RESPONSE_BUFFER_SIZE):
+    def __init__(
+        self, request_response: requests.models.Response,
+        buffer_size: int = DEFAULT_RESPONSE_BUFFER_SIZE
+    ) -> None:
         self._bytes_buffer = []
         self._response = request_response
         self._iterator = self._response.iter_content(buffer_size)
         self._pos = 0
 
-    def tell(self):
+    def tell(self) -> int:
         return self._pos
 
-    def read(self, size=None):
+    def read(self, size: int = None) -> bytes:
         if size is None:
             goal_position = float("inf")
         else:
@@ -195,144 +220,152 @@ class ResponseStreamWrapper(object):
         self._bytes_buffer = self._bytes_buffer[buf_pos:]
         return res
 
-    def seek(self, position, whence=None):
+    def seek(self, position: int, whence: int = SEEK_SET) -> None:
         raise NotImplementedError(
-            "ResponseStreamWrapper does not support seek")
+            "ResponseStreamWrapper does not support seek"
+        )
 
-    def close(self):
+    def close(self) -> None:
         self._response.close()
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         pass
 
-    def __exit__(self):
+    def __exit__(self) -> None:
         self.close()
 
 
-class ContentFormat(Enum):
-    STRING = 0,
-    BYTES = 1,
-    STREAM = 2,
-    FILE = 3,
-    TEMP_FILE = 4,
-    UNNEEDED = 5,
-
-
-class ContentMatch:
-    def __init__(self, label_regex_match, content_regex_match, mc, doc):
-        self.label_regex_match = label_regex_match
-        self.content_regex_match = content_regex_match
-        self.mc = mc
-        self.doc = doc
-        # these are set once we accept the CM, not during it's creation
-        self.ci = None
-        self.di = None
-        self.cfmatch = None
-        self.lfmatch = None
-        # this is potentially different from fmatch due to interactive
-        # matching or link normalization
-        self.lmatch = None
-        self.cmatch = None
-
-    def __key(self):
-        return (self.label_match.__key(), self.content)
-
-    def __eq__(x, y):
-        return isinstance(y, x.__class__) and x.__key() == y.__key()
-
-    def __hash__(self):
-        return hash(self.__key())
-
-
 class RegexMatch:
-    def __init__(self, xmatch, rmatch, group_list=[], group_dict={}):
+    xmatch: str
+    rmatch: str
+    unnamed_cgroups: list[str]
+    named_cgroups: dict[str, str]
+
+    def __init__(
+        self, xmatch: str, rmatch: str,
+        unnamed_cgroups: list[str] = [],
+        named_cgroups: dict[str, str] = {}
+    ) -> None:
         self.xmatch = xmatch
         self.rmatch = rmatch
-        self.group_list = [x if x is not None else "" for x in group_list]
-        self.group_dict = {k: (v if v is not None else "")
-                           for (k, v) in group_dict.items()}
+        self.unnamed_cgroups = [
+            x if x is not None else "" for x in unnamed_cgroups
+        ]
+        self.named_cgroups = {
+            k: (v if v is not None else "")
+            for (k, v) in named_cgroups.items()
+        }
 
-    def __key(self):
-        return [self.value] + self.group_list + sorted(self.group_dict.items())
+    def __key(self) -> tuple[str, str]:
+        # we only ever compare regex matches from the same match chain
+        # therefore it is enough that the complete match is equivalent
+        return (self.xmatch, self.rmatch)
 
-    def __eq__(x, y):
-        return isinstance(y, x.__class__) and x.__key() == y.__key()
+    def __eq__(self, other) -> bool:
+        return isinstance(other, self.__class__) and self.__key() == other.__key()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.__key())
 
-    def group_list_to_dict(self, name_prefix):
+    def group_list_to_dict(self, name_prefix: str) -> dict[str, str]:
         group_dict = {f"{name_prefix}0": self.rmatch}
         for i, g in enumerate(self.group_list):
             group_dict[f"{name_prefix}{i+1}"] = g
         return group_dict
 
 
-def empty_string_to_none(string):
-    if string == "":
-        return None
-    return string
+class Document:
+    document_type: DocumentType
+    path: str
+    encoding: Optional[str]
+    forced_encoding: bool
+    text: Optional[str]
+    xml: Optional[lxml.html.HtmlElement]
+    src_mc: Optional['MatchChain']
+    regex_match: Optional[RegexMatch]
+    dfmatch: Optional[str]
+
+    def __init__(
+        self, document_type: DocumentType, path: str,
+        src_mc: 'MatchChain',
+        match_chains: list['MatchChain'] = None,
+        expand_match_chains_above: Optional[int] = None,
+        regex_match: Optional[RegexMatch] = None
+    ) -> None:
+        self.document_type = document_type
+        self.path = path
+        self.encoding = None
+        self.forced_encoding = False
+        self.text = None
+        self.xml = None
+        self.src_mc = src_mc
+        self.regex_match = regex_match
+        self.dfmatch = None
+        if not match_chains:
+            self.match_chains = []
+        else:
+            self.match_chains = sorted(
+                match_chains, key=lambda mc: mc.chain_id)
+        self.expand_match_chains_above = expand_match_chains_above
+
+    def __key(self) -> tuple[str, str]:
+        return (self.document_type, self.path)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(self, other.__class__) and self.__key() == other.__key()
+
+    def __hash__(self) -> int:
+        return hash(self.__key())
 
 
-def dict_update_unless_none(current, updates):
-    current.update({
-        k: v for k, v in updates.items() if v is not None
-    })
+class ConfigDataClass:
+    _config_slots_: list[str] = []
+    _subconfig_slots_: list[str] = []
+    _final_values_: dict[str, Any] = {}
+
+    def __init__(self, blank=False) -> None:
+        if not blank:
+            return
+        for k in self.__class__._config_slots_:
+            self.__dict__[k] = None
+
+    def _previous_annotations_as_config_slots(
+        annotations: dict[str, Any],
+        subconfig_slots: list[str]
+    ) -> list[str]:
+        subconfig_slots = set(subconfig_slots)
+        return list(k for k in annotations.keys() if k not in subconfig_slots)
+
+    def apply_defaults(self, defaults):
+        for cs in self.__class__._config_slots_:
+            if cs in defaults.__dict__:
+                def_val = defaults.__dict__[cs]
+            else:
+                def_val = defaults.__class__.__dict__[cs]
+            if cs not in self.__dict__ or self.__dict__[cs] is None:
+                self.__dict__[cs] = def_val
+        for scs in self.__class__._subconfig_slots_:
+            self.__dict__[scs].apply_defaults(defaults.__dict__[scs])
 
 
-def content_match_build_format_args(cm, content=None):
-    args_dict = {
-        "cenc": cm.doc.encoding,
-        "cesc": cm.mc.content_escape_sequence,
-        "dl":   cm.doc.path,
-    }
-    regex_matches = [
-        ("d", cm.doc.regex_match),
-        ("l", cm.label_regex_match),
-        ("c", cm.content_regex_match)
-    ]
-    regex_matches = filter(lambda rm: rm[1] is not None, regex_matches)
-    for p, rm in regex_matches:
-        args_dict.update({
-            f"{p}x": rm.xmatch,
-            f"{p}r": rm.rmatch,
-        })
+class Locator(ConfigDataClass):
+    name: str
+    xpath: Optional[str] = None
+    regex: Optional[str] = None
+    format: Optional[str] = None
+    multimatch: bool = True
+    interactive: bool = False
 
-    dict_update_unless_none(args_dict, {
-        "cf": cm.cfmatch,
-        "cm": cm.cmatch,
-        "lf": cm.lfmatch,
-        "lm": cm.lmatch,
-        "df": cm.doc.dfmatch,
-        "di": cm.di,
-        "ci": cm.ci,
-        "c": content,
-    })
+    _config_slots_: list[str] = (
+        ConfigDataClass._previous_annotations_as_config_slots(
+            __annotations__, [])
+    )
 
-    # apply the unnamed groups first in case somebody overwrote it with a named group
-    for p, rm in regex_matches:
-        args_dict.update(rm.group_list_to_dict(f"{p}g"))
-
-    # finally apply the named groups
-    for p, rm in regex_matches:
-        args_dict.update(rm.label_regex_match.group_dict)
-
-    return args_dict
-
-
-class Locator:
-    def __init__(self, name, blank=False):
+    def __init__(self, name: str, blank: bool = False) -> None:
+        super().__init__(blank)
         self.name = name
-        self.xpath = None
-        self.regex = None
-        self.format = None
-        self.multimatch = True
-        self.interactive = False
-        if blank:
-            for k in self.__dict__:
-                self.__dict__[k] = None
 
-    def compile_regex(self):
+    def compile_regex(self) -> None:
         if self.regex is None:
             return
         try:
@@ -342,7 +375,7 @@ class Locator:
                 f"{self.name[0]}r is not a valid regex: {err.msg}"
             )
 
-    def compile_format(self):
+    def compile_format(self) -> None:
         if self.format is None:
             return
         self.format = unescape_string(self.format, f"{self.name[0]}f")
@@ -376,14 +409,18 @@ class Locator:
                 f"invalid format string in {self.name[0]}f={self.format}: {str(ex)}"
             )
 
-    def setup(self):
+    def setup(self) -> None:
         self.xpath = empty_string_to_none(self.xpath)
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
         self.compile_regex()
         self.compile_format()
 
-    def match_xpath(self, ctx, src_xml, path, default=[], return_xml_tuple=False):
+    def match_xpath(
+        self, ctx: 'DlContext', src_xml: str, path: str,
+        default: tuple[list[str], Optional[list[lxml.html.HtmlElement]]] = [],
+        return_xml: bool = False
+    ) -> tuple[list[str], Optional[list[lxml.html.HtmlElement]]]:
         if self.xpath is None:
             return default
         try:
@@ -407,7 +444,7 @@ class Locator:
             if type(xm) == lxml.etree._ElementUnicodeResult:
                 string = str(xm)
                 res.append(string)
-                if return_xml_tuple:
+                if return_xml:
                     try:
                         res_xml.append(lxml.html.fromstring(string))
                     except lxml.LxmlError:
@@ -415,18 +452,18 @@ class Locator:
             else:
                 try:
                     res.append(lxml.html.tostring(xm, encoding="unicode"))
-                    if return_xml_tuple:
+                    if return_xml:
                         res_xml.append(xm)
                 except (lxml.LxmlError, UnicodeEncodeError) as ex1:
                     raise ScrepMatchError(
                         f"{path}: xpath match encoding failed: {str(ex1)}"
                     )
+        return res, res_xml
 
-        if return_xml_tuple:
-            return res, res_xml
-        return res
-
-    def match_regex(self, xmatch, path, default=[]):
+    def match_regex(
+        self, xmatch: str, path: str,
+        default: list[RegexMatch] = []
+    ) -> list[RegexMatch]:
         if self.regex is None or xmatch is None:
             return default
         res = []
@@ -438,7 +475,7 @@ class Locator:
                 break
         return res
 
-    def apply_format(self, cm, rm):
+    def apply_format(self, cm: 'ContentMatch', rm: RegexMatch) -> str:
         if not self.format:
             return rm.rmatch
         return self.format.format(**content_match_build_format_args(cm))
@@ -447,26 +484,133 @@ class Locator:
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
 
-class Document:
-    def __init__(self, document_type, path, src_mc, match_chains=None, expand_match_chains_above=None, regex_match=None):
-        self.document_type = document_type
-        self.path = path
-        self.encoding = None
-        self.forced_encoding = False
-        self.text = None
-        self.xml = None
-        self.src_mc = src_mc
-        self.regex_match = regex_match
-        self.dfmatch = None
-        if not match_chains:
-            self.match_chains = []
-        else:
-            self.match_chains = sorted(
-                match_chains, key=lambda mc: mc.chain_id)
-        self.expand_match_chains_above = expand_match_chains_above
+class MatchChain(ConfigDataClass):
+    # config members
+    ctx: 'DlContext'  # this is a config member so it is copied on apply_defaults
+    content_escape_sequence: str = DEFAULT_ESCAPE_SEQUENCE
+    cimin: int = 1
+    cimax: Union[int, float] = float("inf")
+    ci_continuous: bool = False
+    content_save_format: Optional[str] = None
+    content_print_format: Optional[str] = None
+    content_write_format: Optional[str] = None
+    content_forward_chains: list['MatchChain'] = []
+    content_raw: bool = True
+    content_input_encoding: str = "utf-8"
+    content_forced_input_encoding: Optional[str] = None
+    save_path_interactive: bool = False
 
-    def __key(self):
-        return (self.document_type, self.path)
+    label_default_format: Optional[str] = None
+    labels_inside_content: bool = False
+    label_allow_missing: bool = False
+    allow_slashes_in_labels: bool = False
+    overwrite_files: bool = True
+
+    dimin: int = 1
+    dimax: Union[int, float] = float("inf")
+    default_document_encoding: str = "utf-8"
+    forced_document_encoding: Optional[str] = None
+
+    default_document_scheme: str = FALLBACK_DOCUMENT_SCHEME
+    prefer_parent_document_scheme: bool = True
+    forced_document_scheme: Optional[str] = None
+
+    selenium_strategy: SeleniumStrategy = SeleniumStrategy.FIRST
+    selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
+
+    document_output_chains: list['MatchChain'] = []
+
+    _config_slots_: list[str] = (
+        ConfigDataClass._previous_annotations_as_config_slots(
+            __annotations__, [])
+    )
+
+    # subconfig members
+    content: Locator
+    label: Locator
+    document: Locator
+
+    _subconfig_slots_ = ['content', 'label', 'document']
+
+    # non config members
+    chain_id: int
+    di: Optional[int] = None
+    ci: Optional[int] = None
+    has_xpath_matching: bool = False
+    has_label_matching: bool = False
+    has_content_xpaths: bool = False
+    has_document_matching: bool = False
+    has_content_matching: bool = False
+    has_interactive_matching: bool = False
+    need_content_download: bool = False
+    need_output_multipass: bool = False
+    content_refs_write: int = 0
+    content_refs_print: int = 0
+    content_matches: list['ContentMatch'] = []
+    document_matches: list[Document] = []
+    handled_content_matches: set['ContentMatch'] = set()
+    handled_document_matches: set[Document] = set()
+    satisfied: bool = True
+    labels_none_for_n: int = 0
+
+    def __init__(self, ctx: 'DlContext', chain_id: int, blank: bool = False) -> None:
+        super().__init__(blank)
+
+        self.ctx = ctx
+        self.chain_id = chain_id
+
+        self.content = Locator("content", blank)
+        self.label = Locator("label", blank)
+        self.document = Locator("document", blank)
+
+    def accepts_content_matches(self) -> bool:
+        return self.di <= self.dimax
+
+    def need_document_matches(self, current_di_used) -> bool:
+        return (
+            self.has_document_matching
+            and self.di <= (self.dimax - (1 if current_di_used else 0))
+        )
+
+    def need_content_matches(self) -> bool:
+        return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
+
+    def is_valid_label(self, label) -> bool:
+        if self.allow_slashes_in_labels:
+            return True
+        if "/" in label or "\\" in label:
+            return False
+        return True
+
+
+class ContentMatch:
+    label_regex_match: Optional[RegexMatch] = None
+    content_regex_match: Optional[RegexMatch] = None
+    mc: MatchChain
+    doc: Document
+
+    # these are set once we accept the CM, not during it's creation
+    ci: Optional[int] = None
+    di: Optional[int] = None
+    cfmatch: Optional[str] = None
+    lfmatch: Optional[str] = None
+
+    # these are potentially different from cfmatch/lfmatch due to interactive
+    # matching or link normalization
+    lmatch: Optional[str] = None
+    cmatch: Optional[str] = None
+
+    def __init__(
+        self, label_regex_match: RegexMatch,
+        content_regex_match: RegexMatch, mc: MatchChain, doc: Document
+    ):
+        self.label_regex_match = label_regex_match
+        self.content_regex_match = content_regex_match
+        self.mc = mc
+        self.doc = doc
+
+    def __key(self) -> list[Any]:
+        return (self.label_match.__key(), self.content)
 
     def __eq__(x, y):
         return isinstance(y, x.__class__) and x.__key() == y.__key()
@@ -475,20 +619,56 @@ class Document:
         return hash(self.__key())
 
 
-def obj_apply_defaults(obj, defaults, recurse_on={}):
-    if obj is defaults:
-        return
-    for k in defaults.__dict__:
-        def_val = defaults.__dict__[k]
-        if k not in obj.__dict__ or obj.__dict__[k] is None:
-            obj.__dict__[k] = def_val
-        elif k in recurse_on:
-            obj_apply_defaults(obj.__dict__[k], def_val, recurse_on)
+class DlContext(ConfigDataClass):
+    # config members
+    cookie_file: Optional[str] = None
+    exit: bool = False
+    selenium_variant: SeleniumVariant = SeleniumVariant.DISABLED
+    tor_browser_dir: Optional[str] = None
+    user_agent_random: bool = False
+    user_agent: Optional[str] = None
+    verbosity: Verbosity = Verbosity.WARN
+    documents_bfs: bool = False
+    selenium_keep_alive: bool = False
+    repl: bool = False
+    request_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+
+    selenium_log_path: str = os.path.devnull
+    selenium_poll_frequency_secs: float = 0.3
+    selenium_content_count_pad_length: int = 6
+    downloads_temp_dir: Optional[str] = None
+    download_tmp_index: int = 0
+
+    # not really config, but recycled in repl mode
+    cookie_jar: Optional[MozillaCookieJar] = None
+    cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
+    selenium_driver: Optional[selenium.webdriver.remote.webdriver.WebDriver] = None
+
+    _config_slots_: list[str] = (
+        ConfigDataClass._previous_annotations_as_config_slots(
+            __annotations__, [])
+    )
+
+    # non config members
+    match_chains: list[MatchChain] = []
+    docs: deque[Document] = deque()
+    reused_doc: Optional[Document] = None
+    changed_selenium: bool = False
+    defaults_mc: MatchChain
+    origin_mc: MatchChain
+    error_code: int = 0
+
+    def __init__(self, blank=False):
+        super().__init__(blank)
+        self.defaults_mc = MatchChain(self, None)
+        self.origin_mc = MatchChain(self, None, blank=True)
+        # turn ctx to none temporarily for origin so it can be deepcopied
+        self.origin_mc.ctx = None
 
 
 class OutputFormatter:
     def __init__(
-        self, format_str, cm, content,
+        self, format_str: str, cm: ContentMatch, content,
         out_stream, input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
         self.args_dict = content_match_build_format_args(cm, content)
@@ -544,131 +724,56 @@ class OutputFormatter:
         return False
 
 
-class MatchChain:
-    def __init__(self, ctx, chain_id, blank=False):
-        self.cimin = 1
-        self.content_escape_sequence = DEFAULT_ESCAPE_SEQUENCE
-
-        self.cimax = float("inf")
-        self.ci_continuous = False
-        self.content_save_format = None
-        self.content_print_format = None
-        self.content_write_format = None
-        self.content_forward_chains = []
-        self.content_raw = True
-        self.content_input_encoding = "utf-8"
-        self.content_forced_input_encoding = None
-        self.save_path_interactive = False
-
-        self.label_default_format = None
-        self.labels_inside_content = None
-        self.label_allow_missing = False
-        self.allow_slashes_in_labels = False
-        self.overwrite_files = True
-
-        self.dimin = 1
-        self.dimax = float("inf")
-        self.default_document_encoding = "utf-8"
-        self.forced_document_encoding = None
-
-        self.default_document_scheme = ctx.fallback_document_scheme
-        self.prefer_parent_document_scheme = True
-        self.forced_document_scheme = None
-
-        self.selenium_strategy = SeleniumStrategy.FIRST
-        self.selenium_download_strategy = SeleniumDownloadStrategy.EXTERNAL
-
-        if blank:
-            for k in self.__dict__:
-                self.__dict__[k] = None
-
-        self.ctx = ctx
-        self.chain_id = chain_id
-        self.content = Locator("content", blank)
-        self.label = Locator("label", blank)
-        self.document = Locator("document", blank)
-        self.document_output_chains = [self]
-
-        self.di = None
-        self.ci = None
-        self.has_xpath_matching = None
-        self.has_label_matching = None
-        self.has_content_xpaths = None
-        self.has_document_matching = False
-        self.has_content_matching = False
-        self.has_interactive_matching = None
-        self.need_content_download = False
-        self.need_output_multipass = False
-        self.content_refs_write = 0
-        self.content_refs_print = 0
-        self.content_matches = []
-        self.document_matches = []
-        self.handled_content_matches = set()
-        self.handled_document_matches = set()
-        self.satisfied = True
-        self.labels_none_for_n = 0
-
-    def accepts_content_matches(self):
-        return self.di <= self.dimax
-
-    def need_document_matches(self, current_di_used):
-        return (
-            self.has_document_matching
-            and self.di <= (self.dimax - (1 if current_di_used else 0))
-        )
-
-    def need_content_matches(self):
-        return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
-
-    def is_valid_label(self, label):
-        if self.allow_slashes_in_labels:
-            return True
-        if "/" in label or "\\" in label:
-            return False
-        return True
+def empty_string_to_none(string):
+    if string == "":
+        return None
+    return string
 
 
-class DlContext:
-    def __init__(self, blank=False):
-        self.cookie_file = None
-        self.cookie_jar = None
-        self.exit = None
-        self.selenium_variant = SeleniumVariant.DISABLED
-        self.tor_browser_dir = None
-        self.selenium_driver = None
-        self.user_agent_random = False
-        self.user_agent = None
-        self.verbosity = Verbosity.WARN
-        self.documents_bfs = False
-        self.selenium_keep_alive = False
-        self.repl = False
-        self.request_timeout = DEFAULT_TIMEOUT_SECONDS
+def dict_update_unless_none(current, updates):
+    current.update({
+        k: v for k, v in updates.items() if v is not None
+    })
 
-        if blank:
-            for k in self.__dict__:
-                self.__dict__[k] = None
 
-        self.cookie_dict = {}
-        self.match_chains = []
-        self.docs = deque()
-        self.reused_doc = None
-        self.changed_selenium = False
+def content_match_build_format_args(cm, content=None):
+    args_dict = {
+        "cenc": cm.doc.encoding,
+        "cesc": cm.mc.content_escape_sequence,
+        "dl":   cm.doc.path,
+    }
+    regex_matches = [
+        ("d", cm.doc.regex_match),
+        ("l", cm.label_regex_match),
+        ("c", cm.content_regex_match)
+    ]
+    regex_matches = filter(lambda rm: rm[1] is not None, regex_matches)
+    for p, rm in regex_matches:
+        args_dict.update({
+            f"{p}x": rm.xmatch,
+            f"{p}r": rm.rmatch,
+        })
 
-        # stuff that can't be reconfigured (yet)
+    dict_update_unless_none(args_dict, {
+        "cf": cm.cfmatch,
+        "cm": cm.cmatch,
+        "lf": cm.lfmatch,
+        "lm": cm.lmatch,
+        "df": cm.doc.dfmatch,
+        "di": cm.di,
+        "ci": cm.ci,
+        "c": content,
+    })
 
-        self.selenium_log_path = os.path.devnull
-        self.selenium_poll_frequency_secs = 0.3
-        self.selenium_content_count_pad_length = 6
-        self.downloads_temp_dir = None
-        self.download_tmp_index = 0
+    # apply the unnamed groups first in case somebody overwrote it with a named group
+    for p, rm in regex_matches:
+        args_dict.update(rm.group_list_to_dict(f"{p}g"))
 
-        self.fallback_document_scheme = "https"
+    # finally apply the named groups
+    for p, rm in regex_matches:
+        args_dict.update(rm.label_regex_match.group_dict)
 
-        self.defaults_mc = MatchChain(self, None)
-        self.origin_mc = MatchChain(self, None, blank=True)
-        # turn ctx to none temporarily for origin so it can be deepcopied
-        self.origin_mc.ctx = None
-        self.error_code = 0
+    return args_dict
 
 
 def log_raw(verbosity, msg):
@@ -943,7 +1048,7 @@ def setup_selenium(ctx):
         ctx.user_agent = ctx.selenium_driver.execute_script(
             "return navigator.userAgent;")
 
-    ctx.selenium_driver.set_page_load_timeout(ctx.request_timeout)
+    ctx.selenium_driver.set_page_load_timeout(ctx.request_timeout_seconds)
     if ctx.cookie_jar:
         # todo: implement something more clever for this, at least for chrome:
         # https://stackoverflow.com/questions/63220248/how-to-preload-cookies-before-first-request-with-python3-selenium-chrome-webdri
@@ -968,8 +1073,8 @@ def format_string_uses_arg(fmt_string, arg_pos, arg_name):
 
 def setup_match_chain(mc, ctx):
     # we need ctx because mc.ctx is stil None before we apply_defaults
-    obj_apply_defaults(mc, ctx.defaults_mc, {
-                       "content": {}, "label": {}, "document": {}})
+    mc.apply_defaults(ctx.defaults_mc)
+
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup()
@@ -985,6 +1090,9 @@ def setup_match_chain(mc, ctx):
         raise ScrepSetupError(
             f"match chain {mc.chain_id}: cannot specify cwf without csf"
         )
+
+    if not mc.document_output_chains:
+        mc.document_output_chains = [mc]
 
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
@@ -1091,7 +1199,7 @@ def load_cookie_jar(ctx):
 
 def setup(ctx, for_repl=False):
     global DEFAULT_CPF
-    obj_apply_defaults(ctx, DlContext(blank=False))
+    ctx.apply_defaults(DlContext())
 
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -1142,7 +1250,8 @@ def setup(ctx, for_repl=False):
 
         if (have_dls_to_temp or have_internal_dls):
             ctx.downloads_temp_dir = tempfile.mkdtemp(
-                prefix="screp_downloads_")
+                prefix="screp_downloads_"
+            )
 
     if ctx.selenium_variant == SeleniumVariant.DISABLED:
         for mc in ctx.match_chains:
@@ -1162,7 +1271,7 @@ def parse_prompt_option(val, options, default=None, unparsable_val=None):
 
 
 def parse_bool_string(val, default=None, unparsable_val=None):
-    return parse_prompt_option(val, [(True, yes_indicating_strings), (False, no_indicating_strings)], default, None)
+    return parse_prompt_option(val, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default, None)
 
 
 def prompt(prompt_text, options, default=None):
@@ -1178,7 +1287,7 @@ def prompt(prompt_text, options, default=None):
 
 
 def prompt_yes_no(prompt_text, default=None):
-    return prompt(prompt_text, [(True, yes_indicating_strings), (False, no_indicating_strings)], default)
+    return prompt(prompt_text, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
 def selenium_get_url(ctx):
@@ -1385,7 +1494,7 @@ def fetch_file(ctx, path, stream=False):
 def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
     url = urllib.parse.urlparse(path)
     if url.scheme == "data":
-        res = urllib.request.urlopen(path, timeout=ctx.request_timeout)
+        res = urllib.request.urlopen(path, timeout=ctx.request_timeout_seconds)
         if stream:
             return res, None
         try:
@@ -1405,7 +1514,8 @@ def requests_dl(ctx, path, cookie_dict=None, proxies=None, stream=False):
     ex = None
     try:
         res = requests.get(
-            path, cookies=cookies, headers=headers, allow_redirects=True, proxies=proxies, timeout=ctx.request_timeout, stream=stream
+            path, cookies=cookies, headers=headers, allow_redirects=True,
+            proxies=proxies, timeout=ctx.request_timeout_seconds, stream=stream
         )
         if stream:
             return ResponseStreamWrapper(res), res.encoding
@@ -1580,18 +1690,6 @@ def download_content(cm, save_path):
             save_file.close()
 
 
-class ScrepSetupError(Exception):
-    pass
-
-
-class ScrepFetchError(Exception):
-    pass
-
-
-class ScrepMatchError(Exception):
-    pass
-
-
 def fetch_doc(ctx, doc):
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
@@ -1653,10 +1751,10 @@ def normalize_link(ctx, mc, src_doc, doc_path, link):
     elif url_parsed.scheme == "":
         if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme not in ["", "file"]:
             scheme = doc_url_parsed.scheme
-        elif mc and mc.default_document_scheme:
+        elif mc:
             scheme = mc.default_document_scheme
         else:
-            scheme = ctx.fallback_document_scheme
+            scheme = FALLBACK_DOCUMENT_SCHEME
         url_parsed = url_parsed._replace(scheme=scheme)
     res = url_parsed.geturl()
     return res
@@ -1670,6 +1768,8 @@ def get_ci_di_context(mc, di, ci):
             di_ci_context = f" (di={di})"
     elif mc.content.multimatch:
         di_ci_context = f" (ci={ci})"
+    else:
+        di_ci_context = f""
     return di_ci_context
 
 
@@ -1719,15 +1819,15 @@ def handle_content_match(cm):
         content_type = "content match" if cm.mc.content_raw else "content link"
         if cm.mc.content.interactive:
             prompt_options = [
-                (InteractiveResult.ACCEPT, yes_indicating_strings),
-                (InteractiveResult.REJECT, no_indicating_strings),
-                (InteractiveResult.EDIT, edit_indicating_strings),
-                (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
-                (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
             ]
             if cm.mc.content_raw:
                 prompt_options.append(
-                    (InteractiveResult.INSPECT, inspect_indicating_strings))
+                    (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
                 inspect_opt_str = "/inspect"
                 prompt_msg = f'accept {content_type} from "{cm.doc.path}"{di_ci_context}{label_context}'
             else:
@@ -1769,15 +1869,15 @@ def handle_content_match(cm):
                     f'"{cm.doc.path}": labels cannot contain a slash ("{cm.lmatch}")')
             else:
                 prompt_options = [
-                    (InteractiveResult.ACCEPT, yes_indicating_strings),
-                    (InteractiveResult.REJECT, no_indicating_strings),
-                    (InteractiveResult.EDIT, edit_indicating_strings),
-                    (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
-                    (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                    (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                    (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                    (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                    (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
+                    (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
                 ]
                 if cm.mc.content_raw:
                     prompt_options.append(
-                        (InteractiveResult.INSPECT, inspect_indicating_strings))
+                        (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
                     inspect_opt_str = "/inspect"
                     prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.lmatch}"'
                 else:
@@ -1824,12 +1924,12 @@ def handle_content_match(cm):
                 res = prompt(
                     f'{cm.doc.path}{di_ci_context}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
                     [
-                        (InteractiveResult.ACCEPT, yes_indicating_strings),
-                        (InteractiveResult.REJECT, no_indicating_strings),
-                        (InteractiveResult.EDIT, edit_indicating_strings),
+                        (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                        (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                        (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
                         (InteractiveResult.SKIP_CHAIN,
-                         chain_skip_indicating_strings),
-                        (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                         CHAIN_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
                     ],
                     InteractiveResult.ACCEPT
                 )
@@ -1851,11 +1951,11 @@ def handle_document_match(ctx, doc):
         res = prompt(
             f'accept matched document "{doc.path}" [Yes/no/edit]? ',
             [
-                (InteractiveResult.ACCEPT, yes_indicating_strings),
-                (InteractiveResult.REJECT, no_indicating_strings),
-                (InteractiveResult.EDIT, edit_indicating_strings),
-                (InteractiveResult.SKIP_CHAIN, chain_skip_indicating_strings),
-                (InteractiveResult.SKIP_DOC, doc_skip_indicating_strings)
+                (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
             ],
             InteractiveResult.ACCEPT
         )
@@ -1867,19 +1967,16 @@ def handle_document_match(ctx, doc):
 
 def gen_content_matches(mc, doc):
     content_matches = []
-
-    if mc.has_content_xpaths:
-        xmatches, xmatches_xml = mc.content.match_xpath(
-            mc.ctx, doc.xml, doc.path, ([doc.src], [doc.xml]), True)
-    else:
-        xmatches = mc.content.match_xpath(
-            mc.ctx, doc.xml, doc.path, [doc.text]
-        )
-
-    labels = []
+    xmatches, xmatches_xml = mc.content.match_xpath(
+        mc.ctx, doc.xml, doc.path,
+        ([doc.text], [doc.xml]), mc.has_content_xpaths
+    )
+    label_regex_matches = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        for lxmatch in mc.label.match_xpath(mc.ctx, doc.xml, doc.path, [doc.text]):
-            labels.extend(mc.label.match_regex(
+        lxmatches, _xml = mc.label.match_xpath(
+            mc.ctx, doc.xml, doc.path, [doc.text])
+        for lxmatch in lxmatches:
+            label_regex_matches.extend(mc.label.match_regex(
                 doc.text, doc.path, [RegexMatch(lxmatch, lxmatch)])
             )
     match_index = 0
@@ -1890,16 +1987,18 @@ def gen_content_matches(mc, doc):
         if mc.labels_inside_content and mc.label.xpath:
             xmatch_xml = xmatches_xml[match_index] if mc.has_content_xpaths else None
             label_regex_matches = []
-            for lxmatch in mc.label.match_xpath(mc.ctx, xmatch_xml, doc.path, [doc.text]):
+            lxmatches, _xml = mc.label.match_xpath(
+                mc.ctx, xmatch_xml, doc.path, [doc.text])
+            for lxmatch in lxmatches:
                 label_regex_matches.extend(mc.label.match_regex(
                     doc.text, doc.path, [RegexMatch(lxmatch, lxmatch)]))
-            if len(labels) == 0:
+            if len(label_regex_matches) == 0:
                 if not mc.label_allow_missing:
                     labels_none_for_n += len(content_regex_matches)
                     continue
                 lrm = None
             else:
-                lrm = labels[0]
+                lrm = label_regex_matches[0]
 
         for crm in content_regex_matches:
             if mc.labels_inside_content:
@@ -1918,7 +2017,7 @@ def gen_content_matches(mc, doc):
             else:
                 if not mc.label.multimatch and len(label_regex_matches) > 0:
                     lrm = label_regex_matches[0]
-                elif match_index < len(labels):
+                elif match_index < len(label_regex_matches):
                     lrm = label_regex_matches[match_index]
                 elif not mc.label_allow_missing:
                     labels_none_for_n += 1
@@ -1935,7 +2034,7 @@ def gen_document_matches(mc, doc):
     # TODO: fix interactive matching for docs and give ci di chain to regex
     document_matches = []
     base_dir = os.path.dirname(doc.path)
-    xmatches = mc.document.match_xpath(
+    xmatches, _xml = mc.document.match_xpath(
         mc.ctx, doc.xml, doc.path, [doc.text]
     )
     for xmatch in xmatches:
@@ -2037,8 +2136,8 @@ def handle_interactive_chains(ctx, interactive_chains, doc, try_number, last_msg
     if rlist:
         result = parse_prompt_option(
             sys.stdin.readline(),
-            [(InteractiveResult.ACCEPT, yes_indicating_strings),
-             (InteractiveResult.SKIP_DOC, skip_indicating_strings + no_indicating_strings)],
+            [(InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+             (InteractiveResult.SKIP_DOC, SKIP_INDICATING_STRINGS + NO_INDICATING_STRINGS)],
             InteractiveResult.ACCEPT
         )
         if result is None:
@@ -2391,7 +2490,7 @@ def parse_mc_arg(ctx, argname, arg, support_blank=False, blank_value=""):
         mc_spec = arg[argname_len:]
     else:
         mc_spec = arg[argname_len: eq_pos]
-        if not chain_regex.match(mc_spec):
+        if not CHAIN_REGEX.match(mc_spec):
             return False, None, None
         pre_eq_arg = arg[:eq_pos]
         value = arg[eq_pos+1:]
@@ -2440,30 +2539,40 @@ def apply_mc_arg(ctx, argname, config_opt_names, arg, value_cast=lambda x, _arg:
     return True
 
 
-def get_arg_val(arg):
+def get_arg_val(arg) -> str:
     return arg[arg.find("=") + 1:]
 
 
-def parse_bool_arg(v, arg, blank_val=True):
+def parse_bool_arg(v, arg, blank_val=True) -> bool:
     v = v.strip().lower()
     if v == "" and blank_val is not None:
         return blank_val
 
-    if v in yes_indicating_strings:
+    if v in YES_INDICATING_STRINGS:
         return True
-    if v in no_indicating_strings:
+    if v in NO_INDICATING_STRINGS:
         return False
     raise ScrepSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
 
 
-def parse_int_arg(v, arg):
+def parse_int_arg(v, arg) -> int:
     try:
         return int(v)
     except ValueError:
         raise ScrepSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
 
 
-def parse_encoding_arg(v, arg):
+def parse_non_negative_float_arg(v, arg) -> float:
+    try:
+        f = float(v)
+    except ValueError:
+        raise ScrepSetupError(f"cannot parse '{v}' as an number in '{arg}'")
+    if f < 0:
+        raise ScrepSetupError(f"negative number '{v}' not allowed for '{arg}'")
+    return f
+
+
+def parse_encoding_arg(v, arg) -> str:
     if not verify_encoding(v):
         raise ScrepSetupError(f"unknown encoding in '{arg}'")
     return v
@@ -2545,7 +2654,7 @@ def apply_ctx_arg(ctx, optname, argname, arg, value_parse=lambda v, _arg: v, sup
             )
     else:
         nc = arg[len(optname):]
-        if chain_regex.match(nc):
+        if CHAIN_REGEX.match(nc):
             raise ScrepSetupError(
                 "option '{optname}' does not support match chain specification"
             )
@@ -2565,7 +2674,7 @@ def resolve_repl_defaults(ctx_new, ctx, last_doc):
     if ctx_new.user_agent and not ctx_new.user_agent_random:
         ctx.user_agent_random = None
 
-    obj_apply_defaults(ctx_new, ctx)
+    ctx_new.apply_defaults(ctx)
 
     changed_selenium = False
     if ctx_new.selenium_variant != ctx.selenium_variant:
@@ -2690,9 +2799,9 @@ def parse_args(ctx, args):
         if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_range_as_arg(ctx, arg, v)):
             continue
 
-        if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg, True):
+        if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg):
             continue
-        if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg, True):
+        if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg):
             continue
         if apply_mc_arg(ctx, "cicont", ["ci_continuous"], arg, parse_bool_arg, True):
             continue
@@ -2806,7 +2915,7 @@ def parse_args(ctx, args):
         if apply_ctx_arg(ctx, "exit", "exit", arg,  parse_bool_arg, True):
             continue
 
-        if apply_ctx_arg(ctx, "timeout", "request_timeout", arg,  parse_int_arg):
+        if apply_ctx_arg(ctx, "timeout", "request_timeout_seconds", arg,  parse_non_negative_float_arg):
             continue
 
         raise ScrepSetupError(f"unrecognized option: '{arg}'")
