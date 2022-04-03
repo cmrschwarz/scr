@@ -18,7 +18,7 @@ screp url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuR
 
 ### Get absolute links to all images on a website:
 ```bash 
-screp url=google.com cx='//img/@src' cl cpf='{link}\n'
+screp url=google.com cx='//img/@src' cl cpf='{cm}\n'
 ```
 
 ### Scroll through top reddit posts:
