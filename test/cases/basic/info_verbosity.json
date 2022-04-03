@@ -11,12 +11,6 @@
         " [INFO]: handling file 'test/res/multidoc.html'",
         " [INFO]: handling file 'test/res/empty.html'",
         " [INFO]: handling file 'test/res/basic.html'",
-        " [INFO]: started downloading Foo",
-        " [INFO]: finished downloading Foo",
-        " [INFO]: started downloading Bar",
-        " [INFO]: finished downloading Bar",
-        " [INFO]: started downloading Baz",
-        " [INFO]: finished downloading Baz",
         " [INFO]: handling file 'test/res/non_unicode.html'",
         " [INFO]: handling file 'test/res/resources.html'"
     ]

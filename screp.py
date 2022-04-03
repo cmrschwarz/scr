@@ -1164,9 +1164,6 @@ class DownloadJob:
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
-                if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
-                    log(self.cm.mc.ctx, Verbosity.INFO,
-                        f"finished downloading {self.cm.cmatch}")
                 return True
 
             if self.cm.mc.need_output_multipass and self.multipass_file is None:
