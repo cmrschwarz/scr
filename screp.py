@@ -1238,6 +1238,9 @@ class DownloadManager:
         self.all_threads_idle = threading.Condition(self.lock)
 
     def submit(self, dj: DownloadJob):
+        log(self.ctx, Verbosity.DEBUG,
+            f"enqueuing download for {dj.cm.cmatch}"
+            )
         dj.setup_print_stream(self)
         t = None
         with self.lock:
@@ -1358,6 +1361,7 @@ def content_match_build_format_args(
         "di": cm.di,
         "ci": cm.ci,
         "c": content,
+        "chain": cm.mc.chain_id,
     })
 
     # apply the unnamed groups first in case somebody overwrote it with a named group
@@ -1530,6 +1534,7 @@ def help(err: bool = False) -> None:
         {{dl}}                document link (even for df, this still refers to the parent document)
         {{cenc}}              content encoding, deduced while respecting cenc and cfenc
         {{cesc}}              escape sequence for separating content, can be overwritten using cesc
+        {{chain}}             id of the match chain that generated this content
 
         {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
@@ -2542,6 +2547,9 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     if cm.mc.ctx.dl_manager is not None and job.requires_download():
         cm.mc.ctx.dl_manager.submit(job)
     else:
+        log(cm.mc.ctx, Verbosity.DEBUG,
+            f"choosing synchronous download for {job.cm.cmatch}"
+            )
         job.download_content()
 
     return InteractiveResult.ACCEPT
