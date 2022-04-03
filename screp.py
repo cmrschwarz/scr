@@ -489,7 +489,7 @@ class Locator(ConfigDataClass):
         if self.regex is None:
             return
         try:
-            self.regex = re.compile(self.regex, re.MULTILINE)
+            self.regex = re.compile(self.regex, re.DOTALL)
         except re.error as err:
             raise ScrepSetupError(
                 f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
