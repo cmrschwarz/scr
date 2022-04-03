@@ -691,6 +691,15 @@ class MatchChain(ConfigDataClass):
         ):
             dcm.lfmatch = ""
             dcm.lmatch = ""
+
+        if dcm.doc.regex_match or (
+            self.document.format and self.document.validated
+        ):
+            dcm.doc.dfmatch = ""
+        if self.content.multimatch:
+            dcm.ci = 0
+        if self.document.multimatch:
+            self.di = 0
         return dcm
 
     def accepts_content_matches(self) -> bool:
@@ -861,7 +870,7 @@ class OutputFormatter:
                         val = self._args_dict[key]
                     if type(val) is bytes:
                         self._out_stream.write(val)
-                    elif type(val) is str:
+                    elif type(val) in [str, int, float]:
                         self._out_stream.write(
                             format(val, format_args if format_args else "")
                             .encode("utf-8", errors="surrogateescape")
@@ -1110,9 +1119,13 @@ class DownloadJob:
         ))
         return True
 
-    def download_content(self) -> None:
+    def download_content(self) -> bool:
+        if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
+            # for debug we allready log a more extensive variant of this
+            log(self.cm.mc.ctx, Verbosity.INFO,
+                f"started downloading {self.cm.cmatch}")
         if not self.fetch_content():
-            return
+            return False
 
         self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
             cast(Union[BinaryIO, MinimalInputStream], self.content)
@@ -1121,18 +1134,18 @@ class DownloadJob:
         )
         try:
             if not self.setup_content_file():
-                return
+                return False
             if not self.setup_save_file():
-                return
+                return False
 
             if not self.setup_print_output():
-                return
+                return False
 
             if self.content_stream is None:
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
-                return
+                return False
 
             if self.cm.mc.need_output_multipass and self.multipass_file is None:
                 try:
@@ -1142,7 +1155,7 @@ class DownloadJob:
                 except IOError as ex:
                     log(self.cm.mc.ctx, Verbosity.ERROR,
                         f": failed to create temp file '{self.temp_file_path}': {truncate(str(ex))}")
-                    return
+                    return False
                 self.multipass_file = self.temp_file
 
             if self.content_stream is not None:
@@ -1179,6 +1192,10 @@ class DownloadJob:
                 os.remove(self.temp_file_path)
             if self.save_file is not None:
                 self.save_file.close()
+        if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
+            log(self.cm.mc.ctx, Verbosity.INFO,
+                f"finished downloading {self.cm.cmatch}")
+        return True
 
 
 class DownloadManager:
@@ -1213,14 +1230,18 @@ class DownloadManager:
         t = None
         with self.lock:
             self.pending_jobs.append(dj)
+            thread_count = len(self.threads)
             if len(self.threads) < self.max_threads and self.idle_threads == 0:
-                t = threading.Thread(target=self.run_worker)
+                t = threading.Thread(target=self.run_worker,
+                                     args=(thread_count + 1,))
                 self.threads.append(t)
         self.pending_job_count.release()
         if t:
+            log(self.ctx, Verbosity.DEBUG,
+                f"starting downloading thread #{thread_count + 1}")
             t.start()
 
-    def run_worker(self):
+    def run_worker(self, id: int):
         try:
             while True:
                 all_idle = False
@@ -1237,8 +1258,15 @@ class DownloadManager:
                         return
                     job = self.pending_jobs.pop(0)
                     self.idle_threads -= 1
-
-                    job.download_content()
+                    log(self.ctx, Verbosity.DEBUG,
+                        f"thread #{id} started downloading {job.cm.cmatch}"
+                        )
+                    if job.download_content():
+                        log(self.ctx, Verbosity.DEBUG,
+                            f"thread #{id} finished downloading {job.cm.cmatch}"
+                            )
+        except KeyboardInterrupt:
+            sys.exit(1)
         except BrokenPipeError:
             abort_on_broken_pipe()
 
