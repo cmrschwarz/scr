@@ -470,6 +470,8 @@ class Locator(ConfigDataClass):
 
     def gen_dummy_regex_match(self):
         if self.regex is None:
+            if self.xpath is not None:
+                return RegexMatch("", "")
             return None
         if type(self.regex) is not re.Pattern:
             return None
@@ -1031,13 +1033,7 @@ class DownloadJob:
                         self.cm.doc.document_type.derived_type() is DocumentType.FILE
                         and urllib.parse.urlparse(self.cm.cmatch).scheme != "data"
                     ):
-                        if not os.path.isabs(path):
-                            self.content = os.path.normpath(os.path.join(
-                                os.path.dirname(self.cm.doc.path),
-                                path
-                            ))
-                        else:
-                            self.content = self.cm.doc.path
+                        self.content = path
                         self.content_format = ContentFormat.FILE
                     else:
                         try:
@@ -2292,9 +2288,13 @@ def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
 
 def normalize_link(ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str) -> str:
     # todo: make this configurable
-    if src_doc.document_type == DocumentType.FILE:
-        return link
     url_parsed = urllib.parse.urlparse(link)
+    if src_doc.document_type == DocumentType.FILE:
+        if not url_parsed.scheme:
+            if not os.path.isabs(link):
+                return os.path.normpath(os.path.join(os.path.dirname(src_doc.path), link))
+        return link
+
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
 
     if doc_url_parsed and url_parsed.netloc == "" and src_doc.document_type == DocumentType.URL:
@@ -2352,8 +2352,6 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
         label_context = f' (label "{cm.lmatch}")'
     else:
         label_context = ""
-
-    cm.cmatch = cm.cfmatch
 
     while True:
         if not cm.mc.content_raw:

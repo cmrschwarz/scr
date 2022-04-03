@@ -4,5 +4,5 @@
         "cx=//p/text()"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: Failed to fetch ./test/res/xxxxxxx: no such file or directory\n"
+    "stderr": "[ERROR]: Failed to fetch test/res/xxxxxxx: no such file or directory\n"
 }
