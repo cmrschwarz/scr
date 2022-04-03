@@ -813,13 +813,13 @@ class OutputFormatter:
     _args_list: list[Any]
     _format_parts: list[tuple[str, Union[str, None],
                               Union[str, None], Union[str, None]]]
-    _out_stream: BinaryIO
+    _out_stream: Union[BinaryIO, 'PrintOutputStream']
     _found_stream: bool = False
     _input_buffer_sizes: int
 
     def __init__(
         self, format_str: str, cm: ContentMatch,
-        out_stream: BinaryIO,
+        out_stream: Union[BinaryIO, 'PrintOutputStream'],
         content: Union[str, bytes, MinimalInputStream, BinaryIO, None],
         input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
@@ -1110,6 +1110,7 @@ class DownloadJob:
     def setup_print_output(self) -> bool:
         if self.cm.mc.content_print_format is None:
             return True
+        assert self.print_stream is not None
         self.output_formatters.append(OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
             self.print_stream, self.content
