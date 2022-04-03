@@ -2285,13 +2285,20 @@ def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
 def normalize_link(ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str) -> str:
     # todo: make this configurable
     url_parsed = urllib.parse.urlparse(link)
+    doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == DocumentType.FILE:
         if not url_parsed.scheme:
             if not os.path.isabs(link):
-                return os.path.normpath(os.path.join(os.path.dirname(src_doc.path), link))
+                if doc_url_parsed is not None:
+                    base = doc_url_parsed.path
+                    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+                        # attempt to preserve short, relative paths were possible
+                        if os.path.realpath(doc_url_parsed.path) == os.path.realpath(src_doc.path):
+                            base = src_doc.path
+                else:
+                    base = src_doc.path
+                return os.path.normpath(os.path.join(os.path.dirname(base), link))
         return link
-
-    doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
 
     if doc_url_parsed and url_parsed.netloc == "" and src_doc.document_type == DocumentType.URL:
         url_parsed = url_parsed._replace(netloc=doc_url_parsed.netloc)
