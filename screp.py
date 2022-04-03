@@ -1191,11 +1191,12 @@ class DownloadManager:
     ctx: ScrepContext
     threads: list[threading.Thread]
     max_threads: int
-    queued_jobs: list[DownloadJob]
-    started_jobs: list[DownloadJob]
+    pending_jobs: list[DownloadJob]
+    running_jobs: list[DownloadJob]
     finished_jobs: list[DownloadJob]
     lock: threading.Lock
     queue_slots: threading.Semaphore
+    all_threads_idle: threading.Condition
     pom: PrintOutputManager
 
     def __init__(self, ctx: ScrepContext, max_threads: int = 0):
@@ -1203,55 +1204,73 @@ class DownloadManager:
         self.max_threads = (
             max_threads if max_threads > 0 else multiprocessing.cpu_count()
         )
-        self.queued_jobs = []
-        self.started_jobs = []
+        self.pending_jobs = []
+        self.running_jobs = []
         self.finished_jobs = []
         self.threads = []
         self.idle_threads: int = 0
         self.lock = threading.Lock()
-        self.queue_slots = threading.Semaphore(value=0)
+        self.pending_job_count = threading.Semaphore(value=0)
         self.pom = PrintOutputManager()
+        self.all_threads_idle = threading.Condition(self.lock)
 
     def submit(self, dj: DownloadJob):
         dj.setup_print_stream(self)
         t = None
         with self.lock:
-            self.queued_jobs.append(dj)
+            self.pending_jobs.append(dj)
             if len(self.threads) < self.max_threads and self.idle_threads == 0:
                 t = threading.Thread(target=self.run_worker)
                 self.threads.append(t)
-        self.queue_slots.release()
+        self.pending_job_count.release()
         if t:
             t.start()
 
     def run_worker(self):
-        while True:
-            job = None
-            with self.lock:
-                self.idle_threads += 1
-            self.queue_slots.acquire()
-            with self.lock:
-                if not self.queued_jobs:
-                    # the semaphore only lets us through without present jobs
-                    # if the process wants to terminate
+        try:
+            while True:
+                all_idle = False
+                job = None
+                with self.lock:
+                    self.idle_threads += 1
+                    if (self.idle_threads == len(self.threads)):
+                        self.all_threads_idle.notifyAll()
+                self.pending_job_count.acquire()
+                with self.lock:
+                    if not self.pending_jobs:
+                        # the semaphore only lets us through without present jobs
+                        # if the process wants to terminate
+                        return
+                    job = self.pending_jobs.pop(0)
+                    self.idle_threads -= 1
+
+                    job.download_content()
+        except BrokenPipeError:
+            abort_on_broken_pipe()
+
+    def wait_until_jobs_done(self):
+        with self.lock:
+            while True:
+                launched_threads = len(self.threads)
+                idle_threads = self.idle_threads
+                if launched_threads == idle_threads:
                     return
-                job = self.queued_jobs.pop(0)
-                self.idle_threads -= 1
-            try:
-                job.download_content()
-            except BrokenPipeError:
-                # Python flushes standard streams on exit; redirect remaining output
-                # to devnull to avoid another BrokenPipeError at shutdown
-                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-                sys.exit(1)
+                self.all_threads_idle.wait()
 
     def terminate(self, cancel_running: bool = False):
         if cancel_running:
             with self.lock:
-                self.queued_jobs.clear()
-        self.queue_slots.release(self.max_threads)
+                self.pending_jobs.clear()
+        self.pending_job_count.release(self.max_threads)
         for t in self.threads:
             t.join()
+
+
+def abort_on_broken_pipe():
+    # Python flushes standard streams on exit; redirect remaining output
+    # to devnull to avoid another BrokenPipeError at shutdown
+    os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    sys.exit(1)
 
 
 def empty_string_to_none(string: Optional[str]) -> Optional[str]:
@@ -3338,6 +3357,8 @@ def run_repl(ctx: ScrepContext) -> int:
                     last_doc = dl(ctx)
                 except ScrepMatchError as ex:
                     log(ctx, Verbosity.ERROR, str(ex))
+                if ctx.dl_manager:
+                    ctx.dl_manager.wait_until_jobs_done()
             except KeyboardInterrupt:
                 print("")
                 continue
@@ -3526,9 +3547,6 @@ if __name__ == "__main__":
         )
         exit(main())
     except BrokenPipeError:
-        # Python flushes standard streams on exit; redirect remaining output
-        # to devnull to avoid another BrokenPipeError at shutdown
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        sys.exit(1)
+        abort_on_broken_pipe()
     except KeyboardInterrupt:
         sys.exit(1)
