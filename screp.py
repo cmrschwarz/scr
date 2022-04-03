@@ -1997,11 +1997,7 @@ def selenium_download_from_local_file(
     doc_url = selenium_get_url(cm.mc.ctx)
     if doc_url is None:
         return None, ContentFormat.FILE
-    path = cast(str, cm.cmatch)
-    if not os.path.isabs(path):
-        cur_path = os.path.realpath(os.path.dirname(doc_url[len("file:"):]))
-        filepath = os.path.join(cur_path, path)
-    return filepath, ContentFormat.FILE
+    return cast(str, cm.cmatch), ContentFormat.FILE
 
 
 def selenium_download_external(

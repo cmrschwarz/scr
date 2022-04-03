@@ -11,7 +11,7 @@
     ],
     "stdin": "y\n",
     "stdout": [
-        "./test/res/redundant.html: use page with potentially   < 4 >   contents [Yes/skip]? Foo",
+        "test/res/redundant.html: use page with potentially   < 4 >   contents [Yes/skip]? Foo",
         "Bar",
         "Baz",
         "Quux"
