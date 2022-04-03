@@ -1962,7 +1962,6 @@ def selenium_get_url(ctx: ScrepContext) -> Optional[str]:
     try:
         return ctx.selenium_driver.current_url
     except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
-        # TODO: can this fail in any other way?
         report_selenium_died(ctx)
         return None
 
@@ -2283,7 +2282,6 @@ def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
 
 
 def normalize_link(ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str) -> str:
-    # todo: make this configurable
     url_parsed = urllib.parse.urlparse(link)
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == DocumentType.FILE:
@@ -2595,7 +2593,6 @@ def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatc
 
 
 def gen_document_matches(mc: MatchChain, doc: Document) -> list[Document]:
-    # TODO: fix interactive matching for docs and give ci di chain to regex
     document_matches = []
     base_dir = os.path.dirname(doc.path)
     xmatches, _xml = mc.document.match_xpath(
