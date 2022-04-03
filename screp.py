@@ -778,6 +778,7 @@ class ScrepContext(ConfigDataClass):
     selenium_keep_alive: bool = False
     repl: bool = False
     request_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    max_download_threads: int = multiprocessing.cpu_count()
 
     selenium_log_path: str = os.path.devnull
     selenium_poll_frequency_secs: float = 0.3
@@ -1112,10 +1113,13 @@ class DownloadJob:
     def setup_print_output(self) -> bool:
         if self.cm.mc.content_print_format is None:
             return True
-        assert self.print_stream is not None
+        if self.print_stream is not None:
+            stream = self.print_stream
+        else:
+            stream = sys.stdout.buffer
         self.output_formatters.append(OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
-            self.print_stream, self.content
+            stream, self.content
         ))
         return True
 
@@ -1145,7 +1149,10 @@ class DownloadJob:
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
-                return False
+                if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
+                    log(self.cm.mc.ctx, Verbosity.INFO,
+                        f"finished downloading {self.cm.cmatch}")
+                return True
 
             if self.cm.mc.need_output_multipass and self.multipass_file is None:
                 try:
@@ -1210,11 +1217,9 @@ class DownloadManager:
     all_threads_idle: threading.Condition
     pom: PrintOutputManager
 
-    def __init__(self, ctx: ScrepContext, max_threads: int = 0):
+    def __init__(self, ctx: ScrepContext, max_threads: int):
         self.ctx = ctx
-        self.max_threads = (
-            max_threads if max_threads > 0 else multiprocessing.cpu_count()
-        )
+        self.max_threads = max_threads
         self.pending_jobs = []
         self.running_jobs = []
         self.finished_jobs = []
@@ -1439,7 +1444,6 @@ def help(err: bool = False) -> None:
                              defaults to \"{DEFAULT_CPF}\" if cpf, csf and cfc are unspecified
         cfc=<chain spec>     forward content match as a virtual document
         cff=<format string>  format of the virtual document forwarded to the cfc chains. defaults to \"{DEFAULT_CWF}\"
-                             (args: content, match, label, encoding, document, escape, [di], [ci], <lr capture groups>, <cr capture groups>)
         csin<bool>           give a promt to edit the save path for a file
         cin=<bool>           give a prompt to ignore a potential content match
         cl=<bool>            treat content match as a link to the actual content
@@ -1535,6 +1539,7 @@ def help(err: bool = False) -> None:
                             (default: disabled, values: tor, chrome, firefox, disabled)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
+        mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count.
         repl=<bool>         accept commands in a read eval print loop
         exit=<bool>         exit the repl (with the result of the current command)
         """.strip()
@@ -1935,9 +1940,8 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
     elif ctx.selenium_driver is None:
         setup_selenium(ctx)
 
-    # TODO: for now we always construct one, later this should be conditional
-    if ctx.dl_manager is None:
-        ctx.dl_manager = DownloadManager(ctx)
+    if ctx.dl_manager is None and ctx.max_download_threads != 0:
+        ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads)
 
 
 def parse_prompt_option(
@@ -3288,6 +3292,12 @@ def resolve_repl_defaults(
 
     ctx_new.apply_defaults(ctx)
 
+    if ctx_new.max_download_threads != ctx.max_download_threads:
+        if ctx.dl_manager is not None:
+            try:
+                ctx.dl_manager.terminate()
+            finally:
+                ctx.dl_manager = None
     changed_selenium = False
     if ctx_new.selenium_variant != ctx.selenium_variant:
         changed_selenium = True
@@ -3520,6 +3530,9 @@ def parse_args(ctx: ScrepContext, args: Iterable[str]) -> None:
             continue
 
         if apply_ctx_arg(ctx, "repl", "repl", arg,  parse_bool_arg, True):
+            continue
+
+        if apply_ctx_arg(ctx, "mt", "max_download_threads", arg,  parse_int_arg):
             continue
 
         if apply_ctx_arg(ctx, "--repl", "repl", arg,  parse_bool_arg, True):
