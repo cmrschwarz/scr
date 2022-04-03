@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
-from concurrent.futures import thread
 import multiprocessing
-import queue
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
 import urllib3.exceptions  # for selenium MaxRetryError
 import mimetypes
@@ -11,7 +9,6 @@ from io import BytesIO, SEEK_SET
 import binascii
 import threading
 import shlex
-import heapq
 import copy
 from abc import abstractmethod
 import lxml
