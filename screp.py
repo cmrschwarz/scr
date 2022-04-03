@@ -75,6 +75,7 @@ DEFAULT_CWF = "{c}"
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
+DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
@@ -882,23 +883,49 @@ class PrintOutputManager:
     printing_buffers: OrderedDict[int, list[bytes]]
     finished_queues: set[int]
     lock: threading.Lock
+    size_blocked: threading.Condition
+    size_limit: int
     dl_ids: int = 0
     active_id: int = 0
 
-    def __init__(self):
+    def __init__(self, max_buffer_size=DEFAULT_MAX_PRINT_BUFFER_CAPACITY):
         self.lock = threading.Lock()
         self.printing_buffers = OrderedDict()
         self.finished_queues = set()
+        self.size_limit = max_buffer_size
+        self.size_blocked = threading.Condition(self.lock)
 
     def print(self, id: int, buffer: bytes):
-        print_directly = False
-        with self.lock:
-            if id == self.active_id:
-                print_directly = True
-            else:
-                self.printing_buffers[id].append(buffer)
-        if print_directly:
+        is_active = False
+        buffer_blocked = False
+        try:
+            self.lock.acquire()
+            while True:
+                if id == self.active_id:
+                    is_active = True
+                    stored_buffers = self.printing_buffers.pop(id, [])
+                    self.size_limit += sum(
+                        map(lambda b: len(b), stored_buffers)
+                    )
+                elif self.size_limit > len(buffer):
+                    self.size_limit -= len(buffer)
+                    stored_buffers = self.printing_buffers[id]
+                else:
+                    buffer_blocked = True
+                if not buffer_blocked:
+                    break
+                self.size_blocked.wait()
+                buffer_blocked = False
+        finally:
+            self.lock.release()
+        if is_active:
+            for b in stored_buffers:
+                sys.stdout.buffer.write(b)
             sys.stdout.buffer.write(buffer)
+            if(stored_buffers):
+                self.size_blocked.notifyAll()
+            return
+        stored_buffers.append(buffer)
 
     def request_print_access(self) -> int:
         with self.lock:
@@ -958,17 +985,198 @@ class PrintOutputStream:
 
 
 class DownloadJob:
-    cm: ContentMatch
-    save_path: Optional[str]
     expected_size: int = 0
     fetched_size: int = 0
+    save_file: Optional[BinaryIO] = None
+    temp_file: Optional[BinaryIO] = None
+    temp_file_path: Optional[str] = None
+    multipass_file: Optional[BinaryIO] = None
+    print_stream: Optional[PrintOutputStream] = None
+    content_stream: Union[BinaryIO, MinimalInputStream, None] = None
+    content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
+    content_format: ContentFormat
+
+    cm: ContentMatch
+    save_path: Optional[str]
+    context: str
+    output_formatters: list[OutputFormatter]
 
     def __init__(self, cm: ContentMatch, save_path: Optional[str]) -> None:
         self.cm = cm
         self.save_path = save_path
+        self.context = (
+            f"{truncate(self.cm.doc.path)}"
+            + f"{get_ci_di_context(self.cm.mc, self.cm.di, self.cm.ci)}"
+        )
+        self.output_formatters = []
 
-    def run(self):
-        pass
+    def setup_print_stream(self, dm: 'DownloadManager'):
+        if self.cm.mc.content_print_format is not None:
+            self.print_stream = PrintOutputStream(dm.pom)
+
+    def fetch_content(self) -> bool:
+        path = cast(str, self.cm.cmatch)
+        if self.cm.mc.content_raw:
+            self.content = self.cm.cmatch
+            self.content_format = ContentFormat.STRING
+        else:
+            if not self.cm.mc.need_content_download:
+                self.content_format = ContentFormat.UNNEEDED
+            else:
+                if self.cm.mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
+                    self.content, self.content_format = selenium_download(
+                        self.cm, self.save_path
+                    )
+                    if self.content is None:
+                        return False
+                else:
+                    if (
+                        self.cm.doc.document_type.derived_type() is DocumentType.FILE
+                        and urllib.parse.urlparse(self.cm.cmatch).scheme != "data"
+                    ):
+                        if not os.path.isabs(path):
+                            self.content = os.path.normpath(os.path.join(
+                                os.path.dirname(self.cm.doc.path),
+                                path
+                            ))
+                        else:
+                            self.content = self.cm.doc.path
+                        self.content_format = ContentFormat.FILE
+                    else:
+                        try:
+                            self.content, _enc = requests_dl(
+                                self.cm.mc.ctx, path, stream=True)
+                            self.content_format = ContentFormat.STREAM
+                        except ScrepFetchError as ex:
+                            log(self.cm.mc.ctx, Verbosity.ERROR,
+                                f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
+                            return False
+        return True
+
+    def setup_save_file(self) -> bool:
+        if not self.save_path:
+            return True
+        try:
+            use_as_multipass = (
+                self.cm.mc.need_output_multipass
+                and self.multipass_file is None
+                and self.cm.mc.content_write_format == DEFAULT_CWF
+            )
+            save_file = cast(BinaryIO, open(
+                self.save_path,
+                ("w" if self.cm.mc.overwrite_files else "x")
+                + "b"
+                + ("+" if use_as_multipass else "")
+            ))
+            if use_as_multipass:
+                self.multipass_file = save_file
+        except FileExistsError:
+            log(self.cm.mc.ctx, Verbosity.ERROR,
+                f"{self.context}: file already exists: {self.save_path}")
+            return False
+        except OSError as ex:
+            log(
+                self.cm.mc.ctx, Verbosity.ERROR,
+                f"{self.context}: failed to write to file '{self.save_path}': {str(ex)}"
+            )
+            return False
+
+        self.output_formatters.append(OutputFormatter(
+            cast(str, self.cm.mc.content_write_format),
+            self.cm, save_file, self.content
+        ))
+        return True
+
+    def setup_content_file(self) -> bool:
+        if self.content_format not in [ContentFormat.FILE, ContentFormat.TEMP_FILE]:
+            return True
+        assert type(self.content) is str
+        try:
+            self.content_stream = cast(BinaryIO, fetch_file(
+                self.cm.mc.ctx, self.content, stream=True)
+            )
+        except ScrepFetchError as ex:
+            log(self.cm.mc.ctx, Verbosity.ERROR,
+                f"{self.context}: failed to open file '{truncate(self.content)}': {str(ex)}")
+            self.aborted = True
+            return False
+        if self.content_format == ContentFormat.TEMP_FILE:
+            self.temp_file_path = self.content
+        self.content = self.content_stream
+        if self.cm.mc.need_output_multipass:
+            self.multipass_file = self.content_stream
+        return True
+
+    def download_content(self) -> None:
+        if not self.fetch_content():
+            return
+
+        self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
+            cast(Union[BinaryIO, MinimalInputStream], self.content)
+            if self.content_format == ContentFormat.STREAM
+            else None
+        )
+        try:
+            if not self.setup_content_file():
+                return
+            if not self.setup_save_file():
+                return
+
+            if self.cm.mc.content_print_format:
+                self.output_formatters.append(OutputFormatter(
+                    self.cm.mc.content_print_format, self.cm,
+                    sys.stdout.buffer, self.content
+                ))
+
+            if self.content_stream is None:
+                for of in self.output_formatters:
+                    res = of.advance()
+                    assert res == False
+                return
+
+            if self.cm.mc.need_output_multipass and self.multipass_file is None:
+                try:
+                    self.temp_file_path, _filename = gen_dl_temp_name(
+                        self.cm.mc.ctx, self.save_path)
+                    self.temp_file = open(self.temp_file_path, "xb+")
+                except IOError as ex:
+                    log(self.cm.mc.ctx, Verbosity.ERROR,
+                        f": failed to create temp file '{self.temp_file_path}': {truncate(str(ex))}")
+                    return
+                self.multipass_file = self.temp_file
+
+            if self.content_stream is not None:
+                while True:
+                    buf = self.content_stream.read(
+                        DEFAULT_RESPONSE_BUFFER_SIZE)
+                    advance_output_formatters(self.output_formatters, buf)
+                    if self.temp_file:
+                        self.temp_file.write(buf)
+                    if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                        if self.content_stream is not self.multipass_file:
+                            self.content_stream.close()
+                            self.content_stream = None
+                        break
+
+            if self.multipass_file:
+                while self.output_formatters:
+                    self.multipass_file.seek(0)
+                    while True:
+                        buf = self.multipass_file.read(
+                            DEFAULT_RESPONSE_BUFFER_SIZE)
+                        advance_output_formatters(self.output_formatters, buf)
+                        if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                            break
+
+        finally:
+            if self.content_stream is not None:
+                self.content_stream.close()
+            if self.temp_file is not None:
+                self.temp_file.close()
+            if self.temp_file_path is not None:
+                os.remove(self.temp_file_path)
+            if self.save_file is not None:
+                self.save_file.close()
 
 
 class DownloadManager:
@@ -980,6 +1188,7 @@ class DownloadManager:
     finished_jobs: list[DownloadJob]
     lock: threading.Lock
     queue_slots: threading.Semaphore
+    pom: PrintOutputManager
 
     def __init__(self, ctx: ScrepContext, max_threads: int = 0):
         self.ctx = ctx
@@ -993,8 +1202,10 @@ class DownloadManager:
         self.idle_threads: int = 0
         self.lock = threading.Lock()
         self.queue_slots = threading.Semaphore(value=0)
+        self.pom = PrintOutputManager()
 
     def submit(self, dj: DownloadJob):
+        dj.setup_print_stream(self)
         t = None
         with self.lock:
             self.queued_jobs.append(dj)
@@ -1018,7 +1229,7 @@ class DownloadManager:
                     return
                 job = self.queued_jobs.pop(0)
                 self.idle_threads -= 1
-            download_content(job.cm, job.save_path)
+            job.download_content()
 
     def terminate(self, cancel_running: bool = False):
         if cancel_running:
@@ -2003,153 +2214,6 @@ def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Opt
             del output_formatters[i]
 
 
-def download_content(cm: ContentMatch, save_path: Optional[str]) -> None:
-    mc = cm.mc
-    content: Union[str, bytes, BinaryIO, MinimalInputStream, None]
-    context = f"{truncate(cm.doc.path)}{get_ci_di_context(mc, cm.di, cm.ci)}"
-    path = cast(str, cm.cmatch)
-    if mc.content_raw:
-        content = cm.cmatch
-        content_format = ContentFormat.STRING
-    else:
-        if not mc.need_content_download:
-            content = None
-            content_format = ContentFormat.UNNEEDED
-        else:
-            if mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
-                content, content_format = selenium_download(cm, save_path)
-                if content is None:
-                    return
-            else:
-                if (
-                    cm.doc.document_type.derived_type() is DocumentType.FILE
-                    and urllib.parse.urlparse(cm.cmatch).scheme != "data"
-                ):
-                    if not os.path.isabs(path):
-                        content = os.path.normpath(os.path.join(
-                            os.path.dirname(cm.doc.path), path))
-                    else:
-                        content = cm.doc.path
-
-                    content_format = ContentFormat.FILE
-                else:
-                    try:
-                        content, _enc = requests_dl(
-                            mc.ctx, path, stream=True)
-                        content_format = ContentFormat.STREAM
-                    except ScrepFetchError as ex:
-                        log(mc.ctx, Verbosity.ERROR,
-                            f"{context}: failed to download '{truncate(path)}': {str(ex)}")
-                        return
-    temp_file = None
-    temp_file_path = None
-    save_file: Optional[BinaryIO] = None
-    multipass_file = None
-    content_stream: Union[BinaryIO, MinimalInputStream, None] = (
-        cast(Union[BinaryIO, MinimalInputStream],
-             content) if content_format == ContentFormat.STREAM else None
-    )
-    try:
-        if content_format in [ContentFormat.FILE, ContentFormat.TEMP_FILE]:
-            assert type(content) is str
-            try:
-                content_stream = cast(BinaryIO, fetch_file(
-                    mc.ctx, content, stream=True))
-            except ScrepFetchError as ex:
-                log(mc.ctx, Verbosity.ERROR,
-                    f"{context}: failed to open file '{truncate(content)}': {str(ex)}")
-                return
-            if content_format == ContentFormat.TEMP_FILE:
-                temp_file_path = content
-            content = content_stream
-            if mc.need_output_multipass:
-                multipass_file = content_stream
-
-        output_formatters = []
-        if mc.content_print_format:
-            output_formatters.append(OutputFormatter(
-                mc.content_print_format, cm, sys.stdout.buffer, content
-            ))
-
-        if save_path:
-            try:
-                use_as_multipass = (
-                    mc.need_output_multipass
-                    and multipass_file is None
-                    and mc.content_write_format == DEFAULT_CWF
-                )
-                save_file = cast(BinaryIO, open(
-                    save_path,
-                    ("w" if mc.overwrite_files else "x")
-                    + "b"
-                    + ("+" if use_as_multipass else "")
-                ))
-                if use_as_multipass:
-                    multipass_file = save_file
-            except FileExistsError:
-                log(mc.ctx, Verbosity.ERROR,
-                    f"{context}: file already exists: {save_path}")
-                return
-            except OSError as ex:
-                log(
-                    mc.ctx, Verbosity.ERROR,
-                    f"{context}: failed to write to file '{save_path}': {str(ex)}"
-                )
-                return
-
-            output_formatters.append(OutputFormatter(
-                cast(str, mc.content_write_format), cm, save_file, content
-            ))
-
-        if content_stream is None:
-            for of in output_formatters:
-                res = of.advance()
-                assert res == False
-            return
-
-        if mc.need_output_multipass and multipass_file is None:
-            try:
-                temp_file_path, _filename = gen_dl_temp_name(
-                    mc.ctx, save_path)
-                temp_file = open(temp_file_path, "xb+")
-            except IOError as ex:
-                log(mc.ctx, Verbosity.ERROR,
-                    f": failed to create temp file '{temp_file_path}': {truncate(str(ex))}")
-                return
-            multipass_file = temp_file
-
-        if content_stream is not None:
-            while True:
-                buf = content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
-                advance_output_formatters(output_formatters, buf)
-                if temp_file:
-                    temp_file.write(buf)
-                if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
-                    if content_stream is not multipass_file:
-                        content_stream.close()
-                        content_stream = None
-                    break
-
-        if multipass_file:
-            while output_formatters:
-                multipass_file.seek(0)
-                while True:
-                    buf = multipass_file.read(DEFAULT_RESPONSE_BUFFER_SIZE)
-                    advance_output_formatters(output_formatters, buf)
-                    if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
-                        break
-
-    finally:
-        if content_stream is not None:
-            content_stream.close()
-        if temp_file is not None:
-            temp_file.close()
-        if temp_file_path is not None:
-            os.remove(temp_file_path)
-        if save_file is not None:
-            save_file.close()
-
-
 def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
@@ -2397,10 +2461,11 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return res
             save_path = input("enter new save path: ")
     cm.mc.ci += 1
+    job = DownloadJob(cm, save_path)
     if cm.mc.ctx.dl_manager is not None:
-        cm.mc.ctx.dl_manager.submit(DownloadJob(cm, save_path))
+        cm.mc.ctx.dl_manager.submit(job)
     else:
-        download_content(cm, save_path)
+        job.download_content()
 
     return InteractiveResult.ACCEPT
 
