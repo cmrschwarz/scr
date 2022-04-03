@@ -18,6 +18,7 @@ import requests
 import sys
 import select
 import re
+import datetime
 import os
 from string import Formatter
 import readline
@@ -313,6 +314,7 @@ class RegexMatch:
 class Document:
     document_type: DocumentType
     path: str
+    path_parsed: urllib.parse.ParseResult
     encoding: Optional[str]
     forced_encoding: bool
     text: Optional[str]
@@ -326,10 +328,15 @@ class Document:
         src_mc: Optional['MatchChain'],
         match_chains: list['MatchChain'] = None,
         expand_match_chains_above: Optional[int] = None,
-        regex_match: Optional[RegexMatch] = None
+        regex_match: Optional[RegexMatch] = None,
+        path_parsed: Optional[urllib.parse.ParseResult] = None
     ) -> None:
         self.document_type = document_type
         self.path = path
+        if path_parsed is not None:
+            self.path_parsed = path_parsed
+        else:
+            self.path_parsed = urllib.parse.urlparse(path)
         self.encoding = None
         self.forced_encoding = False
         self.text = None
@@ -738,6 +745,7 @@ class ContentMatch:
     # matching or link normalization
     lmatch: Optional[str] = None
     cmatch: Optional[str] = None
+    url_parsed: Optional[urllib.parse.ParseResult]
 
     def __init__(
         self,
@@ -1048,6 +1056,7 @@ class DownloadJob:
             self.content = self.cm.cmatch
             self.content_format = ContentFormat.STRING
         else:
+            path_parsed = cast(str, self.cm.url_parsed)
             if not self.cm.mc.need_content_download:
                 self.content_format = ContentFormat.UNNEEDED
             else:
@@ -1058,21 +1067,27 @@ class DownloadJob:
                     if self.content is None:
                         return False
                 else:
-                    if (
-                        self.cm.doc.document_type.derived_type() is DocumentType.FILE
-                        and urllib.parse.urlparse(self.cm.cmatch).scheme != "data"
-                    ):
+                    data = try_read_data_url(self.cm)
+                    if data is not None:
+                        self.content = data
+                        self.content_format = ContentFormat.BYTES
+                        return True
+                    if self.cm.doc.document_type.derived_type() is DocumentType.FILE:
                         self.content = path
                         self.content_format = ContentFormat.FILE
-                    else:
-                        try:
-                            self.content, _enc = requests_dl(
-                                self.cm.mc.ctx, path, stream=True)
-                            self.content_format = ContentFormat.STREAM
-                        except ScrepFetchError as ex:
-                            log(self.cm.mc.ctx, Verbosity.ERROR,
-                                f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
-                            return False
+                        return True
+                    try:
+                        self.content, _enc = requests_dl(
+                            self.cm.mc.ctx, path,
+                            cast(urllib.parse.ParseResult,
+                                 self.cm.url_parsed),
+                            stream=True
+                        )
+                        self.content_format = ContentFormat.STREAM
+                    except ScrepFetchError as ex:
+                        log(self.cm.mc.ctx, Verbosity.ERROR,
+                            f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
+                        return False
         return True
 
     def setup_save_file(self) -> bool:
@@ -1178,7 +1193,8 @@ class DownloadJob:
             if self.content_stream is not None:
                 while True:
                     buf = self.content_stream.read(
-                        DEFAULT_RESPONSE_BUFFER_SIZE)
+                        DEFAULT_RESPONSE_BUFFER_SIZE
+                    )
                     advance_output_formatters(self.output_formatters, buf)
                     if self.temp_file:
                         self.temp_file.write(buf)
@@ -2064,7 +2080,7 @@ def selenium_download_external(
         }
     try:
         stream, _enc = requests_dl(
-            cm.mc.ctx, path,
+            cm.mc.ctx, path, cast(urllib.parse.ParseResult, cm.url_parsed),
             load_selenium_cookies(cm.mc.ctx),
             proxies=proxies, stream=True
         )
@@ -2085,9 +2101,8 @@ def selenium_download_internal(
     if doc_url_str is None:
         return None, ContentFormat.TEMP_FILE
     doc_url = urllib.parse.urlparse(doc_url_str)
-    link_url = urllib.parse.urlparse(cm.cmatch)
 
-    if doc_url.netloc != link_url.netloc:
+    if doc_url.netloc != cast(urllib.parse.ParseResult, cm.url_parsed).netloc:
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{cm.cmatch}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
@@ -2196,7 +2211,10 @@ def selenium_download_fetch(
 def selenium_download(
     cm: ContentMatch, filepath: Optional[str] = None
 ) -> tuple[Union[str, bytes, MinimalInputStream, None], ContentFormat]:
-    if cm.doc.document_type == DocumentType.FILE and urllib.parse.urlparse(cm.cmatch).scheme in ["", "file"]:
+    if (
+        cm.doc.document_type == DocumentType.FILE
+        and cast(urllib.parse.ParseResult, cm.url_parsed).scheme in ["", "file"]
+    ):
         return selenium_download_from_local_file(cm, filepath)
 
     if cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
@@ -2225,22 +2243,28 @@ def fetch_file(ctx: ScrepContext, path: str, stream: bool = False) -> Union[byte
         raise ScrepFetchError(truncate(str(ex))) from ex
 
 
-def requests_dl(
-    ctx: ScrepContext, path: str,
-    cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
-    proxies=None, stream=False
-) -> tuple[Union[MinimalInputStream, bytes], Optional[str]]:
-    url = urllib.parse.urlparse(path)
-    if url.scheme == "data":
-        res = urllib.request.urlopen(path, timeout=ctx.request_timeout_seconds)
-        if stream:
-            return res, None
+def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
+    assert cm.url_parsed is not None
+    if cm.url_parsed.scheme == "data":
+        res = urllib.request.urlopen(
+            cast(str, cm.cmatch),
+            timeout=cm.mc.ctx.request_timeout_seconds
+        )
         try:
             data = res.read()
         finally:
             res.close()
-        return data, None
-    hostname = url.hostname if url.hostname else ""
+        return data
+    return None
+
+
+def requests_dl(
+    ctx: ScrepContext, path: str, path_parsed: urllib.parse.ParseResult,
+    cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
+    proxies=None, stream=False
+) -> tuple[Union[MinimalInputStream, bytes, None], Optional[str]]:
+
+    hostname = path_parsed.hostname if path_parsed.hostname else ""
     if cookie_dict is None:
         cookie_dict = ctx.cookie_dict
     cookies = {
@@ -2314,7 +2338,8 @@ def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
     assert doc.document_type == DocumentType.URL
 
     data, encoding = cast(tuple[bytes, str], requests_dl(
-        ctx, doc.path, stream=False))
+        ctx, doc.path, doc.path_parsed
+    ))
     if data is None:
         raise ScrepFetchError("empty response")
     doc.encoding = encoding
@@ -2332,11 +2357,13 @@ def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
         return buf.read()
 
 
-def normalize_link(ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Document, doc_path: Optional[str], link: str) -> str:
-    url_parsed = urllib.parse.urlparse(link)
+def normalize_link(
+    ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Document,
+    doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
+) -> tuple[str, urllib.parse.ParseResult]:
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == DocumentType.FILE:
-        if not url_parsed.scheme:
+        if not link_parsed.scheme:
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
@@ -2346,27 +2373,27 @@ def normalize_link(ctx: ScrepContext, mc: Optional[MatchChain], src_doc: Documen
                             base = src_doc.path
                 else:
                     base = src_doc.path
-                return os.path.normpath(os.path.join(os.path.dirname(base), link))
-        return link
-
-    if doc_url_parsed and url_parsed.netloc == "" and src_doc.document_type == DocumentType.URL:
-        url_parsed = url_parsed._replace(netloc=doc_url_parsed.netloc)
+                link = os.path.normpath(
+                    os.path.join(os.path.dirname(base), link))
+                return link, urllib.parse.urlparse(link)
+        return link, link_parsed
+    if doc_url_parsed and link_parsed.netloc == "" and src_doc.document_type == DocumentType.URL:
+        link_parsed = link_parsed._replace(netloc=doc_url_parsed.netloc)
 
     # for urls like 'google.com' urllib makes this a path instead of a netloc
-    if url_parsed.netloc == "" and not doc_url_parsed and url_parsed.scheme == "" and url_parsed.path != "" and link[0] not in [".", "/"]:
-        url_parsed = url_parsed._replace(path="", netloc=url_parsed.path)
+    if link_parsed.netloc == "" and not doc_url_parsed and link_parsed.scheme == "" and link_parsed.path != "" and link[0] not in [".", "/"]:
+        link_parsed = link_parsed._replace(path="", netloc=link_parsed.path)
     if (mc and mc.forced_document_scheme):
-        url_parsed = url_parsed._replace(scheme=mc.forced_document_scheme)
-    elif url_parsed.scheme == "":
+        link_parsed = link_parsed._replace(scheme=mc.forced_document_scheme)
+    elif link_parsed.scheme == "":
         if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme not in ["", "file"]:
             scheme = doc_url_parsed.scheme
         elif mc:
             scheme = mc.default_document_scheme
         else:
             scheme = FALLBACK_DOCUMENT_SCHEME
-        url_parsed = url_parsed._replace(scheme=scheme)
-    res = url_parsed.geturl()
-    return res
+        link_parsed = link_parsed._replace(scheme=scheme)
+    return link_parsed.geturl(), link_parsed
 
 
 def get_ci_di_context(mc: MatchChain, di: Optional[int], ci: Optional[int]) -> str:
@@ -2407,6 +2434,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
 
     while True:
         if not cm.mc.content_raw:
+            cm.url_parsed = urllib.parse.urlparse(cm.cmatch)
             if cm.mc.ctx.selenium_variant == SeleniumVariant.DISABLED:
                 doc_url = cm.doc.path
             else:
@@ -2415,8 +2443,8 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return InteractiveResult.ERROR
                 doc_url = sel_url
 
-            cm.cmatch = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.cmatch
+            cm.cmatch, cm.url_parsed = normalize_link(
+                cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.cmatch, cm.url_parsed
             )
         content_type = "content match" if cm.mc.content_raw else "content link"
         if cm.mc.content.interactive:
@@ -2463,7 +2491,6 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                         cm.cmatch = cm.cmatch[:i]
                         break
         break
-
     if cm.mc.label.interactive:
         while True:
             if not cm.mc.is_valid_label(cm.lmatch):
@@ -2669,8 +2696,10 @@ def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> l
             ndoc.dfmatch = mc.document.apply_format(
                 ContentMatch(None, None, mc, ndoc), rm
             )
-            ndoc.path = normalize_link(
-                mc.ctx, mc, doc, last_doc_path, ndoc.dfmatch)
+            ndoc.path, ndoc.path_parsed = normalize_link(
+                mc.ctx, mc, doc, last_doc_path, ndoc.dfmatch,
+                urllib.parse.urlparse(ndoc.dfmatch)
+            )
             document_matches.append(ndoc)
 
     return document_matches
@@ -3259,18 +3288,21 @@ def apply_doc_arg(
         extend_chains_above = len(ctx.match_chains)
     else:
         extend_chains_above = None
+    path, path_parsed = normalize_link(
+        ctx,
+        None,
+        Document(doctype.url_handling_type(), "", None),
+        None,
+        path,
+        urllib.parse.urlparse(path)
+    )
     doc = Document(
         doctype,
-        normalize_link(
-            ctx,
-            None,
-            Document(doctype.url_handling_type(), "", None),
-            None,
-            path
-        ),
+        path,
         None,
         mcs,
-        extend_chains_above
+        extend_chains_above,
+        path_parsed=path_parsed
     )
     ctx.docs.append(doc)
     return True
