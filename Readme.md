@@ -107,7 +107,7 @@ screp [OPTIONS]
         df=<format string>  document format string
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
-        dm=<bool>           allow multiple document matches in one document instead of picking the first
+        dmm=<bool>           allow multiple document matches in one document instead of picking the first
         din=<bool>          give a prompt to ignore a potential document match
         denc=<encoding>     default document encoding to use for following documents, default is utf-8
         dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently
@@ -149,7 +149,7 @@ screp [OPTIONS]
         <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {name},
                             the unnamed ones (...) as {dg<unnamed capture group number>}
         {df}                document link after applying df
-        {dm}                final document link after user interaction (din)
+        {d}                 final document link after user interaction (din)
 
         {di}                document index
         {ci}                content index

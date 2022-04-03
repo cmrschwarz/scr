@@ -1,7 +1,7 @@
 {
     "args": [
         "lr=.",
-        "csf={lm}",
+        "csf={l}",
         "cwf={xxx}"
     ],
     "ec": 1,
