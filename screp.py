@@ -1107,6 +1107,15 @@ class DownloadJob:
             self.multipass_file = self.content_stream
         return True
 
+    def setup_print_output(self) -> bool:
+        if self.cm.mc.content_print_format is None:
+            return True
+        self.output_formatters.append(OutputFormatter(
+            self.cm.mc.content_print_format, self.cm,
+            self.print_stream, self.content
+        ))
+        return True
+
     def download_content(self) -> None:
         if not self.fetch_content():
             return
@@ -1122,11 +1131,8 @@ class DownloadJob:
             if not self.setup_save_file():
                 return
 
-            if self.cm.mc.content_print_format:
-                self.output_formatters.append(OutputFormatter(
-                    self.cm.mc.content_print_format, self.cm,
-                    sys.stdout.buffer, self.content
-                ))
+            if not self.setup_print_output():
+                return
 
             if self.content_stream is None:
                 for of in self.output_formatters:
@@ -1169,6 +1175,8 @@ class DownloadJob:
                             break
 
         finally:
+            if self.print_stream is not None:
+                self.print_stream.close()
             if self.content_stream is not None:
                 self.content_stream.close()
             if self.temp_file is not None:
@@ -1229,7 +1237,13 @@ class DownloadManager:
                     return
                 job = self.queued_jobs.pop(0)
                 self.idle_threads -= 1
-            job.download_content()
+            try:
+                job.download_content()
+            except BrokenPipeError:
+                # Python flushes standard streams on exit; redirect remaining output
+                # to devnull to avoid another BrokenPipeError at shutdown
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+                sys.exit(1)
 
     def terminate(self, cancel_running: bool = False):
         if cancel_running:
@@ -1881,7 +1895,8 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
         setup_selenium(ctx)
 
     # TODO: for now we always construct one, later this should be conditional
-    ctx.dl_manager = DownloadManager(ctx)
+    if ctx.dl_manager is None:
+        ctx.dl_manager = DownloadManager(ctx)
 
 
 def parse_prompt_option(
@@ -2919,7 +2934,10 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
 
 def finalize(ctx: ScrepContext) -> None:
     if ctx.dl_manager:
-        ctx.dl_manager.terminate()
+        try:
+            ctx.dl_manager.terminate()
+        finally:
+            ctx.dl_manager = None
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
