@@ -896,6 +896,7 @@ class PrintOutputManager:
     size_limit: int
     dl_ids: int = 0
     active_id: int = 0
+    main_thread_id: Optional[int] = None
 
     def __init__(self, max_buffer_size=DEFAULT_MAX_PRINT_BUFFER_CAPACITY):
         self.lock = threading.Lock()
@@ -904,11 +905,17 @@ class PrintOutputManager:
         self.size_limit = max_buffer_size
         self.size_blocked = threading.Condition(self.lock)
 
+    def wait_on_main_thread(self):
+        self.main_thread_id = self.request_print_access()
+
+    def main_thread_done(self):
+        if self.main_thread_id is not None:
+            self.declare_done(self.main_thread_id)
+            self.main_thread_id = None
+
     def print(self, id: int, buffer: bytes):
         is_active = False
-        buffer_blocked = False
-        try:
-            self.lock.acquire()
+        with self.lock:
             while True:
                 if id == self.active_id:
                     is_active = True
@@ -916,17 +923,12 @@ class PrintOutputManager:
                     self.size_limit += sum(
                         map(lambda b: len(b), stored_buffers)
                     )
+                    break
                 elif self.size_limit > len(buffer):
                     self.size_limit -= len(buffer)
-                    stored_buffers = self.printing_buffers[id]
-                else:
-                    buffer_blocked = True
-                if not buffer_blocked:
+                    self.printing_buffers[id].append(buffer)
                     break
                 self.size_blocked.wait()
-                buffer_blocked = False
-        finally:
-            self.lock.release()
         if is_active:
             for b in stored_buffers:
                 sys.stdout.buffer.write(b)
@@ -934,7 +936,6 @@ class PrintOutputManager:
             if(stored_buffers):
                 self.size_blocked.notifyAll()
             return
-        stored_buffers.append(buffer)
 
     def request_print_access(self) -> int:
         with self.lock:
@@ -945,27 +946,43 @@ class PrintOutputManager:
         return id
 
     def declare_done(self, id: int):
-        buffers_to_print = []
         new_active_id = None
+        buffers_to_print: list[list[bytes]] = []
         with self.lock:
-            if self.active_id == id:
-                new_active_id = self.active_id + 1
-                while new_active_id in self.finished_queues:
+            if self.active_id != id:
+                self.finished_queues.add(id)
+                return
+
+            new_active_id = self.active_id + 1
+            while new_active_id in self.finished_queues:
+                self.finished_queues.remove(new_active_id)
+                buffers_to_print.append(
+                    self.printing_buffers.pop(new_active_id)
+                )
+                new_active_id += 1
+        while True:
+            for bl in buffers_to_print:
+                for b in bl:
+                    sys.stdout.buffer.write(b)
+            # after we printed and reacquire the lock, the job
+            # that we want to give the active_id token to
+            # might have finished already, in which case we have to print him too
+            buffers_to_print.clear()
+            with self.lock:
+                self.active_id = new_active_id
+                if new_active_id not in self.finished_queues:
+                    new_active_id = None
+                    break
+                while True:
                     self.finished_queues.remove(new_active_id)
                     buffers_to_print.append(
                         self.printing_buffers.pop(new_active_id)
                     )
                     new_active_id += 1
-            else:
-                self.finished_queues.add(id)
-        if not new_active_id:
-            return
-        for bl in buffers_to_print:
-            for b in bl:
-                sys.stdout.buffer.write(b)
-        sys.stdout.flush()
-        with self.lock:
-            self.active_id = new_active_id
+                    if new_active_id not in self.finished_queues:
+                        break
+            if new_active_id is None:
+                break
 
     def flush(self, id: int):
         with self.lock:
@@ -1124,10 +1141,6 @@ class DownloadJob:
         return True
 
     def download_content(self) -> bool:
-        if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
-            # for debug we allready log a more extensive variant of this
-            log(self.cm.mc.ctx, Verbosity.INFO,
-                f"started downloading {self.cm.cmatch}")
         if not self.fetch_content():
             return False
 
@@ -1160,8 +1173,6 @@ class DownloadJob:
                         self.cm.mc.ctx, self.save_path)
                     self.temp_file = open(self.temp_file_path, "xb+")
                 except IOError as ex:
-                    log(self.cm.mc.ctx, Verbosity.ERROR,
-                        f": failed to create temp file '{self.temp_file_path}': {truncate(str(ex))}")
                     return False
                 self.multipass_file = self.temp_file
 
@@ -1199,9 +1210,6 @@ class DownloadJob:
                 os.remove(self.temp_file_path)
             if self.save_file is not None:
                 self.save_file.close()
-        if self.cm.mc.ctx.verbosity < Verbosity.DEBUG:
-            log(self.cm.mc.ctx, Verbosity.INFO,
-                f"finished downloading {self.cm.cmatch}")
         return True
 
 
@@ -1249,7 +1257,6 @@ class DownloadManager:
     def run_worker(self, id: int):
         try:
             while True:
-                all_idle = False
                 job = None
                 with self.lock:
                     self.idle_threads += 1
@@ -1264,12 +1271,18 @@ class DownloadManager:
                     job = self.pending_jobs.pop(0)
                     self.idle_threads -= 1
                     log(self.ctx, Verbosity.DEBUG,
-                        f"thread #{id} started downloading {job.cm.cmatch}"
+                        f"thread #{id}: started downloading {job.cm.cmatch}"
                         )
                     if job.download_content():
-                        log(self.ctx, Verbosity.DEBUG,
-                            f"thread #{id} finished downloading {job.cm.cmatch}"
-                            )
+                        log(
+                            self.ctx, Verbosity.DEBUG,
+                            f"thread #{id}: finished downloading {job.cm.cmatch}"
+                        )
+                    else:
+                        log(
+                            self.ctx, Verbosity.DEBUG,
+                            f"thread #{id}: failed to download {job.cm.cmatch}"
+                        )
         except KeyboardInterrupt:
             sys.exit(1)
         except BrokenPipeError:
@@ -1942,6 +1955,7 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
         ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads)
+        ctx.dl_manager.pom.wait_on_main_thread()
 
 
 def parse_prompt_option(
@@ -2982,6 +2996,7 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
 def finalize(ctx: ScrepContext) -> None:
     if ctx.dl_manager:
         try:
+            ctx.dl_manager.pom.main_thread_done()
             ctx.dl_manager.terminate()
         finally:
             ctx.dl_manager = None
@@ -3392,6 +3407,7 @@ def run_repl(ctx: ScrepContext) -> int:
                 except ScrepMatchError as ex:
                     log(ctx, Verbosity.ERROR, str(ex))
                 if ctx.dl_manager:
+                    ctx.dl_manager.pom.main_thread_done()
                     ctx.dl_manager.wait_until_jobs_done()
             except KeyboardInterrupt:
                 print("")
