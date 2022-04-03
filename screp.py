@@ -561,8 +561,7 @@ class Locator(ConfigDataClass):
         return res, res_xml
 
     def match_regex(
-        self, xmatch: str, path: str,
-        default: list[RegexMatch] = []
+        self, xmatch: str, default: list[RegexMatch] = []
     ) -> list[RegexMatch]:
         if self.regex is None or xmatch is None:
             return default
@@ -1036,6 +1035,9 @@ class DownloadJob:
         )
         self.output_formatters = []
 
+    def requires_download(self):
+        return self.cm.mc.need_content_download
+
     def setup_print_stream(self, dm: 'DownloadManager'):
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(dm.pom)
@@ -1131,7 +1133,7 @@ class DownloadJob:
         if self.cm.mc.content_print_format is None:
             return True
         if self.print_stream is not None:
-            stream = self.print_stream
+            stream: Union[PrintOutputStream, BinaryIO] = self.print_stream
         else:
             stream = sys.stdout.buffer
         self.output_formatters.append(OutputFormatter(
@@ -2539,7 +2541,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
             save_path = input("enter new save path: ")
     cm.mc.ci += 1
     job = DownloadJob(cm, save_path)
-    if cm.mc.ctx.dl_manager is not None:
+    if cm.mc.ctx.dl_manager is not None and job.requires_download():
         cm.mc.ctx.dl_manager.submit(job)
     else:
         job.download_content()
@@ -2568,7 +2570,7 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
         return res
 
 
-def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatch], int]:
+def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tuple[list[ContentMatch], int]:
     content_matches = []
     text = cast(str, doc.text)
     xmatches, xmatches_xml = mc.content.match_xpath(
@@ -2581,13 +2583,14 @@ def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatc
             mc.ctx, doc.xml, doc.path, ([text], []))
         for lxmatch in lxmatches:
             label_regex_matches.extend(mc.label.match_regex(
-                text, doc.path, [RegexMatch(lxmatch, lxmatch)])
-            )
+                text, [RegexMatch(lxmatch, lxmatch)]
+            ))
     match_index = 0
     labels_none_for_n = 0
     for xmatch in xmatches:
         content_regex_matches = mc.content.match_regex(
-            xmatch, doc.path, [RegexMatch(xmatch, xmatch)])
+            xmatch, [RegexMatch(xmatch, xmatch)]
+        )
         if mc.labels_inside_content and mc.label.xpath:
             xmatch_xml = (
                 cast(list[lxml.html.HtmlElement], xmatches_xml)[match_index]
@@ -2599,7 +2602,8 @@ def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatc
                 mc.ctx, xmatch_xml, doc.path, ([text], []))
             for lxmatch in lxmatches:
                 label_regex_matches.extend(mc.label.match_regex(
-                    text, doc.path, [RegexMatch(lxmatch, lxmatch)]))
+                    text, [RegexMatch(lxmatch, lxmatch)])
+                )
             if len(label_regex_matches) == 0:
                 if not mc.label_allow_missing:
                     labels_none_for_n += len(content_regex_matches)
@@ -2612,8 +2616,7 @@ def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatc
             if mc.labels_inside_content:
                 if not mc.label.xpath:
                     label_regex_matches = mc.label.match_regex(
-                        crm.rmatch, doc.path,
-                        [RegexMatch(crm.rmatch, crm.rmatch)]
+                        crm.rmatch, [RegexMatch(crm.rmatch, crm.rmatch)]
                     )
                     if len(label_regex_matches) == 0:
                         if not mc.label_allow_missing:
@@ -2638,7 +2641,7 @@ def gen_content_matches(mc: MatchChain, doc: Document) -> tuple[list[ContentMatc
     return content_matches, labels_none_for_n
 
 
-def gen_document_matches(mc: MatchChain, doc: Document) -> list[Document]:
+def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> list[Document]:
     document_matches = []
     base_dir = os.path.dirname(doc.path)
     xmatches, _xml = mc.document.match_xpath(
@@ -2646,7 +2649,7 @@ def gen_document_matches(mc: MatchChain, doc: Document) -> list[Document]:
     )
     for xmatch in xmatches:
         rmatches = mc.document.match_regex(
-            xmatch, doc.path, [RegexMatch(xmatch, xmatch)]
+            xmatch, [RegexMatch(xmatch, xmatch)]
         )
         for rm in rmatches:
             ndoc = Document(
@@ -2660,13 +2663,8 @@ def gen_document_matches(mc: MatchChain, doc: Document) -> list[Document]:
             ndoc.dfmatch = mc.document.apply_format(
                 ContentMatch(None, None, mc, ndoc), rm
             )
-            if not os.path.isabs(ndoc.dfmatch):
-                ndoc.path = os.path.normpath(
-                    os.path.join(base_dir, ndoc.dfmatch)
-                )
-            else:
-                ndoc.path = ndoc.dfmatch
-
+            ndoc.path = normalize_link(
+                mc.ctx, mc, doc, last_doc_path, ndoc.dfmatch)
             document_matches.append(ndoc)
 
     return document_matches
@@ -2686,6 +2684,7 @@ def handle_interactive_chains(
     ctx: ScrepContext,
     interactive_chains: list[MatchChain],
     doc: Document,
+    last_doc_path: str,
     try_number: int, last_msg: str
 ) -> tuple[Optional[InteractiveResult], str]:
     content_count = 0
@@ -2702,7 +2701,7 @@ def handle_interactive_chains(
         if mc.need_content_matches():
             have_content_matching = True
 
-    msg = f"{doc.path}: use page with potentially"
+    msg = f"{last_doc_path}: use page with potentially"
     if have_content_matching:
         lpad, rpad = make_padding(ctx, content_count)
         msg += f'{lpad}< {content_count} >{rpad} content'
@@ -2759,15 +2758,15 @@ def handle_interactive_chains(
     return result, msg
 
 
-def handle_match_chain(mc: MatchChain, doc: Document) -> tuple[bool, bool]:
+def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path) -> tuple[bool, bool]:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc)
+            mc, doc, last_doc_path)
     else:
         content_matches = []
 
     if mc.need_document_matches(True):
-        document_matches = gen_document_matches(mc, doc)
+        document_matches = gen_document_matches(mc, doc, last_doc_path)
     else:
         document_matches = []
 
@@ -2893,6 +2892,7 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
+        last_doc_path = doc.path
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
@@ -2931,8 +2931,9 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
             if try_number > 1 and not static_content:
                 assert(ctx.selenium_variant != SeleniumVariant.DISABLED)
                 try:
-                    src_new = cast(SeleniumWebDriver,
-                                   ctx.selenium_driver).page_source
+                    drv = cast(SeleniumWebDriver, ctx.selenium_driver)
+                    last_doc_path = drv.current_url
+                    src_new = drv.page_source
                     same_content = (src_new == doc.text)
                     doc.text = src_new
                 except SeleniumWebDriverException as ex:
@@ -2953,7 +2954,8 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
                 for mc in doc.match_chains:
                     if mc.satisfied:
                         continue
-                    waiting, interactive = handle_match_chain(mc, doc)
+                    waiting, interactive = handle_match_chain(
+                        mc, doc, last_doc_path)
                     if not waiting:
                         mc.satisfied = True
                         unsatisfied_chains -= 1
@@ -2964,7 +2966,9 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
 
             if interactive_chains:
                 accept, last_msg = handle_interactive_chains(
-                    ctx, interactive_chains, doc, try_number, last_msg)
+                    ctx, interactive_chains, doc,
+                    last_doc_path, try_number, last_msg
+                )
                 sat = (accept == InteractiveResult.ACCEPT)
                 if accept:
                     for mc in interactive_chains:
@@ -3423,7 +3427,7 @@ def parse_args(ctx: ScrepContext, args: Iterable[str]) -> None:
             or (begins(arg, "help=") and parse_bool_arg(arg[len("help="):], arg))
         ):
             help()
-
+            sys.exit(0)
          # content args
         if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg):
             continue
