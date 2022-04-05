@@ -707,8 +707,8 @@ class MatchChain(ConfigDataClass):
             dcm.doc.dfmatch = ""
         if self.content.multimatch:
             dcm.ci = 0
-        if self.document.multimatch:
-            self.di = 0
+        if self.has_document_matching:
+            dcm.di = 0
         return dcm
 
     def accepts_content_matches(self) -> bool:
