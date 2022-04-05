@@ -22,7 +22,7 @@ import sys
 import xml.sax.saxutils
 import select
 import re
-import datetime
+import concurrent.futures
 import os
 from string import Formatter
 import readline
@@ -1167,15 +1167,17 @@ class DownloadJob:
         return True
 
     def download_content(self) -> bool:
-        if not self.fetch_content():
-            return False
-
-        self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
-            cast(Union[BinaryIO, MinimalInputStream], self.content)
-            if self.content_format == ContentFormat.STREAM
-            else None
-        )
+        success = False
         try:
+            if not self.fetch_content():
+                return False
+
+            self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
+                cast(Union[BinaryIO, MinimalInputStream], self.content)
+                if self.content_format == ContentFormat.STREAM
+                else None
+            )
+
             if not self.setup_content_file():
                 return False
             if not self.setup_save_file():
@@ -1188,6 +1190,7 @@ class DownloadJob:
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
+                success = True
                 return True
 
             if self.cm.mc.need_output_multipass and self.multipass_file is None:
@@ -1222,7 +1225,8 @@ class DownloadJob:
                         advance_output_formatters(self.output_formatters, buf)
                         if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
                             break
-
+            success = True
+            return True
         finally:
             if self.print_stream is not None:
                 self.print_stream.close()
@@ -1234,103 +1238,42 @@ class DownloadJob:
                 os.remove(self.temp_file_path)
             if self.save_file is not None:
                 self.save_file.close()
-        return True
+            log(self.cm.mc.ctx, Verbosity.DEBUG,
+                f"finished downloading {self.cm.cmatch}" if success else f"failed to download {self.cm.cmatch}"
+                )
 
 
 class DownloadManager:
     ctx: ScrepContext
     threads: list[threading.Thread]
     max_threads: int
-    pending_jobs: list[DownloadJob]
-    running_jobs: list[DownloadJob]
-    finished_jobs: list[DownloadJob]
-    lock: threading.Lock
-    queue_slots: threading.Semaphore
-    all_threads_idle: threading.Condition
+    pending_jobs: list[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
+    executor: concurrent.futures.ThreadPoolExecutor
 
     def __init__(self, ctx: ScrepContext, max_threads: int):
         self.ctx = ctx
         self.max_threads = max_threads
         self.pending_jobs = []
-        self.running_jobs = []
-        self.finished_jobs = []
         self.threads = []
         self.idle_threads: int = 0
-        self.lock = threading.Lock()
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_threads)
         self.pending_job_count = threading.Semaphore(value=0)
         self.pom = PrintOutputManager()
-        self.all_threads_idle = threading.Condition(self.lock)
 
     def submit(self, dj: DownloadJob):
         log(self.ctx, Verbosity.DEBUG,
             f"enqueuing download for {dj.cm.cmatch}"
             )
         dj.setup_print_stream(self)
-        t = None
-        with self.lock:
-            self.pending_jobs.append(dj)
-            thread_count = len(self.threads)
-            if len(self.threads) < self.max_threads and self.idle_threads == 0:
-                t = threading.Thread(target=self.run_worker,
-                                     args=(thread_count + 1,))
-                self.threads.append(t)
-        self.pending_job_count.release()
-        if t:
-            log(self.ctx, Verbosity.DEBUG,
-                f"starting downloading thread #{thread_count + 1}")
-            t.start()
-
-    def run_worker(self, id: int):
-        try:
-            while True:
-                job = None
-                with self.lock:
-                    self.idle_threads += 1
-                    if (self.idle_threads == len(self.threads)):
-                        self.all_threads_idle.notifyAll()
-                self.pending_job_count.acquire()
-                with self.lock:
-                    if not self.pending_jobs:
-                        # the semaphore only lets us through without present jobs
-                        # if the process wants to terminate
-                        return
-                    job = self.pending_jobs.pop(0)
-                    self.idle_threads -= 1
-                log(self.ctx, Verbosity.DEBUG,
-                    f"thread #{id}: started downloading {job.cm.cmatch}"
-                    )
-                if job.download_content():
-                    log(
-                        self.ctx, Verbosity.DEBUG,
-                        f"thread #{id}: finished downloading {job.cm.cmatch}"
-                    )
-                else:
-                    log(
-                        self.ctx, Verbosity.DEBUG,
-                        f"thread #{id}: failed to download {job.cm.cmatch}"
-                    )
-        except KeyboardInterrupt:
-            sys.exit(1)
-        except BrokenPipeError:
-            abort_on_broken_pipe()
+        self.pending_jobs.append(self.executor.submit(dj.download_content))
 
     def wait_until_jobs_done(self):
-        with self.lock:
-            while True:
-                launched_threads = len(self.threads)
-                idle_threads = self.idle_threads
-                if launched_threads == idle_threads:
-                    return
-                self.all_threads_idle.wait()
+        concurrent.futures.wait(self.pending_jobs)
 
     def terminate(self, cancel_running: bool = False):
-        if cancel_running:
-            with self.lock:
-                self.pending_jobs.clear()
-        self.pending_job_count.release(self.max_threads)
-        for t in self.threads:
-            t.join()
+        self.executor.shutdown(wait=True, cancel_futures=cancel_running)
 
 
 def abort_on_broken_pipe():
