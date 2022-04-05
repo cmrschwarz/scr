@@ -1716,6 +1716,23 @@ def selenium_add_cookies_through_get(ctx: ScrepContext) -> None:
             ctx.selenium_driver.add_cookie(c)
 
 
+def new_start(*args, **kwargs):
+    def preexec_function():
+        # signal.signal(signal.SIGINT, signal.SIG_IGN) # this one didn't worked for me
+        os.setpgrp()
+    default_Popen = subprocess.Popen
+    subprocess.Popen = functools.partial(
+        subprocess.Popen, preexec_fn=preexec_function)
+    try:
+        new_start.default_start(*args, **kwargs)
+    finally:
+        subprocess.Popen = default_Popen
+
+
+new_start.default_start = selenium.webdriver.common.service.Service.start
+selenium.webdriver.common.service.Service.start = new_start
+
+
 def setup_selenium(ctx: ScrepContext) -> None:
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
