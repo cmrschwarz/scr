@@ -16,6 +16,7 @@ import lxml.etree
 import lxml.html
 import requests
 import sys
+import xml.sax.saxutils
 import select
 import re
 import datetime
@@ -26,7 +27,8 @@ import urllib.parse
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
-import selenium.webdriver
+import selenium
+from selenium.webdriver.remote.webelement import WebElement as SeleniumWebElement
 from selenium.webdriver.firefox.service import Service as SeleniumFirefoxService
 from selenium.webdriver.chrome.service import Service as SeleniumChromeService
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
@@ -2312,6 +2314,42 @@ def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Opt
             del output_formatters[i]
 
 
+def selenium_get_full_page_source(ctx: ScrepContext):
+    drv = cast(SeleniumWebDriver, ctx.selenium_driver)
+    text = drv.page_source
+    page_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
+    iframes: list[lxml.html.HtmlElement] = page_xml.xpath("//iframe")
+    if not iframes:
+        return text, page_xml
+    iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
+    for iframe in iframes:
+        iframe_src = iframe.attrib["src"]
+        iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
+        if iframe_src_escaped in iframes_by_source:
+            iframes_by_source[iframe_src_escaped].append(iframe)
+        else:
+            iframes_by_source[iframe_src_escaped] = [iframe]
+
+        for iframe_src_escaped, iframes in iframes_by_source.items():
+            iframe_element = drv.find_element(
+                by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
+            )
+            try:
+                drv.switch_to.frame(iframe_element)
+                iframe_text = drv.page_source
+            finally:
+                drv.switch_to.default_content()
+            iframe_xml = lxml.html.fromstring(iframe_text)
+
+            loaded_iframe_xmls = [iframe_xml]
+            for i in range(len(iframes) - 1):
+                loaded_iframe_xmls.append(copy.deepcopy(iframe_xml))
+            for i in range(len(iframes)):
+                iframes[i].append(loaded_iframe_xmls[i])
+
+    return lxml.html.tostring(page_xml), page_xml
+
+
 def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
@@ -2324,7 +2362,7 @@ def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
                 ScrepFetchError("selenium timeout")
 
         decide_document_encoding(ctx, doc)
-        doc.text = cast(SeleniumWebDriver, ctx.selenium_driver).page_source
+        doc.text, doc.xml = selenium_get_full_page_source(ctx)
         return
     if doc is ctx.reused_doc:
         ctx.reused_doc = None
@@ -2968,9 +3006,10 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
                     last_doc_path = drv.current_url
-                    src_new = drv.page_source
+                    src_new, xml_new = selenium_get_full_page_source(ctx)
                     same_content = (src_new == doc.text)
                     doc.text = src_new
+                    doc.xml = xml_new
                 except SeleniumWebDriverException as ex:
                     if selenium_has_died(ctx):
                         report_selenium_died(ctx)
@@ -2981,7 +3020,7 @@ def dl(ctx: ScrepContext) -> Optional[Document]:
 
             if not same_content:
                 interactive_chains = []
-                if have_xpath_matching:
+                if have_xpath_matching and doc.xml is None:
                     parse_xml(ctx, doc)
                     if doc.xml is None:
                         break
