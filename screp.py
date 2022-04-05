@@ -28,6 +28,7 @@ from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
 from tbselenium.tbdriver import TorBrowserDriver
 import selenium
+import selenium.webdriver.common.by
 from selenium.webdriver.remote.webelement import WebElement as SeleniumWebElement
 from selenium.webdriver.firefox.service import Service as SeleniumFirefoxService
 from selenium.webdriver.chrome.service import Service as SeleniumChromeService
@@ -2318,11 +2319,11 @@ def selenium_get_full_page_source(ctx: ScrepContext):
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     page_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
-    iframes: list[lxml.html.HtmlElement] = page_xml.xpath("//iframe")
-    if not iframes:
+    iframes_xml: list[lxml.html.HtmlElement] = page_xml.xpath("//iframe")
+    if not iframes_xml:
         return text, page_xml
     iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
-    for iframe in iframes:
+    for iframe in iframes_xml:
         iframe_src = iframe.attrib["src"]
         iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
         if iframe_src_escaped in iframes_by_source:
@@ -2331,21 +2332,22 @@ def selenium_get_full_page_source(ctx: ScrepContext):
             iframes_by_source[iframe_src_escaped] = [iframe]
 
         for iframe_src_escaped, iframes in iframes_by_source.items():
-            iframe_element = drv.find_element(
+            iframes_sel = drv.find_elements(
                 by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
             )
-            try:
-                drv.switch_to.frame(iframe_element)
-                iframe_text = drv.page_source
-            finally:
-                drv.switch_to.default_content()
-            iframe_xml = lxml.html.fromstring(iframe_text)
-
-            loaded_iframe_xmls = [iframe_xml]
-            for i in range(len(iframes) - 1):
-                loaded_iframe_xmls.append(copy.deepcopy(iframe_xml))
-            for i in range(len(iframes)):
-                iframes[i].append(loaded_iframe_xmls[i])
+            len_sel = len(iframes_sel)
+            len_xml = len(iframes_xml)
+            if len_sel != len_xml:
+                log(ctx, Verbosity.WARN,
+                    "iframe count diverged for iframe source '{iframe_src_escaped}'")
+            for i in range(0, min(len_sel, len_xml)):
+                try:
+                    drv.switch_to.frame(iframes_sel[i])
+                    loaded_iframe_text = drv.page_source
+                finally:
+                    drv.switch_to.default_content()
+                loaded_iframe_xml = lxml.html.fromstring(loaded_iframe_text)
+                iframes_xml[i].append(loaded_iframe_xml)
 
     return lxml.html.tostring(page_xml), page_xml
 
