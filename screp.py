@@ -1979,6 +1979,7 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
         ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads)
+    if ctx.dl_manager is not None:
         ctx.dl_manager.pom.wait_on_main_thread()
 
 
@@ -2319,11 +2320,12 @@ def selenium_get_full_page_source(ctx: ScrepContext):
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     page_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
-    iframes_xml: list[lxml.html.HtmlElement] = page_xml.xpath("//iframe")
-    if not iframes_xml:
+    iframes_xml_all_sources: list[lxml.html.HtmlElement] = page_xml.xpath(
+        "//iframe")
+    if not iframes_xml_all_sources:
         return text, page_xml
     iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
-    for iframe in iframes_xml:
+    for iframe in iframes_xml_all_sources:
         iframe_src = iframe.attrib["src"]
         iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
         if iframe_src_escaped in iframes_by_source:
@@ -2331,23 +2333,23 @@ def selenium_get_full_page_source(ctx: ScrepContext):
         else:
             iframes_by_source[iframe_src_escaped] = [iframe]
 
-        for iframe_src_escaped, iframes in iframes_by_source.items():
-            iframes_sel = drv.find_elements(
-                by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
-            )
-            len_sel = len(iframes_sel)
-            len_xml = len(iframes_xml)
-            if len_sel != len_xml:
-                log(ctx, Verbosity.WARN,
-                    "iframe count diverged for iframe source '{iframe_src_escaped}'")
-            for i in range(0, min(len_sel, len_xml)):
-                try:
-                    drv.switch_to.frame(iframes_sel[i])
-                    loaded_iframe_text = drv.page_source
-                finally:
-                    drv.switch_to.default_content()
-                loaded_iframe_xml = lxml.html.fromstring(loaded_iframe_text)
-                iframes_xml[i].append(loaded_iframe_xml)
+    for iframe_src_escaped, iframes_xml in iframes_by_source.items():
+        iframes_sel = drv.find_elements(
+            by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
+        )
+        len_sel = len(iframes_sel)
+        len_xml = len(iframes_xml)
+        if len_sel != len_xml:
+            log(ctx, Verbosity.WARN,
+                "iframe count diverged for iframe source '{iframe_src_escaped}'")
+        for i in range(0, min(len_sel, len_xml)):
+            try:
+                drv.switch_to.frame(iframes_sel[i])
+                loaded_iframe_text = drv.page_source
+            finally:
+                drv.switch_to.default_content()
+            loaded_iframe_xml = lxml.html.fromstring(loaded_iframe_text)
+            iframes_xml[i].append(loaded_iframe_xml)
 
     return lxml.html.tostring(page_xml), page_xml
 
@@ -3447,12 +3449,17 @@ def resolve_repl_defaults(
 def run_repl(ctx: ScrepContext) -> int:
     try:
         # run with initial args
-        last_doc = dl(ctx)
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
-
         while True:
             try:
+                try:
+                    last_doc = dl(ctx)
+                except ScrepMatchError as ex:
+                    log(ctx, Verbosity.ERROR, str(ex))
+                if ctx.dl_manager:
+                    ctx.dl_manager.pom.main_thread_done()
+                    ctx.dl_manager.wait_until_jobs_done()
                 if ctx.exit:
                     return ctx.error_code
                 try:
@@ -3485,13 +3492,6 @@ def run_repl(ctx: ScrepContext) -> int:
                     ctx = ctx_old
                     log(ctx, Verbosity.ERROR, str(ex))
                     continue
-                try:
-                    last_doc = dl(ctx)
-                except ScrepMatchError as ex:
-                    log(ctx, Verbosity.ERROR, str(ex))
-                if ctx.dl_manager:
-                    ctx.dl_manager.pom.main_thread_done()
-                    ctx.dl_manager.wait_until_jobs_done()
             except KeyboardInterrupt:
                 print("")
                 continue
