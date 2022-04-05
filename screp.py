@@ -915,7 +915,9 @@ class PrintOutputManager:
         self.size_limit = max_buffer_size
         self.size_blocked = threading.Condition(self.lock)
 
-    def wait_on_main_thread(self):
+    def reset(self):
+        self.active_id = 0
+        self.dl_ids = 0
         self.main_thread_id = self.request_print_access()
 
     def main_thread_done(self):
@@ -1291,19 +1293,19 @@ class DownloadManager:
                         return
                     job = self.pending_jobs.pop(0)
                     self.idle_threads -= 1
-                    log(self.ctx, Verbosity.DEBUG,
-                        f"thread #{id}: started downloading {job.cm.cmatch}"
-                        )
-                    if job.download_content():
-                        log(
-                            self.ctx, Verbosity.DEBUG,
-                            f"thread #{id}: finished downloading {job.cm.cmatch}"
-                        )
-                    else:
-                        log(
-                            self.ctx, Verbosity.DEBUG,
-                            f"thread #{id}: failed to download {job.cm.cmatch}"
-                        )
+                log(self.ctx, Verbosity.DEBUG,
+                    f"thread #{id}: started downloading {job.cm.cmatch}"
+                    )
+                if job.download_content():
+                    log(
+                        self.ctx, Verbosity.DEBUG,
+                        f"thread #{id}: finished downloading {job.cm.cmatch}"
+                    )
+                else:
+                    log(
+                        self.ctx, Verbosity.DEBUG,
+                        f"thread #{id}: failed to download {job.cm.cmatch}"
+                    )
         except KeyboardInterrupt:
             sys.exit(1)
         except BrokenPipeError:
@@ -1980,7 +1982,7 @@ def setup(ctx: ScrepContext, for_repl: bool = False) -> None:
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
         ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads)
     if ctx.dl_manager is not None:
-        ctx.dl_manager.pom.wait_on_main_thread()
+        ctx.dl_manager.pom.reset()
 
 
 def parse_prompt_option(
@@ -3460,6 +3462,7 @@ def run_repl(ctx: ScrepContext) -> int:
                 if ctx.dl_manager:
                     ctx.dl_manager.pom.main_thread_done()
                     ctx.dl_manager.wait_until_jobs_done()
+                sys.stdout.flush()
                 if ctx.exit:
                     return ctx.error_code
                 try:
