@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import functools
+import subprocess
+import selenium.webdriver
 from abc import ABC, abstractmethod
 import multiprocessing
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
@@ -35,6 +38,7 @@ from selenium.webdriver.chrome.service import Service as SeleniumChromeService
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
+import selenium.webdriver.firefox.webdriver
 from collections import deque, OrderedDict
 from enum import Enum, IntEnum
 import time
@@ -2351,7 +2355,7 @@ def selenium_get_full_page_source(ctx: ScrepContext):
             iframes_by_source[iframe_src_escaped].append(iframe)
         else:
             iframes_by_source[iframe_src_escaped] = [iframe]
-
+    #TODO: handle recursive iframes
     for iframe_src_escaped, iframes_xml in iframes_by_source.items():
         iframes_sel = drv.find_elements(
             by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
@@ -3433,7 +3437,7 @@ def resolve_repl_defaults(
         doc_url = None
         try:
             doc_url = ctx_new.selenium_driver.current_url
-        except SeleniumWebDriverException as ex:
+        except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as ex:
             # selenium died, abort
             if selenium_has_died(ctx_new):
                 report_selenium_died(ctx_new)
@@ -3470,18 +3474,18 @@ def run_repl(ctx: ScrepContext) -> int:
         # run with initial args
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
+        try:
+            last_doc = dl(ctx)
+        except ScrepMatchError as ex:
+            log(ctx, Verbosity.ERROR, str(ex))
+        if ctx.dl_manager:
+            ctx.dl_manager.pom.main_thread_done()
+            ctx.dl_manager.wait_until_jobs_done()
+        #TODO: cleanup
+        # NOCKECKIN
+        last_doc = None
         while True:
             try:
-                try:
-                    last_doc = dl(ctx)
-                except ScrepMatchError as ex:
-                    log(ctx, Verbosity.ERROR, str(ex))
-                if ctx.dl_manager:
-                    ctx.dl_manager.pom.main_thread_done()
-                    ctx.dl_manager.wait_until_jobs_done()
-                sys.stdout.flush()
-                if ctx.exit:
-                    return ctx.error_code
                 try:
                     line = input("screp> " if tty else "")
                 except EOFError:
@@ -3512,6 +3516,16 @@ def run_repl(ctx: ScrepContext) -> int:
                     ctx = ctx_old
                     log(ctx, Verbosity.ERROR, str(ex))
                     continue
+                try:
+                    last_doc = dl(ctx)
+                except ScrepMatchError as ex:
+                    log(ctx, Verbosity.ERROR, str(ex))
+                if ctx.dl_manager:
+                    ctx.dl_manager.pom.main_thread_done()
+                    ctx.dl_manager.wait_until_jobs_done()
+                sys.stdout.flush()
+                if ctx.exit:
+                    return ctx.error_code
             except KeyboardInterrupt:
                 print("")
                 continue
