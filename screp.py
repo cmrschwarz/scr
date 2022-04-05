@@ -2386,7 +2386,8 @@ def selenium_get_full_page_source(ctx: ScrepContext):
                 depth -= 1
                 drv.switch_to.parent_frame()
             drv.switch_to.frame(iframe_sel)
-            log(ctx, Verbosity.DEBUG, f"expanding iframe {curr_xml.attrib['src']}")
+            log(ctx, Verbosity.DEBUG,
+                f"expanding iframe {curr_xml.attrib['src']}")
             depth = depth_new
             iframe_xml = lxml.html.fromstring(drv.page_source)
             curr_xml.append(iframe_xml)
@@ -3491,23 +3492,27 @@ def resolve_repl_defaults(
         last_doc.xml = None
 
 
-def run_repl(ctx: ScrepContext) -> int:
+def run_repl(initial_ctx: ScrepContext) -> int:
     try:
         # run with initial args
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
-        try:
-            last_doc = dl(ctx)
-        except ScrepMatchError as ex:
-            log(ctx, Verbosity.ERROR, str(ex))
-        if ctx.dl_manager:
-            ctx.dl_manager.pom.main_thread_done()
-            ctx.dl_manager.wait_until_jobs_done()
-        # TODO: cleanup
-        # NOCKECKIN
-        last_doc = None
+        stable_ctx = initial_ctx
+        ctx: Optional[ScrepContext] = initial_ctx
         while True:
             try:
+                if ctx is not None:
+                    try:
+                        last_doc = dl(ctx)
+                    except ScrepMatchError as ex:
+                        log(ctx, Verbosity.ERROR, str(ex))
+                    if ctx.dl_manager:
+                        ctx.dl_manager.pom.main_thread_done()
+                        ctx.dl_manager.wait_until_jobs_done()
+                    if ctx.exit:
+                        return ctx.error_code
+                    stable_ctx = ctx
+                    ctx = None
                 try:
                     line = input("screp> " if tty else "")
                 except EOFError:
@@ -3522,37 +3527,25 @@ def run_repl(ctx: ScrepContext) -> int:
                 try:
                     parse_args(ctx_new, args)
                 except ScrepSetupError as ex:
-                    log(ctx, Verbosity.ERROR, str(ex))
+                    log(stable_ctx, Verbosity.ERROR, str(ex))
                     continue
 
-                resolve_repl_defaults(ctx_new, ctx, last_doc)
-                ctx_old = ctx
+                resolve_repl_defaults(ctx_new, stable_ctx, last_doc)
                 ctx = ctx_new
 
                 try:
                     setup(ctx, True)
                 except ScrepSetupError as ex:
+                    log(cast(ScrepContext, ctx), Verbosity.ERROR, str(ex))
                     if ctx.exit:
-                        ctx_old.exit = True
-                        ctx_old.error_code = ctx.error_code
-                    ctx = ctx_old
-                    log(ctx, Verbosity.ERROR, str(ex))
-                    continue
-                try:
-                    last_doc = dl(ctx)
-                except ScrepMatchError as ex:
-                    log(ctx, Verbosity.ERROR, str(ex))
-                if ctx.dl_manager:
-                    ctx.dl_manager.pom.main_thread_done()
-                    ctx.dl_manager.wait_until_jobs_done()
-                sys.stdout.flush()
-                if ctx.exit:
-                    return ctx.error_code
+                        stable_ctx = ctx
+                        return ctx.error_code
+                    ctx = None
             except KeyboardInterrupt:
                 print("")
                 continue
     finally:
-        finalize(ctx)
+        finalize(stable_ctx)
 
 
 def parse_args(ctx: ScrepContext, args: Iterable[str]) -> None:
