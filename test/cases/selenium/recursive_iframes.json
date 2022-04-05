@@ -1,0 +1,12 @@
+{
+    "args": [
+        "file=./test/res/recursive_iframes.html",
+        "cx=//div[@id='basic']//li/text()",
+        "sel=c"
+    ],
+    "tags": [
+        "selenium",
+        "chrome"
+    ],
+    "stdout": "Foo\nBar\nBaz\n"
+}

@@ -1720,21 +1720,22 @@ def selenium_add_cookies_through_get(ctx: ScrepContext) -> None:
             ctx.selenium_driver.add_cookie(c)
 
 
-def new_start(*args, **kwargs):
+# this makes sure that the selenium instance does not die on SIGINT
+def selenium_start_wrapper(*args, **kwargs):
     def preexec_function():
-        # signal.signal(signal.SIGINT, signal.SIG_IGN) # this one didn't worked for me
         os.setpgrp()
-    default_Popen = subprocess.Popen
+    original_p_open = subprocess.Popen
     subprocess.Popen = functools.partial(
-        subprocess.Popen, preexec_fn=preexec_function)
+        subprocess.Popen, preexec_fn=preexec_function
+    )
     try:
-        new_start.default_start(*args, **kwargs)
+        selenium_start_wrapper.original_start(*args, **kwargs)
     finally:
-        subprocess.Popen = default_Popen
+        subprocess.Popen = original_p_open
 
 
-new_start.default_start = selenium.webdriver.common.service.Service.start
-selenium.webdriver.common.service.Service.start = new_start
+selenium_start_wrapper.original_start = selenium.webdriver.common.service.Service.start  # type: ignore
+selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
 
 
 def setup_selenium(ctx: ScrepContext) -> None:
@@ -2342,39 +2343,60 @@ def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Opt
 def selenium_get_full_page_source(ctx: ScrepContext):
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
-    page_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
-    iframes_xml_all_sources: list[lxml.html.HtmlElement] = page_xml.xpath(
-        "//iframe")
+    doc_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
+    iframes_xml_all_sources: list[lxml.html.HtmlElement] = doc_xml.xpath(
+        "//iframe"
+    )
     if not iframes_xml_all_sources:
-        return text, page_xml
-    iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
-    for iframe in iframes_xml_all_sources:
-        iframe_src = iframe.attrib["src"]
-        iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
-        if iframe_src_escaped in iframes_by_source:
-            iframes_by_source[iframe_src_escaped].append(iframe)
-        else:
-            iframes_by_source[iframe_src_escaped] = [iframe]
-    #TODO: handle recursive iframes
-    for iframe_src_escaped, iframes_xml in iframes_by_source.items():
-        iframes_sel = drv.find_elements(
-            by=selenium.webdriver.common.by.By.XPATH, value=f"//iframe[@src='{iframe_src_escaped}']"
-        )
-        len_sel = len(iframes_sel)
-        len_xml = len(iframes_xml)
-        if len_sel != len_xml:
-            log(ctx, Verbosity.WARN,
-                "iframe count diverged for iframe source '{iframe_src_escaped}'")
-        for i in range(0, min(len_sel, len_xml)):
-            try:
-                drv.switch_to.frame(iframes_sel[i])
-                loaded_iframe_text = drv.page_source
-            finally:
-                drv.switch_to.default_content()
-            loaded_iframe_xml = lxml.html.fromstring(loaded_iframe_text)
-            iframes_xml[i].append(loaded_iframe_xml)
+        return text, doc_xml
+    depth = 0
+    try:
+        iframe_stack: list[tuple[
+            SeleniumWebElement, int, lxml.html.HtmlElement
+        ]] = []
+        while True:
+            iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
+            for iframe in reversed(iframes_xml_all_sources):
+                iframe_src = iframe.attrib["src"]
+                iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
+                if iframe_src_escaped in iframes_by_source:
+                    iframes_by_source[iframe_src_escaped].append(iframe)
+                else:
+                    iframes_by_source[iframe_src_escaped] = [iframe]
+            for iframe_src_escaped, iframes_xml in iframes_by_source.items():
+                iframes_sel = drv.find_elements(
+                    by=selenium.webdriver.common.by.By.XPATH,
+                    value=f"//iframe[@src='{iframe_src_escaped}']"
+                )
+                len_sel = len(iframes_sel)
+                len_xml = len(iframes_xml)
+                if len_sel != len_xml:
+                    log(
+                        ctx, Verbosity.WARN,
+                        f"iframe count diverged for iframe source '{iframe_src_escaped}'"
+                    )
+                for i in range(0, min(len_sel, len_xml)):
+                    iframe_stack.append(
+                        (iframes_sel[i], depth + 1, iframes_xml[i])
+                    )
+            if not iframe_stack:
+                break
+            iframe_sel, depth_new, curr_xml = iframe_stack.pop()
+            while depth_new <= depth:
+                depth -= 1
+                drv.switch_to.parent_frame()
+            drv.switch_to.frame(iframe_sel)
+            log(ctx, Verbosity.DEBUG, f"expanding iframe {curr_xml.attrib['src']}")
+            depth = depth_new
+            iframe_xml = lxml.html.fromstring(drv.page_source)
+            curr_xml.append(iframe_xml)
+            curr_xml = iframe_xml
+            lxml.etree.XPath
+            iframes_xml_all_sources = iframe_xml.xpath(".//iframe")
 
-    return lxml.html.tostring(page_xml), page_xml
+        return lxml.html.tostring(doc_xml), doc_xml
+    finally:
+        drv.switch_to.default_content()
 
 
 def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
@@ -3481,7 +3503,7 @@ def run_repl(ctx: ScrepContext) -> int:
         if ctx.dl_manager:
             ctx.dl_manager.pom.main_thread_done()
             ctx.dl_manager.wait_until_jobs_done()
-        #TODO: cleanup
+        # TODO: cleanup
         # NOCKECKIN
         last_doc = None
         while True:
