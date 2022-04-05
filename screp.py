@@ -1245,7 +1245,6 @@ class DownloadJob:
 
 class DownloadManager:
     ctx: ScrepContext
-    threads: list[threading.Thread]
     max_threads: int
     pending_jobs: list[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
@@ -2316,7 +2315,7 @@ def selenium_get_full_page_source(ctx: ScrepContext):
                 if len_sel != len_xml:
                     log(
                         ctx, Verbosity.WARN,
-                        f"iframe count diverged for iframe source '{iframe_src_escaped}'"
+                        f"iframe count diverged for iframe source in '{iframe_src_escaped}'"
                     )
                 for i in range(0, min(len_sel, len_xml)):
                     iframe_stack.append(
@@ -2857,13 +2856,12 @@ def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path) -> tuple[bo
     if mc.selenium_strategy == SeleniumStrategy.DISABLED:
         waiting = False
     elif mc.selenium_strategy == SeleniumStrategy.FIRST:
-        contents_missing = not content_matches and mc.need_content_matches()
-        documents_missing = (
-            not mc.document_matches
-            and mc.need_document_matches(True)
-        )
-        if not contents_missing or not documents_missing:
-            waiting = False
+        if mc.need_content_matches():
+            if mc.content_matches:
+                waiting = False
+        if mc.need_document_matches(True):
+            if mc.document_matches:
+                waiting = False
     else:
         assert mc.selenium_strategy in [
             SeleniumStrategy.INTERACTIVE, SeleniumStrategy.DEDUP
