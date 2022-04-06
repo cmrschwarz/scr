@@ -17,6 +17,7 @@ from abc import abstractmethod
 import lxml
 import lxml.etree
 import lxml.html
+import pyrfc6266
 import requests
 import sys
 import xml.sax.saxutils
@@ -1055,18 +1056,32 @@ class DownloadJob:
         )
         self.output_formatters = []
 
-    def requires_download(self):
+    def requires_download(self) -> bool:
         return self.cm.mc.need_content_download
 
-    def setup_print_stream(self, dm: 'DownloadManager'):
+    def setup_print_stream(self, dm: 'DownloadManager') -> None:
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(dm.pom)
 
-    def gen_filename(self):
-        if self.cm.mc.need_filename:
+    def gen_fallback_filename(self) -> bool:
+        if not self.cm.mc.need_filename or self.filename is not None:
+            return True
+        self.filename = sanitize_filename(
+            cast(urllib.parse.ParseResult, self.cm.url_parsed).path)
+        if self.filename is not None:
+            return True
+        try:
             self.filename = gen_final_content_format(
-                self.cm.mc.filename_default_format, self.cm
+                cast(str, self.cm.mc.filename_default_format), self.cm, None
+            ).decode("utf-8", errors="surrogateescape")
+            return False
+        except UnicodeDecodeError:
+            log(
+                self.cm.mc.ctx, Verbosity.ERROR,
+                f"{self.cm.doc.path}{get_ci_di_context(self.cm)}: "
+                + "generated default filename not valid utf-8"
             )
+            return False
 
     def handle_safe_path(self) -> InteractiveResult:
         cm = self.cm
@@ -1085,15 +1100,19 @@ class DownloadJob:
         )
         try:
             save_path = save_path_bytes.decode(
-                "utf-8", errors="surrogateescape")
+                "utf-8", errors="surrogateescape"
+            )
         except UnicodeDecodeError:
-            log(cm.mc.ctx, Verbosity.ERROR,
-                f"{cm.doc.path}{get_ci_di_context(cm)}: generated save path is not valid utf-8")
+            log(
+                cm.mc.ctx, Verbosity.ERROR,
+                f"{cm.doc.path}{get_ci_di_context(cm)}: generated save path is not valid utf-8"
+            )
             save_path = None
         while True:
             if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
                 log(cm.mc.ctx, Verbosity.ERROR,
-                    f"{cm.doc.path}{get_ci_di_context(cm)}: directory of generated save path does not exist")
+                    f"{cm.doc.path}{get_ci_di_context(cm)}: directory of generated save path does not exist"
+                    )
                 save_path = None
             if not save_path and not cm.mc.save_path_interactive:
                 return InteractiveResult.ERROR
@@ -1135,8 +1154,8 @@ class DownloadJob:
                 self.content_format = ContentFormat.UNNEEDED
             else:
                 if self.cm.mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
-                    self.content, self.content_format = selenium_download(
-                        self.cm, self.save_path
+                    self.content, self.content_format, self.filename = selenium_download(
+                        self.cm
                     )
                     if self.content is None:
                         return False
@@ -1151,17 +1170,21 @@ class DownloadJob:
                         self.content_format = ContentFormat.FILE
                         return True
                     try:
-                        self.content, _enc = requests_dl(
+                        res = request_raw(
                             self.cm.mc.ctx, path,
-                            cast(urllib.parse.ParseResult,
-                                 self.cm.url_parsed),
+                            cast(urllib.parse.ParseResult, self.cm.url_parsed),
                             stream=True
                         )
+                        self.content = ResponseStreamWrapper(res)
+                        self.filename = request_try_get_filename(res)
                         self.content_format = ContentFormat.STREAM
-                    except ScrepFetchError as ex:
+                    except requests.exceptions.RequestException as ex:
+                        ex = request_exception_to_screp_fetch_error(ex)
                         log(self.cm.mc.ctx, Verbosity.ERROR,
                             f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
                         return False
+        if not self.gen_fallback_filename():
+            return False
         return True
 
     def setup_save_file(self) -> bool:
@@ -1333,9 +1356,13 @@ class DownloadManager:
         self.pending_jobs.append(self.executor.submit(dj.download_content))
 
     def wait_until_jobs_done(self):
-        concurrent.futures.wait(self.pending_jobs)
+        results = concurrent.futures.wait(self.pending_jobs)
+        for x in results.done:
+            x.result()
 
     def terminate(self, cancel_running: bool = False):
+        if not cancel_running:
+            self.wait_until_jobs_done()
         self.executor.shutdown(wait=True, cancel_futures=cancel_running)
 
 
@@ -1577,7 +1604,7 @@ def help(err: bool = False) -> None:
         {{cesc}}              escape sequence for separating content, can be overwritten using cesc
         {{chain}}             id of the match chain that generated this content
 
-        {{fn}}                suggested download filename from the http response 
+        {{fn}}                suggested download filename from the http response
         {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
     Chain Syntax:
@@ -1732,24 +1759,26 @@ def selenium_add_cookies_through_get(ctx: ScrepContext) -> None:
         try:
             ctx.selenium_driver.get(f"https://{domain}")
         except SeleniumTimeoutException:
-            raise ScrepSetupError(
-                "Failed to apply cookies for https://{domain}: page failed to load")
+            log(
+                ctx, Verbosity.WARN,
+                "Failed to apply cookies for https://{domain}: page failed to load"
+            )
         for c in cookies.values():
             ctx.selenium_driver.add_cookie(c)
 
 
-def selenium_start_wrapper(*args, **kwargs):
+def selenium_start_wrapper(*args, **kwargs) -> None:
     def preexec_function():
         # this makes sure that the selenium instance does not die on SIGINT
         os.setpgrp()
     original_p_open = subprocess.Popen
-    subprocess.Popen = functools.partial(
+    subprocess.Popen = functools.partial(  # type: ignore
         subprocess.Popen, preexec_fn=preexec_function
     )
     try:
-        selenium_start_wrapper.original_start(*args, **kwargs)
+        selenium_start_wrapper.original_start(*args, **kwargs)  # type: ignore
     finally:
-        subprocess.Popen = original_p_open
+        subprocess.Popen = original_p_open  # type: ignore
 
 
 def prevent_selenium_sigint() -> None:
@@ -2146,17 +2175,15 @@ def gen_dl_temp_name(
 
 
 def selenium_download_from_local_file(
-    cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[str], ContentFormat]:
-    doc_url = selenium_get_url(cm.mc.ctx)
-    if doc_url is None:
-        return None, ContentFormat.FILE
-    return cast(str, cm.cmatch), ContentFormat.FILE
+    cm: ContentMatch
+) -> tuple[Optional[str], ContentFormat, str]:
+    path = cast(str, cm.cmatch)
+    return path, ContentFormat.FILE, os.path.basename(path)
 
 
 def selenium_download_external(
-    cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[MinimalInputStream], ContentFormat]:
+    cm: ContentMatch
+) -> tuple[Optional[MinimalInputStream], ContentFormat, Optional[str]]:
     proxies = None
     path = cast(str, cm.cmatch)
     if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -2167,27 +2194,34 @@ def selenium_download_external(
             "data": None
         }
     try:
-        stream, _enc = requests_dl(
-            cm.mc.ctx, path, cast(urllib.parse.ParseResult, cm.url_parsed),
-            load_selenium_cookies(cm.mc.ctx),
-            proxies=proxies, stream=True
-        )
-        return cast(MinimalInputStream, stream), ContentFormat.STREAM
+        try:
+            req = request_raw(
+                cm.mc.ctx, path, cast(urllib.parse.ParseResult, cm.url_parsed),
+                load_selenium_cookies(cm.mc.ctx),
+                proxies=proxies, stream=True
+            )
+            return (
+                cast(MinimalInputStream, ResponseStreamWrapper(req)),
+                ContentFormat.STREAM,
+                request_try_get_filename(req)
+            )
+        except requests.exceptions.RequestException as ex:
+            raise request_exception_to_screp_fetch_error(ex)
     except ScrepFetchError as ex:
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
             + f"failed to download '{truncate(path)}': {str(ex)}"
         )
-        return None, ContentFormat.STREAM
+        return None, ContentFormat.STREAM, ""
 
 
 def selenium_download_internal(
-    cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[str], ContentFormat]:
+    cm: ContentMatch
+) -> tuple[Optional[str], ContentFormat, Optional[str]]:
     doc_url_str = selenium_get_url(cm.mc.ctx)
     if doc_url_str is None:
-        return None, ContentFormat.TEMP_FILE
+        return None, ContentFormat.TEMP_FILE, None
     doc_url = urllib.parse.urlparse(doc_url_str)
 
     if doc_url.netloc != cast(urllib.parse.ParseResult, cm.url_parsed).netloc:
@@ -2196,9 +2230,9 @@ def selenium_download_internal(
             f"{cm.cmatch}{get_ci_di_context(cm)}: "
             + f"failed to download: seldl=internal does not work across origins"
         )
-        return None, ContentFormat.TEMP_FILE
+        return None, ContentFormat.TEMP_FILE, None
 
-    tmp_path, tmp_filename = gen_dl_temp_name(cm.mc.ctx, filepath)
+    tmp_path, tmp_filename = gen_dl_temp_name(cm.mc.ctx, None)
     script_source = """
         const url = arguments[0];
         const filename = arguments[1];
@@ -2222,7 +2256,7 @@ def selenium_download_internal(
                 f"{cm.cmatch}{get_ci_di_context(cm)}: "
                 + f"selenium download failed: {str(ex)}"
             )
-        return None, ContentFormat.TEMP_FILE
+        return None, ContentFormat.TEMP_FILE, None
     i = 0
     while True:
         if os.path.exists(tmp_path):
@@ -2235,31 +2269,37 @@ def selenium_download_internal(
             if i > 15:
                 i = 10
                 if selenium_has_died(cm.mc.ctx):
-                    return None, ContentFormat.TEMP_FILE
+                    return None, ContentFormat.TEMP_FILE, None
 
         i += 1
-    return tmp_path, ContentFormat.TEMP_FILE
+    # TODO: maybe support filenames here ?
+    return tmp_path, ContentFormat.TEMP_FILE, None
 
 
 def selenium_download_fetch(
-    cm: ContentMatch, filepath: Optional[str]
-) -> tuple[Optional[bytes], ContentFormat]:
+    cm: ContentMatch
+) -> tuple[Optional[bytes], ContentFormat, Optional[str]]:
     script_source = """
         const url = arguments[0];
+        var content_disposition = null;
         return (async () => {
             return await fetch(url, {
                 method: 'GET',
             })
-            .then(response => response.blob())
-            .then(blob => new Promise((resolve, reject) => {
+            .then(res => {
+                content_disposition = res.headers.get('Content-Disposition'); 
+                return res.blob();
+            })
+            .then((blob, cd) => new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.readAsDataURL(blob);
-                reader.onload = () => resolve(reader.result.substr(reader.result.indexOf(',') + 1));
+                reader.onload = () => (resolve(reader.result.substr(reader.result.indexOf(',') + 1)), cd);
                 reader.onerror = error => reject(error);
             }))
             .then(result => {
                 return {
-                    "ok": result
+                    "ok": result,
+                    "content_disposition": content_disposition,
                 };
             })
             .catch(ex => {
@@ -2279,7 +2319,7 @@ def selenium_download_fetch(
     except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
             report_selenium_died(cm.mc.ctx)
-            return None, ContentFormat.BYTES
+            return None, ContentFormat.BYTES, None
         err = str(ex)
     if "error" in res:
         err = res["error"]
@@ -2292,28 +2332,32 @@ def selenium_download_fetch(
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
             + f"selenium download of '{cm.cmatch}' failed{cors_warn}: {err}"
         )
-        return None, ContentFormat.BYTES
-    return binascii.a2b_base64(res["ok"]), ContentFormat.BYTES
+        return None, ContentFormat.BYTES, None
+    data = binascii.a2b_base64(res["ok"])
+    filename = try_get_filename_from_content_disposition(
+        res.get("content_disposition", "")
+    )
+    return data, ContentFormat.BYTES, filename
 
 
 def selenium_download(
-    cm: ContentMatch, filepath: Optional[str] = None
-) -> tuple[Union[str, bytes, MinimalInputStream, None], ContentFormat]:
+    cm: ContentMatch
+) -> tuple[Union[str, bytes, MinimalInputStream, None], ContentFormat, Optional[str]]:
     if (
         cm.doc.document_type == DocumentType.FILE
         and cast(urllib.parse.ParseResult, cm.url_parsed).scheme in ["", "file"]
     ):
-        return selenium_download_from_local_file(cm, filepath)
+        return selenium_download_from_local_file(cm)
 
     if cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-        return selenium_download_external(cm, filepath)
+        return selenium_download_external(cm)
 
     if cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
-        return selenium_download_internal(cm, filepath)
+        return selenium_download_internal(cm)
 
     assert cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
 
-    return selenium_download_fetch(cm, filepath)
+    return selenium_download_fetch(cm)
 
 
 def fetch_file(ctx: ScrepContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
@@ -2346,12 +2390,21 @@ def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
     return None
 
 
-def requests_dl(
+def request_exception_to_screp_fetch_error(ex: requests.exceptions.RequestException):
+    if isinstance(ex, requests.exceptions.InvalidURL):
+        return ScrepFetchError("invalid url")
+    if isinstance(ex, requests.exceptions.ConnectionError):
+        return ScrepFetchError("connection failed")
+    if isinstance(ex, requests.exceptions.ConnectTimeout):
+        return ScrepFetchError("connection timeout")
+    return ScrepFetchError(truncate(str(ex)))
+
+
+def request_raw(
     ctx: ScrepContext, path: str, path_parsed: urllib.parse.ParseResult,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
     proxies=None, stream=False
-) -> tuple[Union[MinimalInputStream, bytes, None], Optional[str]]:
-
+):
     hostname = path_parsed.hostname if path_parsed.hostname else ""
     if cookie_dict is None:
         cookie_dict = ctx.cookie_dict
@@ -2360,26 +2413,53 @@ def requests_dl(
         for name, ck in cookie_dict.get(hostname, {}).items()
     }
     headers = {'User-Agent': ctx.user_agent}
-    try:
-        res = requests.get(
-            path, cookies=cookies, headers=headers, allow_redirects=True,
-            proxies=proxies, timeout=ctx.request_timeout_seconds, stream=stream
-        )
-        if stream:
-            return ResponseStreamWrapper(res), res.encoding
-        data = res.content
-        encoding = res.encoding
-        res.close()
-        return data, encoding
 
-    except requests.exceptions.InvalidURL as ex:
-        raise ScrepFetchError("invalid url")
-    except requests.exceptions.ConnectionError as ex:
-        raise ScrepFetchError("connection failed")
-    except requests.exceptions.ConnectTimeout as ex:
-        raise ScrepFetchError("connection timeout")
+    res = requests.get(
+        path, cookies=cookies, headers=headers, allow_redirects=True,
+        proxies=proxies, timeout=ctx.request_timeout_seconds, stream=stream
+    )
+    return res
+
+
+def sanitize_filename(filename: Optional[str]) -> Optional[str]:
+    if not filename:
+        return None
+    # we do minimal sanitization here, but we intentionally allow slightly weird things
+    # like files starting with dot because a user might actually want to do that
+    filename = os.path.basename(filename)
+    if filename.strip() == "":
+        return None
+    if filename in [".", ".."]:
+        return None
+    return filename
+
+
+def try_get_filename_from_content_disposition(content_dispositon: Optional[str]) -> Optional[str]:
+    if not content_dispositon:
+        return None
+    return sanitize_filename(pyrfc6266.parse_filename(content_dispositon))
+
+
+def request_try_get_filename(res: requests.Response) -> Optional[str]:
+    return try_get_filename_from_content_disposition(
+        res.headers.get('content-disposition')
+    )
+
+
+def requests_dl(
+    ctx: ScrepContext, path: str,
+    path_parsed: urllib.parse.ParseResult,
+
+
+) -> tuple[Union[MinimalInputStream, bytes, None], Optional[str]]:
+    try:
+        req = request_raw(ctx, path, path_parsed)
+        data = req.content
+        encoding = req.encoding
+        req.close()
+        return data, encoding
     except requests.exceptions.RequestException as ex:
-        raise ScrepFetchError(truncate(str(ex)))
+        raise request_exception_to_screp_fetch_error(ex)
 
 
 def report_selenium_died(ctx: ScrepContext, is_err: bool = True) -> None:
@@ -2502,7 +2582,8 @@ def gen_final_content_format(format_str: str, cm: ContentMatch, filename: Option
         while of.advance():
             pass
         buf.seek(0)
-        return buf.read()
+        res = buf.read()
+    return res
 
 
 def normalize_link(
