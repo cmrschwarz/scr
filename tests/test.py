@@ -237,6 +237,12 @@ def xhash(input: Any = None) -> str:
 
 def main() -> int:
     to = TestOptions()
+    # prepend the screp root directory to PATH
+    # so tests can use the screp command
+    os.environ["PATH"] = (
+        os.path.realpath(os.path.join(to.script_dir_abs, ".."))
+        + ":" + os.environ["PATH"]
+    )
     to.test_output_dir = tempfile.mkdtemp(prefix="screp_test_")
     try:
         i = 1
