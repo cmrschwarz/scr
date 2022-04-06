@@ -3,5 +3,6 @@
 /dl*.txt
 /cookies.txt
 /.vscode
+/.mypy_cache
 /tmp
 /*.tmp
