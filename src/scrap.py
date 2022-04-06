@@ -64,16 +64,31 @@ def set_join(*args: Iterable[T]) -> set[T]:
     return res
 
 
-YES_INDICATING_STRINGS = set_join(
-    prefixes("yes"), prefixes("true"), ["1", "+"]
+class OptionIndicatingStrings:
+    representative: str
+    matching: set[str]
+
+    def __init__(self, representative: str, *args: set[str]):
+        self.representative = representative
+        if args:
+            self.matching = set_join(*args)
+        else:
+            self.matching = prefixes(representative)
+
+
+YES_INDICATING_STRINGS = OptionIndicatingStrings(
+    "yes",
+    prefixes("yes"), prefixes("true"), {"1", "+"}
 )
-NO_INDICATING_STRINGS = set_join(prefixes("no"), prefixes("false"), ["0", "-"])
-SKIP_INDICATING_STRINGS = prefixes("skip")
-CHAIN_SKIP_INDICATING_STRINGS = prefixes("chainskip")
-DOC_SKIP_INDICATING_STRINGS = prefixes("docskip")
-DOC_SKIP_INDICATING_STRINGS = prefixes("edit")
-INSPECT_INDICATING_STRINGS = prefixes("inspect")
-ACCEPT_CHAIN_INDICATING_STRINGS = prefixes("acceptchain")
+NO_INDICATING_STRINGS = OptionIndicatingStrings(
+    "no", prefixes("no"), prefixes("false"), {"0", "-"}
+)
+SKIP_INDICATING_STRINGS = OptionIndicatingStrings("skip")
+CHAIN_SKIP_INDICATING_STRINGS = OptionIndicatingStrings("chainskip")
+EDIT_INDICATING_STRINGS = OptionIndicatingStrings("edit")
+DOC_SKIP_INDICATING_STRINGS = OptionIndicatingStrings("docskip")
+INSPECT_INDICATING_STRINGS = OptionIndicatingStrings("inspect")
+ACCEPT_CHAIN_INDICATING_STRINGS = OptionIndicatingStrings("acceptchain")
 CHAIN_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 DEFAULT_CPF = "{c}\\n"
@@ -1124,7 +1139,7 @@ class DownloadJob:
                     [
                         (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
                         (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
-                        (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.EDIT, EDIT_INDICATING_STRINGS),
                         (InteractiveResult.SKIP_CHAIN,
                          CHAIN_SKIP_INDICATING_STRINGS),
                         (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
@@ -2099,14 +2114,14 @@ def setup(ctx: ScrapContext, for_repl: bool = False) -> None:
 
 
 def parse_prompt_option(
-    val: str, options: list[tuple[T, set[str]]],
+    val: str, options: list[tuple[T, OptionIndicatingStrings]],
     default: Optional[T] = None
 ) -> Optional[T]:
     val = val.strip().lower()
     if val == "":
         return default
-    for opt, matchings in options:
-        if val in matchings:
+    for opt, ois in options:
+        if val in ois.matching:
             return opt
     return None
 
@@ -2115,24 +2130,12 @@ def parse_bool_string(val: str, default: Optional[bool] = None) -> Optional[bool
     return parse_prompt_option(val, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def get_representative_indicating_string(indicating_strings: set[str]) -> str:
-    candidates = sorted(indicating_strings)
-    i = 0
-    while i + 1 < len(candidates):
-        if begins(candidates[i+1], candidates[i]):
-            del i
-        else:
-            i += 1
-    return sorted(candidates, key=lambda c: len(c))[-1]
-
-
-def prompt(prompt_text: str, options: list[tuple[T, set[str]]], default: Optional[T] = None) -> T:
+def prompt(prompt_text: str, options: list[tuple[T, OptionIndicatingStrings]], default: Optional[T] = None) -> T:
     assert len(options) > 1
     while True:
         res = parse_prompt_option(input(prompt_text), options, default)
         if res is None:
-            option_names = [get_representative_indicating_string(
-                matchings) for _opt, matchings in options]
+            option_names = [ois.representative for _opt, ois in options]
             print("please answer with " +
                   ", ".join(option_names[:-1]) + " or " + option_names[-1])
             continue
@@ -2683,7 +2686,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
             prompt_options = [
                 (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
                 (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
-                (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.EDIT, EDIT_INDICATING_STRINGS),
                 (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
                 (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
             ]
@@ -2784,7 +2787,7 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
             [
                 (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
                 (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
-                (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                (InteractiveResult.EDIT, EDIT_INDICATING_STRINGS),
                 (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
                 (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
             ],
@@ -2975,8 +2978,19 @@ def handle_interactive_chains(
     if rlist:
         result = parse_prompt_option(
             sys.stdin.readline(),
-            [(InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
-             (InteractiveResult.SKIP_DOC, set_join(SKIP_INDICATING_STRINGS, NO_INDICATING_STRINGS))],
+            [
+                (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                (
+                    InteractiveResult.SKIP_DOC,
+                    OptionIndicatingStrings(
+                        "skip", 
+                        set_join(
+                            SKIP_INDICATING_STRINGS.matching,
+                            NO_INDICATING_STRINGS.matching
+                        )
+                    )
+                )
+            ],
             InteractiveResult.ACCEPT
         )
         if result is None:
@@ -3402,9 +3416,9 @@ def parse_bool_arg(v: str, arg: str, blank_val: bool = True) -> bool:
     if v == "" and blank_val is not None:
         return blank_val
 
-    if v in YES_INDICATING_STRINGS:
+    if v in YES_INDICATING_STRINGS.matching:
         return True
-    if v in NO_INDICATING_STRINGS:
+    if v in NO_INDICATING_STRINGS.matching:
         return False
     raise ScrapSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
 
