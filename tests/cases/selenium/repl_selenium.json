@@ -12,11 +12,13 @@
         "'cx=//p/text()'",
         "sel=f",
         "'cx=//p/text()'",
-        "file=tests/res/b.txt cpf={c}",
+        "file=tests/res/b.txt cpf={c} cx=//pre/text()", //firefox is weird and wraps this
         "file=./tests/res/js_content.html",
+        "'cx=//p/text()'",
         "sel=d",
         "'cx=//p/text()'",
-        "cpf=c",
+        "file=tests/res/a.txt cpf={c}",
+        "cpf='c\\n'",
         "exit"
     ],
     "stdout": [
@@ -24,6 +26,7 @@
         "js_content",
         "b",
         "js_content",
+        "a",
         "c"
     ]
 }

@@ -8,5 +8,5 @@
     "tags": [
         "need-httpbin"
     ],
-    "stdout": "file_url:::file_url"
+    "stdout": "file_url\n:::file_url\n"
 }

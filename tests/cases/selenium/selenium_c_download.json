@@ -1,19 +1,25 @@
 {
     "args": [
-        "file0=./tests/res/a.txt.html",
-        "dx0=//iframe/@src",
-        "doc0=1-2",
-        "cx1-2=//div[@id='resources']//embed/@src",
-        "sel=c",
-        "cl=t",
-        "cpf1-3={c}",
-        "seldl0=e",
-        "seldl1=f"
+        "file=./tests/res/a.txt.html",
+        "rfile=./tests/res/file_url.html",
+        "cl=1",
+        "cx=//@src",
+        "cpf={c}",
+        "seldl0=i",
+        "seldl1=e",
+        "seldl2=f"
     ],
     "tags": [
         "selenium",
         "chrome",
-        "need-cmrs.io"
+        "need-httpbin"
     ],
-    "stdout": "a\nb\na\nb\n"
+    "stdout": [
+        "a",
+        "a",
+        "a",
+        "file_url",
+        "file_url",
+        "file_url"
+    ]
 }

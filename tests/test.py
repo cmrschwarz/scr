@@ -2,7 +2,7 @@
 from ntpath import join
 from optparse import Option
 import os
-import json
+import json5
 import glob
 import shellescape
 import sys
@@ -104,8 +104,8 @@ class TestResult(Enum):
 def run_test(name: str, to: TestOptions) -> TestResult:
     with open(name, "r") as f:
         try:
-            tc = json.load(f)
-        except json.JSONDecodeError as ex:
+            tc = json5.load(f)
+        except ValueError as ex:
             print(f"{ANSI_RED}JSON PARSE ERROR in {name}: {str(ex)}{ANSI_CLEAR}")
             return TestResult.FAILED
     tags = tc.get("tags", [])

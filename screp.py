@@ -3624,7 +3624,12 @@ def run_repl(initial_ctx: ScrepContext) -> int:
                     if tty:
                         print("")
                     return 0
-                args = shlex.split(line)
+                try:
+                    args = shlex.split(line)
+                except ValueError as ex:
+                    log(stable_ctx, Verbosity.ERROR,
+                        "malformed arguments: " + str(ex))
+                    continue
                 if not len(args):
                     continue
 
