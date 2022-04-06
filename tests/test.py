@@ -28,6 +28,7 @@ class TestOptions:
     tags_need: list[str]
     tags_avoid: list[str]
     parallelism: int = cpu_count()
+    scrap_main_file_path: str
     script_dir: str
     script_dir_abs: str
     script_dir_name: str
@@ -236,14 +237,20 @@ def main() -> int:
     to.script_dir = os.path.relpath(to.script_dir_abs)
     to.script_dir_name = os.path.basename(to.script_dir)
 
-    # prepend the scrap root directory to PATH
-    # so tests can use the scrap command
-    os.environ["PATH"] = (
-        os.path.realpath(os.path.join(to.script_dir_abs, ".."))
-        + ":" + os.environ["PATH"]
+    to.scrap_main_file_path = os.path.abspath(
+        os.path.realpath(os.path.join(to.script_dir, "../scrap.py"))
     )
+
     to.test_output_dir = tempfile.mkdtemp(prefix="scrap_test_")
     try:
+        # prepend a scrap command symlink to the PATH so the tests can use it
+        os.symlink(
+            to.scrap_main_file_path,
+            os.path.join(to.test_output_dir, "scrap")
+        )
+        os.environ["PATH"] = (
+            to.test_output_dir + ":" + os.environ["PATH"]
+        )
         i = 1
         while i < len(sys.argv):
             arg = sys.argv[i]

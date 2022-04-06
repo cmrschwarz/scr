@@ -51,7 +51,7 @@ scrap url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href c
 
 The required non standard pip packages can be installed using:
  ```bash
- pip3 install tbselenium lxml selenium random_user_agent readline
+ pip3 install tbselenium lxml selenium random_user_agent readline pyrfc6266 requests json5 shellescape
  ```
 
 ### Setting up Selenium

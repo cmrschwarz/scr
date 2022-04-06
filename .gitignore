@@ -6,3 +6,5 @@
 /.mypy_cache
 /tmp
 /*.tmp
+/scrap.egg-info
+/build

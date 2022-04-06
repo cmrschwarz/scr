@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import functools
 import subprocess
 import selenium.webdriver
@@ -47,6 +48,8 @@ import tempfile
 import itertools
 import warnings
 import urllib.request
+VERSION = "0.3.0"
+
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -100,7 +103,7 @@ DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
-INTERNAL_USER_AGENT = "scrap/0.3.0"
+INTERNAL_USER_AGENT = f"scrap/{VERSION}"
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
@@ -2983,7 +2986,7 @@ def handle_interactive_chains(
                 (
                     InteractiveResult.SKIP_DOC,
                     OptionIndicatingStrings(
-                        "skip", 
+                        "skip",
                         set_join(
                             SKIP_INDICATING_STRINGS.matching,
                             NO_INDICATING_STRINGS.matching
@@ -3823,7 +3826,7 @@ def parse_args(ctx: ScrapContext, args: Iterable[str]) -> None:
         raise ScrapSetupError(f"unrecognized option: '{arg}'")
 
 
-def main() -> int:
+def run_scrap() -> int:
     ctx = ScrapContext(blank=True)
     if len(sys.argv) < 2:
         log_raw(
@@ -3852,14 +3855,18 @@ def main() -> int:
     return ec
 
 
-if __name__ == "__main__":
+def main() -> None:
     try:
         # to silence: "Setting a profile has been deprecated" on launching tor
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
-        exit(main())
+        exit(run_scrap())
     except BrokenPipeError:
         abort_on_broken_pipe()
     except KeyboardInterrupt:
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
