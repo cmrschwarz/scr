@@ -1738,9 +1738,9 @@ def selenium_add_cookies_through_get(ctx: ScrepContext) -> None:
             ctx.selenium_driver.add_cookie(c)
 
 
-# this makes sure that the selenium instance does not die on SIGINT
 def selenium_start_wrapper(*args, **kwargs):
     def preexec_function():
+        # this makes sure that the selenium instance does not die on SIGINT
         os.setpgrp()
     original_p_open = subprocess.Popen
     subprocess.Popen = functools.partial(
@@ -1752,11 +1752,16 @@ def selenium_start_wrapper(*args, **kwargs):
         subprocess.Popen = original_p_open
 
 
-selenium_start_wrapper.original_start = selenium.webdriver.common.service.Service.start  # type: ignore
-selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
+def prevent_selenium_sigint() -> None:
+    if selenium.webdriver.common.service.Service.start is selenium_start_wrapper:
+        return
+    selenium_start_wrapper.original_start = selenium.webdriver.common.service.Service.start  # type: ignore
+    selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
 
 
 def setup_selenium(ctx: ScrepContext) -> None:
+    if ctx.repl:
+        prevent_selenium_sigint()
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         setup_selenium_tor(ctx)
     elif ctx.selenium_variant == SeleniumVariant.CHROME:
