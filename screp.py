@@ -1046,9 +1046,8 @@ class DownloadJob:
     context: str
     output_formatters: list[OutputFormatter]
 
-    def __init__(self, cm: ContentMatch, save_path: Optional[str]) -> None:
+    def __init__(self, cm: ContentMatch) -> None:
         self.cm = cm
-        self.save_path = save_path
         self.context = (
             f"{truncate(self.cm.doc.path)}{get_ci_di_context(self.cm)}"
         )
@@ -1111,7 +1110,7 @@ class DownloadJob:
                 if res != InteractiveResult.EDIT:
                     return res
             save_path = input("enter new save path: ")
-
+        self.save_path = save_path
         return InteractiveResult.ACCEPT
 
     def fetch_content(self) -> bool:
@@ -2662,8 +2661,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return res
             cm.lmatch = input("enter new label: ")
 
-    save_path = None
-    job = DownloadJob(cm, save_path)
+    job = DownloadJob(cm)
     res = job.handle_safe_path()
     if res != InteractiveResult.ACCEPT:
         return res

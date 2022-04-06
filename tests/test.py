@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from ntpath import join
+from optparse import Option
 import os
 import json
 import glob
@@ -6,8 +8,10 @@ import shellescape
 import sys
 import time
 import subprocess
+import shutil
+import tempfile
 from enum import Enum
-from typing import Any, Union, TypeVar, Callable
+from typing import Any, Union, TypeVar, Callable, Optional, cast
 from multiprocessing import Pool, cpu_count
 
 # cd into parent of scriptdir
@@ -29,10 +33,20 @@ class TestOptions:
     tags_need: list[str]
     tags_avoid: list[str]
     parallelism: int = cpu_count()
+    script_dir: str
+    script_dir_abs: str
+    script_dir_name: str
+    test_output_dir: str
 
     def __init__(self) -> None:
         self.tags_need = []
         self.tags_avoid = []
+        scrip_dir = os.path.dirname(__file__)
+        self.script_dir_abs = os.path.abspath(os.path.realpath(scrip_dir))
+        self.script_dir = os.path.relpath(
+            scrip_dir
+        )
+        self.script_dir_name = os.path.basename(self.script_dir)
 
 
 def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
@@ -60,7 +74,7 @@ def timed_exec(func: Callable[[], T]) -> tuple[T, str]:
     return res, time_notice
 
 
-def execute_test(command: str, args: list[str], stdin: str) -> tuple[int, str, str]:
+def execute_test(command: str, args: list[str], stdin: str, cwd=None) -> tuple[int, str, str]:
     proc = subprocess.Popen(
         [command] + args,
         stdin=subprocess.PIPE,
@@ -68,7 +82,8 @@ def execute_test(command: str, args: list[str], stdin: str) -> tuple[int, str, s
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
-        env=os.environ
+        env=os.environ,
+        cwd=cwd
     )
     stdout, stderr = proc.communicate(input=stdin)
     return proc.returncode, stdout, stderr
@@ -119,13 +134,28 @@ def run_test(name: str, to: TestOptions) -> TestResult:
     stdin = join_lines(tc.get("stdin", ""))
     expected_stdout = join_lines(tc.get("stdout", ""))
     expected_stderr = join_lines(tc.get("stderr", ""))
+    output_files = tc.get("output_files", {})
+    for ofn in output_files.keys():
+        output_files[ofn] = join_lines(output_files[ofn])
+    cwd: Optional[str] = None
+    if output_files:
+        cwd = os.path.join(to.test_output_dir, f"{xhash(name)}")
+        os.mkdir(cwd)
+        # so ./tests/res/... links still work with the changed cwd
+        os.symlink(
+            os.path.realpath(to.script_dir),
+            os.path.join(cwd, to.script_dir_name),
+            True
+        )
+
     if to.parallelism < 2:
         msg_inprogress = f"{ANSI_YELLOW}RUNNING {name}{ANSI_CLEAR}"
         sys.stdout.write(msg_inprogress)
         sys.stdout.flush()
 
     (exit_code, stdout, stderr), exec_time_str = timed_exec(
-        lambda: execute_test(command, args, stdin))
+        lambda: execute_test(command, args, stdin, cwd)
+    )
 
     success = False
     if stderr != expected_stderr:
@@ -136,6 +166,21 @@ def run_test(name: str, to: TestOptions) -> TestResult:
         reason = f"wrong exitcode: {exit_code} (expected {ec})\n{get_cmd_string(tc)}"
     else:
         success = True
+
+    if success and output_files:
+        for fn, fv in output_files.items():
+            fp = os.path.join(cast(str, cwd), fn)
+            try:
+                with open(fp, "r") as f:
+                    content = f.read()
+                if content != fv:
+                    reason = f"wrong output file content in {fn}:\n{get_cmd_string(tc)}\n{fv}{DASH_BAR}"
+                    success = False
+                    break
+            except FileNotFoundError:
+                reason = f"output file missing: {fn}\n{get_cmd_string(tc)}"
+                success = False
+                break
     msg = ""
     if success:
         msg = f"PASSED {name} [{exec_time_str}]"
@@ -169,8 +214,7 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
         TestResult.SUCCESS: 0
     }
 
-    script_dir = os.path.relpath(os.path.dirname(__file__))
-    tests = glob.glob(f"{script_dir}/cases/**/*.json", recursive=True)
+    tests = glob.glob(f"{to.script_dir}/cases/**/*.json", recursive=True)
     if to.parallelism < 2:
         for name in tests:
             res = run_test(name, to)
@@ -185,30 +229,40 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
     return results
 
 
+def xhash(input: Any = None) -> str:
+    if input is None:
+        input = time.time_ns()
+    return hex(hash(input))[3:]
+
+
 def main() -> int:
     to = TestOptions()
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == "-x":
-            to.tags_avoid.extend(sys.argv[i+1].split(","))
+    to.test_output_dir = tempfile.mkdtemp(prefix="screp_test_")
+    try:
+        i = 1
+        while i < len(sys.argv):
+            arg = sys.argv[i]
+            if arg == "-x":
+                to.tags_avoid.extend(sys.argv[i+1].split(","))
+                i += 1
+            elif arg == "-o":
+                to.tags_need.extend(sys.argv[i+1].split(","))
+                i += 1
+            elif arg == "-s":
+                to.parallelism = 1
+            elif arg == "-j":
+                to.parallelism = int(sys.argv[i+1])
+                i += 1
+            else:
+                raise ValueError(f"unknown cli argument {arg}")
             i += 1
-        elif arg == "-o":
-            to.tags_need.extend(sys.argv[i+1].split(","))
-            i += 1
-        elif arg == "-s":
+
+        if to.parallelism < 1:
             to.parallelism = 1
-        elif arg == "-j":
-            to.parallelism = int(sys.argv[i+1])
-            i += 1
-        else:
-            raise ValueError(f"unknown cli argument {arg}")
-        i += 1
 
-    if to.parallelism < 1:
-        to.parallelism = 1
-
-    results, exec_time_str = timed_exec(lambda: run_tests(to))
+        results, exec_time_str = timed_exec(lambda: run_tests(to))
+    finally:
+        shutil.rmtree(to.test_output_dir)
 
     if results[TestResult.SKIPPED]:
         skip_notice = f", {results[TestResult.SKIPPED]} test(s) skipped"
