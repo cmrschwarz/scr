@@ -615,6 +615,7 @@ class MatchChain(ConfigDataClass):
     save_path_interactive: bool = False
 
     label_default_format: Optional[str] = None
+    filename_default_format: Optional[str] = None
     labels_inside_content: bool = False
     label_allow_missing: bool = False
     allow_slashes_in_labels: bool = False
@@ -657,6 +658,7 @@ class MatchChain(ConfigDataClass):
     has_content_matching: bool = False
     has_interactive_matching: bool = False
     need_content_download: bool = False
+    need_filename: bool = False
     need_output_multipass: bool = False
     content_refs_write: int = 0
     content_refs_print: int = 0
@@ -1037,6 +1039,7 @@ class DownloadJob:
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: ContentFormat
+    filename: Optional[str]
 
     cm: ContentMatch
     save_path: Optional[str]
@@ -1047,8 +1050,7 @@ class DownloadJob:
         self.cm = cm
         self.save_path = save_path
         self.context = (
-            f"{truncate(self.cm.doc.path)}"
-            + f"{get_ci_di_context(self.cm.mc, self.cm.di, self.cm.ci)}"
+            f"{truncate(self.cm.doc.path)}{get_ci_di_context(self.cm)}"
         )
         self.output_formatters = []
 
@@ -1059,13 +1061,66 @@ class DownloadJob:
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(dm.pom)
 
+    def gen_filename(self):
+        if self.cm.mc.need_filename:
+            self.filename = gen_final_content_format(
+                self.cm.mc.filename_default_format, self.cm
+            )
+
+    def handle_safe_path(self) -> InteractiveResult:
+        cm = self.cm
+        if not cm.mc.content_save_format:
+            return InteractiveResult.ACCEPT
+        if not cm.mc.is_valid_label(cm.lmatch):
+            log(cm.mc.ctx, Verbosity.WARN,
+                f"matched label '{cm.lmatch}' would contain a slash, skipping this content from: {cm.doc.path}"
+                )
+        save_path_bytes = gen_final_content_format(
+            cm.mc.content_save_format, cm)
+        try:
+            save_path = save_path_bytes.decode(
+                "utf-8", errors="surrogateescape")
+        except UnicodeDecodeError:
+            log(cm.mc.ctx, Verbosity.ERROR,
+                f"{cm.doc.path}{get_ci_di_context(cm)}: generated save path is not valid utf-8")
+            save_path = None
+        while True:
+            if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
+                log(cm.mc.ctx, Verbosity.ERROR,
+                    f"{cm.doc.path}{get_ci_di_context(cm)}: directory of generated save path does not exist")
+                save_path = None
+            if not save_path and not cm.mc.save_path_interactive:
+                return InteractiveResult.ERROR
+            if not cm.mc.save_path_interactive:
+                break
+            if save_path:
+                res = prompt(
+                    f'{cm.doc.path}{get_ci_di_context(cm)}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
+                    [
+                        (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                        (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                        (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.SKIP_CHAIN,
+                         CHAIN_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
+                    ],
+                    InteractiveResult.ACCEPT
+                )
+                if res == InteractiveResult.ACCEPT:
+                    break
+                if res != InteractiveResult.EDIT:
+                    return res
+            save_path = input("enter new save path: ")
+
+        return InteractiveResult.ACCEPT
+
     def fetch_content(self) -> bool:
         path = cast(str, self.cm.cmatch)
         if self.cm.mc.content_raw:
             self.content = self.cm.cmatch
             self.content_format = ContentFormat.STRING
+            self.gen_filename()
         else:
-            path_parsed = cast(str, self.cm.url_parsed)
             if not self.cm.mc.need_content_download:
                 self.content_format = ContentFormat.UNNEEDED
             else:
@@ -1254,7 +1309,6 @@ class DownloadManager:
         self.ctx = ctx
         self.max_threads = max_threads
         self.pending_jobs = []
-        self.threads = []
         self.idle_threads: int = 0
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_threads)
@@ -1295,7 +1349,9 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
 
 
 def content_match_build_format_args(
-    cm: ContentMatch, content: Union[str, bytes, MinimalInputStream, BinaryIO, None] = None
+    cm: ContentMatch,
+    content: Union[str, bytes, MinimalInputStream, BinaryIO, None] = None,
+    filename: Optional[str] = None
 ) -> dict[str, Any]:
     args_dict = {
         "cenc": cm.doc.encoding,
@@ -1331,7 +1387,15 @@ def content_match_build_format_args(
         "chain": cm.mc.chain_id,
     })
 
-    # apply the unnamed groups first in case somebody overwrote it with a named group
+    if filename is not None:
+        b, e = os.path.splitext(filename)
+        args_dict.update({
+            "fn": filename,
+            "fb": b,
+            "fe": e,
+        })
+
+        # apply the unnamed groups first in case somebody overwrote it with a named group
     for p, rm in regex_matches:
         args_dict.update(rm.unnamed_group_list_to_dict(f"{p}g"))
 
@@ -1503,6 +1567,7 @@ def help(err: bool = False) -> None:
         {{cesc}}              escape sequence for separating content, can be overwritten using cesc
         {{chain}}             id of the match chain that generated this content
 
+        {{fn}}                suggested download filename from the http response 
         {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
     Chain Syntax:
@@ -1705,22 +1770,30 @@ def get_format_string_keys(fmt_string) -> list[str]:
     return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
 
 
-def format_string_uses_arg(fmt_string, arg_pos, arg_name) -> int:
+def format_string_arg_occurences(fmt_string, arg_name) -> int:
+    if fmt_string is None:
+        return 0
+    fmt_args = get_format_string_keys(fmt_string)
+    return fmt_args.count(arg_name)
+
+
+def format_string_args_occurences(fmt_string, arg_names) -> int:
     if fmt_string is None:
         return 0
     fmt_args = get_format_string_keys(fmt_string)
     count = 0
-    if arg_name is not None:
-        count += fmt_args.count(arg_name)
-    if arg_pos is not None and fmt_args.count("") > arg_pos:
-        count += 1
+    for an in arg_names:
+        count += fmt_args.count(an)
     return count
 
 
-def validate_format(conf: ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch, unescape: bool, has_content: bool = False) -> None:
+def validate_format(
+    conf: ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch,
+    unescape: bool, has_content: bool = False, has_filename: bool = False
+) -> None:
     try:
         known_keys = content_match_build_format_args(
-            dummy_cm, "" if has_content else None)
+            dummy_cm, "" if has_content else None, "" if has_filename else None)
         unnamed_key_count = 0
         fmt_keys = get_format_string_keys(
             conf.resolve_attrib_path(
@@ -1744,6 +1817,24 @@ def validate_format(conf: ConfigDataClass, attrib_path: list[str], dummy_cm: Con
         )
 
 # we need ctx because mc.ctx is stil None before we apply_defaults
+
+
+def gen_default_format(mc: MatchChain):
+    form = "dl_"
+    # if max was not set it is 'inf' which has length 3 which is a fine default
+    didigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
+    cidigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
+    if mc.ci_continuous:
+        form += f"{{ci:0{cidigits}}}"
+    elif mc.content.multimatch:
+        if mc.has_document_matching:
+            form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
+        else:
+            form += f"{{ci:0{cidigits}}}"
+
+    elif mc.has_document_matching:
+        form += f"{{di:0{didigits}}}"
+    return form
 
 
 def setup_match_chain(mc: MatchChain, ctx: ScrepContext) -> None:
@@ -1786,14 +1877,17 @@ def setup_match_chain(mc: MatchChain, ctx: ScrepContext) -> None:
 
     dummy_cm = mc.gen_dummy_content_match()
     if mc.content_print_format:
-        validate_format(mc, ["content_print_format"], dummy_cm, True, True)
+        validate_format(mc, ["content_print_format"],
+                        dummy_cm, True, True, not mc.content_raw)
 
     if mc.content_save_format:
-        validate_format(mc, ["content_save_format"], dummy_cm, True, False)
+        validate_format(mc, ["content_save_format"], dummy_cm,
+                        True, False, not mc.content_raw)
         if mc.content_write_format is None:
             mc.content_write_format = DEFAULT_CWF
         else:
-            validate_format(mc, ["content_write_format"], dummy_cm, True, True)
+            validate_format(mc, ["content_write_format"],
+                            dummy_cm, True, True, not mc.content_raw)
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
@@ -1801,32 +1895,40 @@ def setup_match_chain(mc: MatchChain, ctx: ScrepContext) -> None:
             raise ScrepSetupError(
                 f"match chain {mc.chain_id}: cannot specify lic without lx or lr"
             )
+    default_format: Optional[str] = None
+
+    filename_fkeys = ["fn", "fb", "fe"]
+    mc.need_filename = (
+        format_string_args_occurences(mc.content_print_format, filename_fkeys)
+        + format_string_args_occurences(mc.content_save_format, filename_fkeys)
+        + format_string_args_occurences(mc.content_write_format, filename_fkeys)
+    ) > 0
+
+    if mc.filename_default_format is None:
+        if mc.need_filename:
+            default_format = gen_default_format(mc)
+            mc.filename_default_format = cast(str, default_format) + ".dat"
+    else:
+        validate_format(mc, ["filename_default_format"],
+                        dummy_cm, True, False, False)
 
     if mc.label_default_format is None and mc.label_allow_missing:
-        form = "dl_"
-        # if max was not set it is 'inf' which has length 3 which is a fine default
-        didigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
-        cidigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
-        if mc.ci_continuous:
-            form += f"{{ci:0{cidigits}}}"
-        elif mc.content.multimatch:
-            if mc.has_document_matching:
-                form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
-            else:
-                form += f"{{ci:0{cidigits}}}"
+        if default_format is None:
+            default_format = gen_default_format(mc)
+        mc.label_default_format = default_format
+    else:
+        validate_format(mc, ["label_default_format"],
+                        dummy_cm, True, False, False)
 
-        elif mc.has_document_matching:
-            form += f"{{di:0{didigits}}}"
-
-        mc.label_default_format = form
-    mc.content_refs_print = format_string_uses_arg(
-        mc.content_print_format, None, "c"
+    mc.content_refs_print = format_string_arg_occurences(
+        mc.content_print_format,  "c"
     )
-    mc.content_refs_write = format_string_uses_arg(
-        mc.content_write_format, None, "c"
+    mc.content_refs_write = format_string_arg_occurences(
+        mc.content_write_format, "c"
     )
     mc.need_content_download = (
         mc.content_refs_print + mc.content_refs_write) > 0
+
     mc.need_output_multipass = (
         mc.content_refs_print > 1
         or mc.content_refs_write > 1
@@ -2058,7 +2160,7 @@ def selenium_download_external(
     except ScrepFetchError as ex:
         log(
             cm.mc.ctx, Verbosity.ERROR,
-            f"{truncate(cm.doc.path)}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
+            f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
             + f"failed to download '{truncate(path)}': {str(ex)}"
         )
         return None, ContentFormat.STREAM
@@ -2075,7 +2177,7 @@ def selenium_download_internal(
     if doc_url.netloc != cast(urllib.parse.ParseResult, cm.url_parsed).netloc:
         log(
             cm.mc.ctx, Verbosity.ERROR,
-            f"{cm.cmatch}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
+            f"{cm.cmatch}{get_ci_di_context(cm)}: "
             + f"failed to download: seldl=internal does not work across origins"
         )
         return None, ContentFormat.TEMP_FILE
@@ -2101,7 +2203,7 @@ def selenium_download_internal(
         else:
             log(
                 cm.mc.ctx, Verbosity.ERROR,
-                f"{cm.cmatch}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
+                f"{cm.cmatch}{get_ci_di_context(cm)}: "
                 + f"selenium download failed: {str(ex)}"
             )
         return None, ContentFormat.TEMP_FILE
@@ -2171,7 +2273,7 @@ def selenium_download_fetch(
             cors_warn = " (potential CORS issue)"
         log(
             cm.mc.ctx, Verbosity.ERROR,
-            f"{truncate(cm.doc.path)}{get_ci_di_context(cm.mc, cm.di, cm.ci)}: "
+            f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
             + f"selenium download of '{cm.cmatch}' failed{cors_warn}: {err}"
         )
         return None, ContentFormat.BYTES
@@ -2426,14 +2528,14 @@ def normalize_link(
     return link_parsed.geturl(), link_parsed
 
 
-def get_ci_di_context(mc: MatchChain, di: Optional[int], ci: Optional[int]) -> str:
-    if mc.has_document_matching:
-        if mc.content.multimatch:
-            di_ci_context = f" (di={di}, ci={ci})"
+def get_ci_di_context(cm: ContentMatch) -> str:
+    if cm.mc.has_document_matching:
+        if cm.mc.content.multimatch:
+            di_ci_context = f" (di={cm.di}, ci={cm.ci})"
         else:
-            di_ci_context = f" (di={di})"
-    elif mc.content.multimatch:
-        di_ci_context = f" (ci={ci})"
+            di_ci_context = f" (di={cm.di})"
+    elif cm.mc.content.multimatch:
+        di_ci_context = f" (ci={cm.ci})"
     else:
         di_ci_context = f""
     return di_ci_context
@@ -2442,6 +2544,7 @@ def get_ci_di_context(mc: MatchChain, di: Optional[int], ci: Optional[int]) -> s
 def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
+    cm.mc.ci += 1
     cm.cfmatch = cm.mc.content.apply_format(cm, cm.content_regex_match)
     cm.cmatch = cm.cfmatch
 
@@ -2455,7 +2558,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
         )
     cm.lmatch = cm.lfmatch
 
-    di_ci_context = get_ci_di_context(cm.mc, cm.di, cm.ci)
+    di_ci_context = get_ci_di_context(cm)
 
     if cm.mc.has_label_matching:
         label_context = f' (label "{cm.lmatch}")'
@@ -2559,48 +2662,10 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
             cm.lmatch = input("enter new label: ")
 
     save_path = None
-    if cm.mc.content_save_format:
-        if not cm.mc.is_valid_label(cm.lmatch):
-            log(cm.mc.ctx, Verbosity.WARN,
-                f"matched label '{cm.lmatch}' would contain a slash, skipping this content from: {cm.doc.path}")
-        save_path_bytes = gen_final_content_format(
-            cm.mc.content_save_format, cm)
-        try:
-            save_path = save_path_bytes.decode(
-                "utf-8", errors="surrogateescape")
-        except UnicodeDecodeError:
-            log(cm.mc.ctx, Verbosity.ERROR,
-                f"{cm.doc.path}{di_ci_context}: generated save path is not valid utf-8")
-            save_path = None
-        while True:
-            if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
-                log(cm.mc.ctx, Verbosity.ERROR,
-                    f"{cm.doc.path}{di_ci_context}: directory of generated save path does not exist")
-                save_path = None
-            if not save_path and not cm.mc.save_path_interactive:
-                return InteractiveResult.ERROR
-            if not cm.mc.save_path_interactive:
-                break
-            if save_path:
-                res = prompt(
-                    f'{cm.doc.path}{di_ci_context}: accept save path "{save_path}" [Yes/no/edit/chainskip/docskip]? ',
-                    [
-                        (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
-                        (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
-                        (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
-                        (InteractiveResult.SKIP_CHAIN,
-                         CHAIN_SKIP_INDICATING_STRINGS),
-                        (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
-                    ],
-                    InteractiveResult.ACCEPT
-                )
-                if res == InteractiveResult.ACCEPT:
-                    break
-                if res != InteractiveResult.EDIT:
-                    return res
-            save_path = input("enter new save path: ")
-    cm.mc.ci += 1
     job = DownloadJob(cm, save_path)
+    res = job.handle_safe_path()
+    if res != InteractiveResult.ACCEPT:
+        return res
     if cm.mc.ctx.dl_manager is not None and job.requires_download():
         cm.mc.ctx.dl_manager.submit(job)
     else:
@@ -3554,6 +3619,10 @@ def parse_args(ctx: ScrepContext, args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "lic", ["labels_inside_content"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "lam", ["label_allow_missing"], arg, parse_bool_arg, True):
+            continue
+        if apply_mc_arg(ctx, "ldf", ["label_default_format"], arg, parse_bool_arg, True):
+            continue
+        if apply_mc_arg(ctx, "fdf", ["filename_default_format"], arg, parse_bool_arg, True):
             continue
 
         # document args
