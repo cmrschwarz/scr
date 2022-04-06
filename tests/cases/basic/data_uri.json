@@ -1,6 +1,6 @@
 {
     "args": [
-        "file=./test/res/data_uri.txt",
+        "file=./tests/res/data_uri.txt",
         "cr=^.+$",
         "cl=1"
     ],

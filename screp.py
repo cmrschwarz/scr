@@ -1601,10 +1601,10 @@ def help(err: bool = False) -> None:
         print(text)
 
 
-def add_cwd_to_path() -> str:
-    cwd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
-    os.environ["PATH"] += ":" + cwd
-    return cwd
+def add_script_dir_to_path() -> str:
+    sd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+    os.environ["PATH"] += ":" + sd
+    return sd
 
 
 def truncate(
@@ -1657,7 +1657,8 @@ def selenium_build_firefox_options(
 
 def setup_selenium_tor(ctx: ScrepContext) -> None:
     # use bundled geckodriver if available
-    cwd = add_cwd_to_path()
+    cwd = os.getcwd()
+    add_script_dir_to_path()
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
         if tb_env_var in os.environ:
@@ -1677,7 +1678,7 @@ def setup_selenium_tor(ctx: ScrepContext) -> None:
 
 def setup_selenium_firefox(ctx: ScrepContext) -> None:
     # use bundled geckodriver if available
-    add_cwd_to_path()
+    add_script_dir_to_path()
     try:
         ctx.selenium_driver = selenium.webdriver.Firefox(
             options=selenium_build_firefox_options(ctx),
@@ -1690,7 +1691,7 @@ def setup_selenium_firefox(ctx: ScrepContext) -> None:
 
 def setup_selenium_chrome(ctx: ScrepContext) -> None:
     # allow usage of bundled chromedriver
-    add_cwd_to_path()
+    add_script_dir_to_path()
     options = selenium.webdriver.ChromeOptions()
     options.add_argument("--incognito")
     if ctx.user_agent != None:

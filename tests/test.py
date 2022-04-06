@@ -168,7 +168,9 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
         TestResult.FAILED: 0,
         TestResult.SUCCESS: 0
     }
-    tests = glob.glob("./test/cases/**/*.json", recursive=True)
+
+    script_dir = os.path.relpath(os.path.dirname(__file__))
+    tests = glob.glob(f"{script_dir}/cases/**/*.json", recursive=True)
     if to.parallelism < 2:
         for name in tests:
             res = run_test(name, to)
