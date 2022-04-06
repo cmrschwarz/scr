@@ -7,7 +7,7 @@
         "selenium"
     ],
     "stdin": [
-        "file=./test/res/js_content.html",
+        "file=./tests/res/js_content.html",
         "'cx=//p/text()'",
         "sel=f",
         "'cx=//p/text()'",

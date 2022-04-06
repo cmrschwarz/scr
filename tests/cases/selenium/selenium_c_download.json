@@ -1,6 +1,6 @@
 {
     "args": [
-        "file0=./test/res/multidoc.html",
+        "file0=./tests/res/multidoc.html",
         "dx0=//iframe/@src",
         "doc0=1-2",
         "cx1-2=//div[@id='resources']//embed/@src",

@@ -846,9 +846,11 @@ class OutputFormatter:
         self, format_str: str, cm: ContentMatch,
         out_stream: Union[BinaryIO, 'PrintOutputStream'],
         content: Union[str, bytes, MinimalInputStream, BinaryIO, None],
+        filename: Optional[str],
         input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
     ):
-        self._args_dict = content_match_build_format_args(cm, content)
+        self._args_dict = content_match_build_format_args(
+            cm, content, filename)
         self._args_list = []  # no positional args right now
 
         # we reverse these lists so we can take out elements using pop()
@@ -1038,11 +1040,11 @@ class DownloadJob:
     print_stream: Optional[PrintOutputStream] = None
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
-    content_format: ContentFormat
-    filename: Optional[str]
+    content_format: Optional[ContentFormat] = None
+    filename: Optional[str] = None
 
     cm: ContentMatch
-    save_path: Optional[str]
+    save_path: Optional[str] = None
     context: str
     output_formatters: list[OutputFormatter]
 
@@ -1074,8 +1076,13 @@ class DownloadJob:
             log(cm.mc.ctx, Verbosity.WARN,
                 f"matched label '{cm.lmatch}' would contain a slash, skipping this content from: {cm.doc.path}"
                 )
+            save_path = None
+        if cm.mc.need_filename:
+            if not self.fetch_content():
+                return InteractiveResult.ERROR
         save_path_bytes = gen_final_content_format(
-            cm.mc.content_save_format, cm)
+            cm.mc.content_save_format, cm, self.filename
+        )
         try:
             save_path = save_path_bytes.decode(
                 "utf-8", errors="surrogateescape")
@@ -1110,15 +1117,19 @@ class DownloadJob:
                 if res != InteractiveResult.EDIT:
                     return res
             save_path = input("enter new save path: ")
+        if save_path is None:
+            return InteractiveResult.REJECT
         self.save_path = save_path
         return InteractiveResult.ACCEPT
 
     def fetch_content(self) -> bool:
+        if self.content_format is not None:
+            # we already fetched the content for the filename's sake
+            return True
         path = cast(str, self.cm.cmatch)
         if self.cm.mc.content_raw:
             self.content = self.cm.cmatch
             self.content_format = ContentFormat.STRING
-            self.gen_filename()
         else:
             if not self.cm.mc.need_content_download:
                 self.content_format = ContentFormat.UNNEEDED
@@ -1183,7 +1194,7 @@ class DownloadJob:
 
         self.output_formatters.append(OutputFormatter(
             cast(str, self.cm.mc.content_write_format),
-            self.cm, save_file, self.content
+            self.cm, save_file, self.content, self.filename
         ))
         return True
 
@@ -1216,7 +1227,7 @@ class DownloadJob:
             stream = sys.stdout.buffer
         self.output_formatters.append(OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
-            stream, self.content
+            stream, self.content, self.filename
         ))
         return True
 
@@ -2480,9 +2491,9 @@ def fetch_doc(ctx: ScrepContext, doc: Document) -> None:
     return
 
 
-def gen_final_content_format(format_str: str, cm: ContentMatch) -> bytes:
+def gen_final_content_format(format_str: str, cm: ContentMatch, filename: Optional[str] = None) -> bytes:
     with BytesIO(b"") as buf:
-        of = OutputFormatter(format_str, cm, buf, None)
+        of = OutputFormatter(format_str, cm, buf, None, filename)
         while of.advance():
             pass
         buf.seek(0)
@@ -2887,10 +2898,11 @@ def handle_interactive_chains(
     return result, msg
 
 
-def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path) -> tuple[bool, bool]:
+def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> tuple[bool, bool]:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc, last_doc_path)
+            mc, doc, last_doc_path
+        )
     else:
         content_matches = []
 

@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=./test/res/closing_doc.html",
+        "rfile=./tests/res/closing_doc.html",
         "cx=//p/text()",
         "sel=f"
     ],
