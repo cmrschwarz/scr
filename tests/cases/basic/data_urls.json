@@ -1,0 +1,14 @@
+{
+    "args": [
+        "file=./tests/res/data_url_plain.txt",
+        "file=./tests/res/data_url_base64.txt",
+        "file=./tests/res/data url with space.txt",
+        "cr=^.+$",
+        "cl=1"
+    ],
+    "stdout": [
+        "data_url_plain",
+        "data_url_base64",
+        "data url with space"
+    ]
+}

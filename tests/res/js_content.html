@@ -3,17 +3,16 @@
 
 <head>
     <meta charset="utf-8">
+    <title>js_content</title>
     <script>
-        function load() {
-            const p = document.createElement("p");
-            p.innerText = "dynamic content";
-            document.body.appendChild(p);
-        }
+        const p = document.createElement("p");
+        p.innerText = "js_content";
+        p.id = "js_content";
+        document.body.appendChild(p);
     </script>
 </head>
 
-<body onload="load()">
-    <p>static content</p>
+<body>
 </body>
 
 </html>

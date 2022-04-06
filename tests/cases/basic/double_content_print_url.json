@@ -1,12 +1,12 @@
 {
     "args": [
-        "url=echo.d.cmrs.io?echo=echo.d.cmrs.io?echo=foo",
+        "url=http://httpbin.org/base64/ZG91YmxlX2NvbnRlbnRfcHJpbnRfdXJs",
         "cl=1",
         "cr=^.+$",
         "cpf={c}:::{c}"
     ],
     "tags": [
-        "need-cmrs.io"
+        "need-httpbin"
     ],
-    "stdout": "foo\n:::foo\n"
+    "stdout": "double_content_print_url\n:::double_content_print_url\n"
 }

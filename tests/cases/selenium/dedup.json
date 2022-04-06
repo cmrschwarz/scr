@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=./tests/res/redundant.html",
+        "rfile=./tests/res/foo+bar+foo.html",
         "cx= //ul/li/text()",
         "sel=f",
         "selstrat=dedup"
@@ -11,9 +11,8 @@
     ],
     "stdin": "y\n",
     "stdout": [
-        "tests/res/redundant.html: use page with potentially   < 4 >   contents [Yes/skip]? Foo",
-        "Bar",
-        "Baz",
-        "Quux"
+        "tests/res/redundant.html: use page with potentially   < 2 >   contents [Yes/skip]? Foo",
+        "foo",
+        "bar"
     ]
 }

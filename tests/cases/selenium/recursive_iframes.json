@@ -1,12 +1,19 @@
 {
     "args": [
-        "file=./tests/res/recursive_iframes.html",
-        "cx=//div[@id='basic']//li/text()",
+        "file=./tests/res/iframe_tree.html",
+        "cx=//title/text()",
         "sel=c"
     ],
     "tags": [
         "selenium",
         "chrome"
     ],
-    "stdout": "Foo\nBar\nBaz\n"
+    "stdout": [
+        "iframe_tree",
+        "iframe_tree_l",
+        "iframe_tree_l1",
+        "iframe_tree_l2",
+        "iframe_tree_l3",
+        "iframe_tree_r"
+    ]
 }

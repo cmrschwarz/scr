@@ -7,18 +7,23 @@
         "selenium"
     ],
     "stdin": [
+        "file=tests/res/a.txt cpf={c}",
         "file=./tests/res/js_content.html",
         "'cx=//p/text()'",
         "sel=f",
         "'cx=//p/text()'",
+        "file=tests/res/b.txt cpf={c}",
+        "file=./tests/res/js_content.html",
         "sel=d",
         "'cx=//p/text()'",
+        "cpf=c",
         "exit"
     ],
     "stdout": [
-        "static content",
-        "static content",
-        "dynamic content",
-        "static content"
+        "a",
+        "js_content",
+        "b",
+        "js_content",
+        "c"
     ]
 }

@@ -10,7 +10,6 @@
         "chrome"
     ],
     "stdout": [
-        "static content",
-        "dynamic content"
+        "js_content"
     ]
 }

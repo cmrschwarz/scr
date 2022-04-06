@@ -1,14 +1,11 @@
 {
     "args": [
-        "file0=./tests/res/multidoc.html",
-        "cx=//iframe/@src",
+        "file0=./tests/res/a.txt.html",
+        "cx=//@src",
         "cl=1",
         "cpf={cm}\\n"
     ],
     "stdout": [
-        "tests/res/empty.html",
-        "tests/res/basic.html",
-        "tests/res/non_unicode.html",
-        "tests/res/resources.html"
+        "tests/res/a.txt"
     ]
 }

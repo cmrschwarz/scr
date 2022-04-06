@@ -1,11 +1,12 @@
 {
     "args": [
-        "file0=./tests/res/multidoc.html",
-        "dx0=//iframe/@src",
-        "doc0=0-2",
-        "cx1=//li/text()",
-        "cx2=//@src",
-        "cr2=.*\\.txt"
+        "file0=./tests/res/a.txt.html",
+        "dx0=//@src",
+        "doc0=1",
+        "cx0=//@id",
+        "file1=./tests/res/b.txt",
+        "cr1=b",
+        "cpf1={cr}"
     ],
-    "stdout": "Foo\nBar\nBaz\na.txt\n"
+    "stdout": "a.txt\na\nb\n"
 }

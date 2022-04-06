@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=./tests/res/cross_origin.html",
+        "rfile=./tests/res/cors.html",
         "cx=//embed/@src",
         "sel=f",
         "cl=t",
@@ -9,11 +9,11 @@
         "seldl1=f"
     ],
     "ec": 1,
-    "stdout": "foobar\n",
+    "stdout": "cors\n",
     "tags": [
         "selenium",
         "firefox",
         "need-cmrs.io"
     ],
-    "stderr": "[ERROR]: tests/res/cross_origin.html (ci=1): selenium download of 'https://echo.d.cmrs.io/?echo=foobar' failed (potential CORS issue): NetworkError when attempting to fetch resource.\n"
+    "stderr": "[ERROR]: tests/res/cross_origin.html (ci=1): selenium download of 'https://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): NetworkError when attempting to fetch resource.\n"
 }

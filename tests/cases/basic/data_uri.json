@@ -1,8 +1,0 @@
-{
-    "args": [
-        "file=./tests/res/data_uri.txt",
-        "cr=^.+$",
-        "cl=1"
-    ],
-    "stdout": "Hello, World!\n"
-}

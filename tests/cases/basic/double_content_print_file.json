@@ -1,0 +1,9 @@
+{
+    "args": [
+        "file=./tests/res/a.txt.html",
+        "cl=1",
+        "cx=//@src",
+        "cpf={c}:::{c}"
+    ],
+    "stdout": "a\n:::a\n"
+}

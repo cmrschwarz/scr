@@ -1,15 +1,15 @@
 {
     "args": [
         "repl",
-        "rfile=./tests/res/basic.html",
+        "rfile=./tests/res/foo+bar+baz.html",
         "cx=//ul/li/text()"
     ],
     "tags": [
         "repl"
     ],
     "stdin": [
-        "'cx=//ul/li/text()' cr=B.r",
+        "'cx=//ul/li/text()' cr=b.r",
         "exit"
     ],
-    "stdout": "Foo\nBar\nBaz\nBar\n"
+    "stdout": "foo\nbar\nbaz\nbar\n"
 }
