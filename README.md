@@ -1,39 +1,40 @@
-# screp
+# scrap
 
-Commandline utility for webpage scraping written in Python.
+Command-line Utility for Web Scraping written in Python.
 
-The name "screp" comes from merging "scrape" and "grep".
+
+The name "scrap" is a recursive acronym for "**S**crap **CR**awls **A**nd **P**arses".
 
 ## Examples
 
 ### Get text from all paragraphs on a site:
 ```bash 
-screp url=google.com cx='//p/text()'
+scrap url=google.com cx='//p/text()'
 ```
 
 ### Get the latest 5 Video Titles from a youtube channel
 ```bash 
-screp url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuRXz02jbQ" cx="//feed/entry[position()<=5]/title/text()"
+scrap url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuRXz02jbQ" cx="//feed/entry[position()<=5]/title/text()"
 ```
 
 ### Get absolute links to all images on a website:
 ```bash 
-screp url=google.com cx='//img/@src' cl cpf='{cm}\n'
+scrap url=google.com cx='//img/@src' cl cpf='{cm}\n'
 ```
 
 ### Scroll through top reddit posts:
 ```bash 
-screp url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3 mt=0
+scrap url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3 mt=0
 ```
 
 ### Downloading first 3 pdfs from a site:
 ```bash 
-screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl csf='{ci:02}_{name}' v=info cimax=3 
+scrap url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*?(?P<name>[^/]*\.pdf$)' cl csf='{ci:02}_{name}' v=info cimax=3 
 ```
 
 ### Downloading first 3 pdfs and gifs from a site interactively:
 ```bash 
-screp url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*?(?P<name>[^/]*\.pdf$)' cr1='.*?(?P<name>[^/]*\.gif$)' csf='{ci:02}_{name}' v=info cin cl cimax=3   
+scrap url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*?(?P<name>[^/]*\.pdf$)' cr1='.*?(?P<name>[^/]*\.gif$)' csf='{ci:02}_{name}' v=info cin cl cimax=3   
 ```
 
 ## Setup
@@ -52,7 +53,7 @@ you need to have a driver for the selected browser installed.
 
 #### Setting up geckodriver for selenium (firefox/tor)
 
-The geckodriver executable (to be placed in the root directory next to screp)
+The geckodriver executable (to be placed in the root directory next to scrap)
 can be downloaded from
 https://github.com/mozilla/geckodriver/releases
  
@@ -65,7 +66,7 @@ package for your distribution.
 
 ## Options
 ```
-screp [OPTIONS]
+scrap [OPTIONS]
     Extract content from urls or files by specifying content matching chains
     (xpath -> regex -> python format string).
 

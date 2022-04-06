@@ -14,11 +14,6 @@ from enum import Enum
 from typing import Any, Union, TypeVar, Callable, Optional, cast
 from multiprocessing import Pool, cpu_count
 
-# cd into parent of scriptdir
-os.chdir(os.path.dirname(os.path.abspath(os.path.realpath(__file__))) + "/..")
-# prepend to path so we can call 'screp ...'
-os.environ["PATH"] = "." + ":" + os.environ["PATH"]
-
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
 ANSI_YELLOW = "\033[0;33m"
@@ -41,12 +36,6 @@ class TestOptions:
     def __init__(self) -> None:
         self.tags_need = []
         self.tags_avoid = []
-        scrip_dir = os.path.dirname(__file__)
-        self.script_dir_abs = os.path.abspath(os.path.realpath(scrip_dir))
-        self.script_dir = os.path.relpath(
-            scrip_dir
-        )
-        self.script_dir_name = os.path.basename(self.script_dir)
 
 
 def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
@@ -54,7 +43,7 @@ def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
 
 
 def get_cmd_string(tc: dict[str, Any]) -> str:
-    cmd = tc.get("command", "screp")
+    cmd = tc.get("command", "scrap")
     args: list[str] = tc.get("args", [])
     assert type(args) is list
     for arg in args:
@@ -129,7 +118,7 @@ def run_test(name: str, to: TestOptions) -> TestResult:
         return TestResult.SKIPPED
 
     ec = tc.get("ec", 0)
-    command = tc.get("command", "screp")
+    command = tc.get("command", "scrap")
     args = tc.get("args", [])
     stdin = join_lines(tc.get("stdin", ""))
     expected_stdout = join_lines(tc.get("stdout", ""))
@@ -143,7 +132,7 @@ def run_test(name: str, to: TestOptions) -> TestResult:
         os.mkdir(cwd)
         # so ./tests/res/... links still work with the changed cwd
         os.symlink(
-            os.path.realpath(to.script_dir),
+            to.script_dir_abs,
             os.path.join(cwd, to.script_dir_name),
             True
         )
@@ -237,13 +226,23 @@ def xhash(input: Any = None) -> str:
 
 def main() -> int:
     to = TestOptions()
-    # prepend the screp root directory to PATH
-    # so tests can use the screp command
+    to.script_dir_abs = os.path.dirname(
+        os.path.abspath(os.path.realpath(__file__))
+    )
+
+    # cd into parent of scriptdir
+    os.chdir(os.path.join(to.script_dir_abs, ".."))
+
+    to.script_dir = os.path.relpath(to.script_dir_abs)
+    to.script_dir_name = os.path.basename(to.script_dir)
+
+    # prepend the scrap root directory to PATH
+    # so tests can use the scrap command
     os.environ["PATH"] = (
         os.path.realpath(os.path.join(to.script_dir_abs, ".."))
         + ":" + os.environ["PATH"]
     )
-    to.test_output_dir = tempfile.mkdtemp(prefix="screp_test_")
+    to.test_output_dir = tempfile.mkdtemp(prefix="scrap_test_")
     try:
         i = 1
         while i < len(sys.argv):

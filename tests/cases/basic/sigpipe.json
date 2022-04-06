@@ -2,7 +2,7 @@
     "command": "bash",
     "args": [
         "-c",
-        "screp file=tests/res/foo+bar+baz.html 'cx=//li/text()' | head -n 1"
+        "scrap file=tests/res/foo+bar+baz.html 'cx=//li/text()' | head -n 1"
     ],
     "stdout": "foo\n"
 }
