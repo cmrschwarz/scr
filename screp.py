@@ -1066,8 +1066,8 @@ class DownloadJob:
     def gen_fallback_filename(self) -> bool:
         if not self.cm.mc.need_filename or self.filename is not None:
             return True
-        self.filename = sanitize_filename(
-            cast(urllib.parse.ParseResult, self.cm.url_parsed).path)
+        path = cast(urllib.parse.ParseResult, self.cm.url_parsed).path
+        self.filename = sanitize_filename(urllib.parse.unquote(path))
         if self.filename is not None:
             return True
         try:
@@ -1143,8 +1143,7 @@ class DownloadJob:
 
     def fetch_content(self) -> bool:
         if self.content_format is not None:
-            # we already fetched the content for the filename's sake
-            return True
+            return self.gen_fallback_filename()
         path = cast(str, self.cm.cmatch)
         if self.cm.mc.content_raw:
             self.content = self.cm.cmatch
@@ -1164,25 +1163,25 @@ class DownloadJob:
                     if data is not None:
                         self.content = data
                         self.content_format = ContentFormat.BYTES
-                        return True
-                    if self.cm.doc.document_type.derived_type() is DocumentType.FILE:
+                    elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
                         self.content = path
                         self.content_format = ContentFormat.FILE
-                        return True
-                    try:
-                        res = request_raw(
-                            self.cm.mc.ctx, path,
-                            cast(urllib.parse.ParseResult, self.cm.url_parsed),
-                            stream=True
-                        )
-                        self.content = ResponseStreamWrapper(res)
-                        self.filename = request_try_get_filename(res)
-                        self.content_format = ContentFormat.STREAM
-                    except requests.exceptions.RequestException as ex:
-                        ex = request_exception_to_screp_fetch_error(ex)
-                        log(self.cm.mc.ctx, Verbosity.ERROR,
-                            f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
-                        return False
+                    else:
+                        try:
+                            res = request_raw(
+                                self.cm.mc.ctx, path,
+                                cast(urllib.parse.ParseResult,
+                                     self.cm.url_parsed),
+                                stream=True
+                            )
+                            self.content = ResponseStreamWrapper(res)
+                            self.filename = request_try_get_filename(res)
+                            self.content_format = ContentFormat.STREAM
+                        except requests.exceptions.RequestException as ex:
+                            ex = request_exception_to_screp_fetch_error(ex)
+                            log(self.cm.mc.ctx, Verbosity.ERROR,
+                                f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
+                            return False
         if not self.gen_fallback_filename():
             return False
         return True
@@ -1957,13 +1956,16 @@ def setup_match_chain(mc: MatchChain, ctx: ScrepContext) -> None:
         validate_format(mc, ["filename_default_format"],
                         dummy_cm, True, False, False)
 
-    if mc.label_default_format is None and mc.label_allow_missing:
-        if default_format is None:
-            default_format = gen_default_format(mc)
-        mc.label_default_format = default_format
+    if mc.label_default_format is None:
+        if mc.label_allow_missing:
+            if default_format is None:
+                default_format = gen_default_format(mc)
+            mc.label_default_format = default_format
     else:
-        validate_format(mc, ["label_default_format"],
-                        dummy_cm, True, False, False)
+        validate_format(
+            mc, ["label_default_format"],
+            dummy_cm, True, False, False
+        )
 
     mc.content_refs_print = format_string_arg_occurences(
         mc.content_print_format,  "c"
@@ -2762,7 +2764,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     res = job.handle_safe_path()
     if res != InteractiveResult.ACCEPT:
         return res
-    if cm.mc.ctx.dl_manager is not None and job.requires_download():
+    if cm.mc.ctx.dl_manager is not None:
         cm.mc.ctx.dl_manager.submit(job)
     else:
         log(cm.mc.ctx, Verbosity.DEBUG,

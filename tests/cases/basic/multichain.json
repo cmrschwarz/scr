@@ -4,9 +4,11 @@
         "dx0=//@src",
         "doc0=1",
         "cx0=//@id",
-        "file1=./tests/res/b.txt",
-        "cr1=b",
-        "cpf1={cr}"
+        "cr1=a",
+        "cpf1={cr}",
+        "file2=./tests/res/b.txt",
+        "cr2=b",
+        "cpf2={c}"
     ],
     "stdout": "a.txt\na\nb\n"
 }

@@ -1,12 +1,12 @@
 {
     "args": [
-        "url=http://httpbin.org/base64/ZG91YmxlX2NvbnRlbnRfcHJpbnRfdXJs",
+        "rfile=tests/res/file_url.html",
         "cl=1",
-        "cr=^.+$",
+        "cx=//@src",
         "cpf={c}:::{c}"
     ],
     "tags": [
         "need-httpbin"
     ],
-    "stdout": "double_content_print_url\n:::double_content_print_url\n"
+    "stdout": "file_url:::file_url"
 }

@@ -11,7 +11,7 @@
         "need-httpbin"
     ],
     "output_files": {
-        "file_url.txt": "file_url\n",
-        "ZmlsZV91cmw=": "file_url\n"
+        "file_url.txt": "file_url",
+        "ZmlsZV91cmw=": "file_url"
     }
 }
