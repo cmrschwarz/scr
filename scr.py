@@ -144,6 +144,9 @@ class SeleniumVariant(Enum):
     FIREFOX = 2
     TORBROWSER = 3
 
+    def enabled(self):
+        return self != SeleniumVariant.DISABLED
+
 
 class SeleniumDownloadStrategy(Enum):
     EXTERNAL = 0
@@ -1199,7 +1202,7 @@ class DownloadJob:
             if not self.cm.mc.need_content_download:
                 self.content_format = ContentFormat.UNNEEDED
             else:
-                if self.cm.mc.ctx.selenium_variant != SeleniumVariant.DISABLED:
+                if self.cm.mc.ctx.selenium_variant.enabled():
                     self.content, self.content_format, self.filename = selenium_download(
                         self.cm
                     )
@@ -2112,7 +2115,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
     ctx.apply_defaults(ScrContext())
 
     if ctx.tor_browser_dir:
-        if ctx.selenium_variant == SeleniumVariant.DISABLED:
+        if not ctx.selenium_variant.enabled():
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
     load_cookie_jar(ctx)
 
@@ -2120,7 +2123,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
         raise ScrSetupError(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
         ctx.user_agent = get_random_user_agent()
-    elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
+    elif ctx.user_agent is None and not ctx.selenium_variant.enabled():
         ctx.user_agent = SCR_USER_AGENT
 
     # if no chains are specified, use the origin chain as chain 0
@@ -2159,7 +2162,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
                 prefix="Scr_downloads_"
             )
 
-    if ctx.selenium_variant == SeleniumVariant.DISABLED:
+    if not ctx.selenium_variant.enabled():
         for mc in ctx.match_chains:
             mc.selenium_strategy = SeleniumStrategy.DISABLED
     elif ctx.selenium_driver is None:
@@ -2604,7 +2607,7 @@ def selenium_get_full_page_source(ctx: ScrContext):
 
 
 def fetch_doc(ctx: ScrContext, doc: Document) -> None:
-    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+    if ctx.selenium_variant.enabled():
         if doc is not ctx.reused_doc or ctx.changed_selenium:
             selpath = doc.path
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
@@ -2659,7 +2662,7 @@ def normalize_link(
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
-                    if ctx.selenium_variant != SeleniumVariant.DISABLED:
+                    if ctx.selenium_variant.enabled():
                         # attempt to preserve short, relative paths were possible
                         if os.path.realpath(doc_url_parsed.path) == os.path.realpath(src_doc.path):
                             base = src_doc.path
@@ -2727,7 +2730,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     while True:
         if not cm.mc.content_raw:
             cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
-            if cm.mc.ctx.selenium_variant == SeleniumVariant.DISABLED:
+            if not cm.mc.ctx.selenium_variant.enabled():
                 doc_url = cm.doc.path
             else:
                 sel_url = selenium_get_url(cm.mc.ctx)
@@ -3187,7 +3190,7 @@ def dl(ctx: ScrContext) -> Optional[Document]:
                     have_xpath_matching += 1
 
         if unsatisfied_chains == 0:
-            if ctx.selenium_variant == SeleniumVariant.DISABLED or (doc is ctx.reused_doc and not ctx.changed_selenium):
+            if not ctx.selenium_variant.enabled() or (doc is ctx.reused_doc and not ctx.changed_selenium):
                 continue
 
         log(ctx, Verbosity.INFO,
@@ -3207,13 +3210,15 @@ def dl(ctx: ScrContext) -> Optional[Document]:
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: {str(ex)}")
             continue
         static_content = (
-            doc.document_type != DocumentType.URL or ctx.selenium_variant == SeleniumVariant.DISABLED)
+            doc.document_type != DocumentType.URL
+            or not ctx.selenium_variant.enabled()
+        )
         last_msg = ""
         while unsatisfied_chains > 0:
             try_number += 1
             same_content = static_content and try_number > 1
             if try_number > 1 and not static_content:
-                assert(ctx.selenium_variant != SeleniumVariant.DISABLED)
+                assert(ctx.selenium_variant.enabled())
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
                     last_doc_path = drv.current_url
