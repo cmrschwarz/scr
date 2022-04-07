@@ -565,7 +565,7 @@ class Locator(ConfigDataClass):
         if self.regex is None:
             return
         try:
-            self.regex = re.compile(self.regex, re.DOTALL)
+            self.regex = re.compile(self.regex, re.DOTALL | re.MULTILINE)
         except re.error as err:
             raise ScrSetupError(
                 f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
@@ -582,13 +582,13 @@ class Locator(ConfigDataClass):
             return
         args_dict: dict[str, Any] = {}
         dummy_doc = mc.gen_dummy_document()
-        apply_general_format_args(dummy_doc, mc, args_dict)
+        apply_general_format_args(dummy_doc, mc, args_dict, unstable_ci=True)
         apply_locator_match_format_args(
             self.name, self.gen_dummy_locator_match(), args_dict
         )
         js_prelude = ""
         for i, k in enumerate(args_dict.keys()):
-            js_prelude += f"const {k} = arguments[{i}];"
+            js_prelude += f"const {k} = arguments[{i}];\n"
         self.js_script = js_prelude + self.js_script
 
     def setup(self, mc: 'MatchChain') -> None:
@@ -698,8 +698,9 @@ class Locator(ConfigDataClass):
             apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
             apply_locator_match_format_args(self.name, lm, args_dict)
             try:
+                mc.js_executed = True
                 results = cast(SeleniumWebDriver, mc.ctx.selenium_driver).execute_script(
-                    self.js_script, list(args_dict.values())
+                    self.js_script, *args_dict.values()
                 )
             except selenium.common.exceptions.JavascriptException as ex:
                 arg = cast(str, self.get_configuring_argument(['js_script']))
@@ -802,6 +803,7 @@ class MatchChain(ConfigDataClass):
     chain_id: int
     di: int
     ci: int
+    js_executed: bool = False
     has_xpath_matching: bool = False
     has_label_matching: bool = False
     has_content_xpaths: bool = False
@@ -836,10 +838,12 @@ class MatchChain(ConfigDataClass):
         self.handled_document_matches = set()
 
     def gen_dummy_document(self):
-        return Document(
+        d = Document(
             DocumentType.FILE, "", None,
             locator_match=self.document.gen_dummy_locator_match()
         )
+        d.encoding = ""
+        return d
 
     def gen_dummy_content_match(self):
         clm = self.content.gen_dummy_locator_match()
@@ -1527,7 +1531,7 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
 
 
 def apply_general_format_args(doc: Document, mc: MatchChain, args_dict: dict[str, Any], unstable_ci: bool = False) -> None:
-    args_dict.update({
+    dict_update_unless_none(args_dict, {
         "cenc": doc.encoding,
         "cesc": mc.content_escape_sequence,
         "dl":   doc.path,
@@ -2962,7 +2966,10 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
         return res
 
 
-def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tuple[list[ContentMatch], int]:
+def gen_content_matches(
+    mc: MatchChain, doc: Document, last_doc_path: str
+) -> tuple[list[ContentMatch], int]:
+    js_executed = False
     text = cast(str, doc.text)
     content_matches: list[ContentMatch] = []
     content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
@@ -3168,7 +3175,7 @@ def match_chain_was_satisfied(mc: MatchChain):
     return satisfied, interactive
 
 
-def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> None:
+def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> bool:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
             mc, doc, last_doc_path
@@ -3318,10 +3325,11 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
             or not ctx.selenium_variant.enabled()
         )
         last_msg = ""
+        content_change = True
         while unsatisfied_chains > 0:
             try_number += 1
-            same_content = static_content and try_number > 1
-            if try_number > 1 and not static_content:
+            same_content = static_content and not content_change
+            if try_number > 1 and not same_content:
                 assert(ctx.selenium_variant.enabled())
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
@@ -3338,7 +3346,8 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                             f"selenium failed to fetch page source: {str(ex)}")
                     break
 
-            if not same_content:
+            if not same_content or content_change:
+                content_change = False
                 interactive_chains = []
                 if have_xpath_matching and doc.xml is None:
                     parse_xml(ctx, doc)
@@ -3347,6 +3356,7 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                 for mc in doc.match_chains:
                     if mc.satisfied:
                         continue
+                    mc.js_executed = False
                     handle_match_chain(mc, doc, last_doc_path)
                     satisfied, interactive = match_chain_was_satisfied(mc)
                     if satisfied:
@@ -3356,6 +3366,11 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                             have_xpath_matching -= 1
                     elif interactive:
                         interactive_chains.append(mc)
+                    if mc.js_executed:
+                        content_change = True
+                        break
+                if content_change:
+                    continue
 
             if interactive_chains:
                 accept, last_msg = handle_interactive_chains(
