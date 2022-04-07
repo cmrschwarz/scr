@@ -477,6 +477,7 @@ class Locator(ConfigDataClass):
     xpath: Optional[Union[str, lxml.etree.XPath]] = None
     regex: Optional[Union[str, re.Pattern]] = None
     format: Optional[str] = None
+    js_format: Optional[str] = None
     multimatch: bool = True
     interactive: bool = False
     __annotations__: dict[str, type]
@@ -1548,6 +1549,7 @@ def help(err: bool = False) -> None:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
         cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
+        cjs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
         cmm=<bool>           allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
@@ -1569,6 +1571,7 @@ def help(err: bool = False) -> None:
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string
+        ljs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
         lic=<bool>          match for the label within the content match instead of the hole document
         las=<bool>          allow slashes in labels
         lmm=<bool>          allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -1580,6 +1583,7 @@ def help(err: bool = False) -> None:
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
         df=<format string>  document format string
+        djs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
         dmm=<bool>           allow multiple document matches in one document instead of picking the first
@@ -1610,6 +1614,7 @@ def help(err: bool = False) -> None:
         <cr capture groups> the named regex capture groups (?P<name>...) from cr are available as {{name}},
                             the unnamed ones (...) as {{cg<unnamed capture group number>}}
         {{cf}}                content after applying cf
+        {{cjs}}               output of cjs
         {{cm}}                final content match after link normalization (cl) and user interaction (cin)
 
         {{lx}}                label xpath match
@@ -1617,6 +1622,7 @@ def help(err: bool = False) -> None:
         <lr capture groups> the named regex capture groups (?P<name>...) from cr are available as {{name}},
                             the unnamed ones (...) as {{lg<unnamed capture group number>}}
         {{lf}}                label after applying lf
+        {{ljs}}               output of ljs
         {{l}}                 final label after user interaction (lin)
 
         {{dx}}                document link xpath match
@@ -1624,6 +1630,7 @@ def help(err: bool = False) -> None:
         <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {{name}},
                             the unnamed ones (...) as {{dg<unnamed capture group number>}}
         {{df}}                document link after applying df
+        {{djs}}              output of djs
         {{d}}                final document link after user interaction (din)
 
         {{di}}                document index
@@ -3725,6 +3732,8 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "cf", ["content", "format"], arg):
             continue
+        if apply_mc_arg(ctx, "cjs", ["content", "js_format"], arg):
+            continue
         if apply_mc_arg(ctx, "cmm", ["content", "multimatch"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg, True):
@@ -3766,6 +3775,8 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "lf", ["label", "format"], arg):
             continue
+        if apply_mc_arg(ctx, "ljs", ["label", "js_format"], arg):
+            continue
         if apply_mc_arg(ctx, "lmm", ["label", "multimatch"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "lin", ["label", "interactive"], arg, parse_bool_arg, True):
@@ -3787,6 +3798,8 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "dr", ["document", "regex"], arg):
             continue
         if apply_mc_arg(ctx, "df", ["document", "format"], arg):
+            continue
+        if apply_mc_arg(ctx, "djs", ["document", "js_format"], arg):
             continue
         if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
