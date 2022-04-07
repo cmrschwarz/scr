@@ -31,6 +31,7 @@ class TestOptions:
     script_dir_abs: str
     script_dir_name: str
     test_output_dir: str
+    fail_early: bool = False
 
     def __init__(self) -> None:
         self.tags_need = []
@@ -207,6 +208,8 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
         for name in tests:
             res = run_test(name, to)
             results[res] += 1
+            if to.fail_early and res == TestResult.FAILED:
+                break
         return results
 
     pool = Pool(to.parallelism)
@@ -263,6 +266,9 @@ def main() -> int:
             elif arg == "-j":
                 to.parallelism = int(sys.argv[i+1])
                 i += 1
+            elif arg == "-f":
+                to.fail_early = True
+                to.parallelism = 1
             else:
                 raise ValueError(f"unknown cli argument {arg}")
             i += 1
