@@ -82,6 +82,7 @@ scr [OPTIONS]
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
         cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
+        cjs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         cmm=<bool>           allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
@@ -103,6 +104,7 @@ scr [OPTIONS]
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string
+        ljs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         lic=<bool>          match for the label within the content match instead of the hole document
         las=<bool>          allow slashes in labels
         lmm=<bool>          allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -114,9 +116,10 @@ scr [OPTIONS]
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
         df=<format string>  document format string
+        djs=<js string>     javascript to execute on the page, format args are available as js variables (selenium only)
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
-        dmm=<bool>           allow multiple document matches in one document instead of picking the first
+        dmm=<bool>          allow multiple document matches in one document instead of picking the first
         din=<bool>          give a prompt to ignore a potential document match
         denc=<encoding>     default document encoding to use for following documents, default is utf-8
         dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently
@@ -131,7 +134,7 @@ scr [OPTIONS]
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
     Other:
-        selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
+        selstrat=<strategy> matching strategy for selenium (default: plain, values: anymatch, plain, interactive, deduplicate)
         seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
         owf=<bool>          allow to overwrite existing files, defaults to true
 
@@ -144,13 +147,16 @@ scr [OPTIONS]
         <cr capture groups> the named regex capture groups (?P<name>...) from cr are available as {name},
                             the unnamed ones (...) as {cg<unnamed capture group number>}
         {cf}                content after applying cf
+        {cjs}               output of cjs
         {cm}                final content match after link normalization (cl) and user interaction (cin)
+        {c}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
         {lx}                label xpath match
         {lr}                label regex match, equal to {lx} if lr is unspecified
         <lr capture groups> the named regex capture groups (?P<name>...) from cr are available as {name},
                             the unnamed ones (...) as {lg<unnamed capture group number>}
         {lf}                label after applying lf
+        {ljs}               output of ljs
         {l}                 final label after user interaction (lin)
 
         {dx}                document link xpath match
@@ -158,19 +164,20 @@ scr [OPTIONS]
         <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {name},
                             the unnamed ones (...) as {dg<unnamed capture group number>}
         {df}                document link after applying df
-        {d}                final document link after user interaction (din)
+        {djs}               output of djs
+        {d}                 final document link after user interaction (din)
 
         {di}                document index
         {ci}                content index
-        {dl}                document link (even for df, this still refers to the parent document)
+        {dl}                document link (inside df, this refers to the parent document)
         {cenc}              content encoding, deduced while respecting cenc and cfenc
         {cesc}              escape sequence for separating content, can be overwritten using cesc
         {chain}             id of the match chain that generated this content
 
-        {fn}                suggested download filename from the http response
+        {fn}                filename from the url of a cm with cl 
         {fb}                basename component of {fn} (extension stripped away)
         {fe}                extension component of {fn}, including the dot (empty string if there is no extension)
-        {c}                 content, downloaded from cm in case of cl, otherwise equal to cm
+
 
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
@@ -194,4 +201,4 @@ scr [OPTIONS]
         mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count
         repl=<bool>         accept commands in a read eval print loop
         exit=<bool>         exit the repl (with the result of the current command)
-  ```
+```

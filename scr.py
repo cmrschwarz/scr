@@ -1673,7 +1673,7 @@ def help(err: bool = False) -> None:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
         cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
-        cjs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
+        cjs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         cmm=<bool>           allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
@@ -1695,7 +1695,7 @@ def help(err: bool = False) -> None:
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
         lf=<format string>  label format string
-        ljs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
+        ljs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         lic=<bool>          match for the label within the content match instead of the hole document
         las=<bool>          allow slashes in labels
         lmm=<bool>          allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -1707,10 +1707,10 @@ def help(err: bool = False) -> None:
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
         df=<format string>  document format string
-        djs=<format string>  javascript to execute on the page, format args will be escaped into js strings (selenium only)
+        djs=<js string>     javascript to execute on the page, format args are available as js variables (selenium only)
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
-        dmm=<bool>           allow multiple document matches in one document instead of picking the first
+        dmm=<bool>          allow multiple document matches in one document instead of picking the first
         din=<bool>          give a prompt to ignore a potential document match
         denc=<encoding>     default document encoding to use for following documents, default is utf-8
         dfenc=<encoding>    force document encoding for following documents, even if http(s) says differently
@@ -1755,8 +1755,8 @@ def help(err: bool = False) -> None:
         <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {{name}},
                             the unnamed ones (...) as {{dg<unnamed capture group number>}}
         {{df}}                document link after applying df
-        {{djs}}              output of djs
-        {{d}}                final document link after user interaction (din)
+        {{djs}}               output of djs
+        {{d}}                 final document link after user interaction (din)
 
         {{di}}                document index
         {{ci}}                content index
