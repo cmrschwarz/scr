@@ -501,8 +501,8 @@ class Locator(ConfigDataClass):
     name: str
     xpath: Optional[Union[str, lxml.etree.XPath]] = None
     regex: Optional[Union[str, re.Pattern]] = None
+    js_script: Optional[str] = None
     format: Optional[str] = None
-    js_format: Optional[str] = None
     multimatch: bool = True
     interactive: bool = False
     __annotations__: dict[str, type]
@@ -520,9 +520,9 @@ class Locator(ConfigDataClass):
         self.name = name
 
     def is_active(self) -> bool:
-        return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_format])
+        return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_script])
 
-    def compile_xpath(self, mc: 'MatchChain') -> None:
+    def setup_xpath(self, mc: 'MatchChain') -> None:
         if self.xpath is None:
             return
         try:
@@ -550,11 +550,11 @@ class Locator(ConfigDataClass):
             lm.unnamed_cgroups = [""] * unnamed_regex_group_count
         if self.format:
             lm.fres = ""
-        if self.js_format:
+        if self.js_script:
             lm.jsres = ""
         return lm
 
-    def compile_regex(self, mc: 'MatchChain') -> None:
+    def setup_regex(self, mc: 'MatchChain') -> None:
         if self.regex is None:
             return
         try:
@@ -564,20 +564,35 @@ class Locator(ConfigDataClass):
                 f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
             )
 
-    def compile_format(self, mc: 'MatchChain') -> None:
+    def setup_format(self, mc: 'MatchChain') -> None:
         if self.format is None:
             return
         validate_format(self, ["format"],
                         mc.gen_dummy_content_match(), True, False)
+
+    def setup_js(self, mc: 'MatchChain') -> None:
+        if self.js_script is None:
+            return
+        args_dict: dict[str, Any] = {}
+        dummy_doc = mc.gen_dummy_document()
+        apply_general_format_args(dummy_doc, mc, args_dict)
+        apply_locator_match_format_args(
+            self.name, self.gen_dummy_locator_match(), args_dict
+        )
+        js_prelude = ""
+        for i, k in enumerate(args_dict.keys()):
+            js_prelude += f"const {k} = arguments[{i}];"
+        self.js_script = js_prelude + self.js_script
 
     def setup(self, mc: 'MatchChain') -> None:
         self.xpath = empty_string_to_none(self.xpath)
         assert self.regex is None or type(self.regex) is str
         self.regex = empty_string_to_none(self.regex)
         self.format = empty_string_to_none(self.format)
-        self.compile_xpath(mc)
-        self.compile_regex(mc)
-        self.compile_format(mc)
+        self.setup_xpath(mc)
+        self.setup_regex(mc)
+        self.setup_js(mc)
+        self.setup_format(mc)
         self.validated = True
 
     def match_xpath(
@@ -663,20 +678,56 @@ class Locator(ConfigDataClass):
         return lms_new
 
     def apply_js_matches(
-        self, ctx: 'ScrContext', lms: list[LocatorMatch],
+        self, doc: Document, mc: 'MatchChain', lms: list[LocatorMatch],
         multimatch: bool = None
     ) -> list[LocatorMatch]:
-        if self.js_format is None:
+        if self.js_script is None:
             return lms
         if multimatch is None:
             multimatch = self.multimatch
-        # todo
-        return lms
+        lms_new: list[LocatorMatch] = []
+        for lm in lms:
+            args_dict: dict[str, Any] = {}
+            apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
+            apply_locator_match_format_args(self.name, lm, args_dict)
+            try:
+                results = cast(SeleniumWebDriver, mc.ctx.selenium_driver).execute_script(
+                    self.js_script, args_dict.values()
+                )
+            except (SeleniumWebDriverException, SeleniumTimeoutException) as ex:
+                if selenium_has_died(mc.ctx):
+                    raise ScrMatchError(
+                        "the selenium instance was closed unexpectedly")
+                continue
+            if type(results) is None:
+                continue
+            if type(results) is not list:
+                results = [str(results)]
+            res: Optional[LocatorMatch] = lm
+            for r in results:
+                if res is None:
+                    res = lm.clone()
+                res.jsres = r
+                res.result = r
+                lms_new.append(res)
+                if not multimatch:
+                    break
+                res = None
+        return lms_new
 
-    def apply_format(self, cm: 'ContentMatch', lm: LocatorMatch):
+    def apply_format_for_content_match(self, cm: 'ContentMatch', lm: LocatorMatch):
         if not self.format:
             return lm
         lm.fres = self.format.format(**content_match_build_format_args(cm))
+        lm.result = lm.fres
+
+    def apply_format_for_document_match(self, doc: Document, mc: 'MatchChain', lm: LocatorMatch):
+        if not self.format:
+            return lm
+        args_dict: dict[str, Any] = {}
+        apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
+        apply_locator_match_format_args(self.name, lm, args_dict)
+        lm.fres = self.format.format(**args_dict)
         lm.result = lm.fres
 
     def is_unset(self):
@@ -769,6 +820,12 @@ class MatchChain(ConfigDataClass):
         self.handled_content_matches = set()
         self.handled_document_matches = set()
 
+    def gen_dummy_document(self):
+        return Document(
+            DocumentType.FILE, "", None,
+            locator_match=self.document.gen_dummy_locator_match()
+        )
+
     def gen_dummy_content_match(self):
         clm = self.content.gen_dummy_locator_match()
         if self.has_label_matching:
@@ -779,13 +836,7 @@ class MatchChain(ConfigDataClass):
         else:
             llm = None
 
-        dcm = ContentMatch(
-            clm, llm, self,
-            Document(
-                DocumentType.FILE, "", None,
-                locator_match=self.document.gen_dummy_locator_match()
-            )
-        )
+        dcm = ContentMatch(clm, llm, self, self.gen_dummy_document())
         if self.content.multimatch:
             dcm.ci = 0
         if self.has_document_matching:
@@ -1460,58 +1511,69 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
     })
 
 
+def apply_general_format_args(doc: Document, mc: MatchChain, args_dict: dict[str, Any], unstable_ci: bool = False) -> None:
+    args_dict.update({
+        "cenc": doc.encoding,
+        "cesc": mc.content_escape_sequence,
+        "dl":   doc.path,
+        "chain": mc.chain_id,
+        "di": mc.di,
+        "ci": mc.ci if not unstable_ci else None
+    })
+
+
+def apply_locator_match_format_args(locator_name: str, lm: LocatorMatch, args_dict: dict[str, Any]) -> None:
+    p = locator_name[0]
+    dict_update_unless_none(args_dict, {
+        f"{p}x": lm.xmatch,
+        f"{p}r": lm.rmatch,
+        f"{p}f": lm.fres,
+        f"{p}js": lm.jsres,
+        f"{p}{'m' if p == 'c' else ''}": lm.result,
+    })
+    # apply the unnamed groups first in case somebody overwrote it with a named group
+    args_dict.update(lm.unnamed_group_list_to_dict(f"{p}g"))
+
+    # finally apply the named groups
+    if lm.named_cgroups:
+        args_dict.update(lm.named_cgroups)
+
+
+def apply_filename_format_args(filename: Optional[str], args_dict: dict[str, Any]) -> None:
+    if filename is None:
+        return
+    b, e = os.path.splitext(filename)
+    args_dict.update({
+        "fn": filename,
+        "fb": b,
+        "fe": e,
+    })
+
+
 def content_match_build_format_args(
     cm: ContentMatch,
     content: Union[str, bytes, MinimalInputStream, BinaryIO, None] = None,
     filename: Optional[str] = None
 ) -> dict[str, Any]:
-    args_dict = {
-        "cenc": cm.doc.encoding,
-        "cesc": cm.mc.content_escape_sequence,
-        "dl":   cm.doc.path,
-    }
+    args_dict: dict[str, Any] = {}
+    apply_general_format_args(cm.doc, cm.mc, args_dict)
+    apply_filename_format_args(filename, args_dict)
+    if content is not None:
+        args_dict["c"] = content
+
     potential_locator_matches = [
         ("d", cm.doc.locator_match),
         ("l", cm.llm),
         ("c", cm.clm)
     ]
     # remove None regex matches (and type cast this to make mypy happy)
-    locator_matches = list(map(lambda p: cast(tuple[str, LocatorMatch], p),
-                               filter(
-        lambda rm: rm[1] is not None, potential_locator_matches)
-    ))
-    for p, rm in locator_matches:
-        dict_update_unless_none(args_dict, {
-            f"{p}x": rm.xmatch,
-            f"{p}r": rm.rmatch,
-            f"{p}f": rm.fres,
-            f"{p}js": rm.jsres,
-            f"{p}{'m' if p == 'c' else ''}": rm.result,
-        })
+    locator_matches = cast(
+        list[tuple[str, LocatorMatch]],
+        list(filter(lambda plm: plm[1] is not None, potential_locator_matches))
+    )
 
-    dict_update_unless_none(args_dict, {
-        "di": cm.di,
-        "ci": cm.ci,
-        "c": content,
-        "chain": cm.mc.chain_id,
-    })
-
-    if filename is not None:
-        b, e = os.path.splitext(filename)
-        args_dict.update({
-            "fn": filename,
-            "fb": b,
-            "fe": e,
-        })
-
-        # apply the unnamed groups first in case somebody overwrote it with a named group
-    for p, lm in locator_matches:
-        args_dict.update(lm.unnamed_group_list_to_dict(f"{p}g"))
-
-    # finally apply the named groups
-    for p, lm in locator_matches:
-        if lm.named_cgroups:
-            args_dict.update(lm.named_cgroups)
+    for loc_name, loc_match in locator_matches:
+        apply_locator_match_format_args(loc_name, loc_match, args_dict)
 
     return args_dict
 
@@ -1927,7 +1989,8 @@ def validate_format(
 ) -> None:
     try:
         known_keys = content_match_build_format_args(
-            dummy_cm, "" if has_content else None, "" if has_filename else None)
+            dummy_cm, "" if has_content else None, "" if has_filename else None
+        )
         unnamed_key_count = 0
         fmt_keys = get_format_string_keys(
             conf.resolve_attrib_path(
@@ -1972,18 +2035,15 @@ def gen_default_format(mc: MatchChain):
 
 
 def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
-    mc.apply_defaults(ctx.defaults_mc)
 
-    locators = [mc.content, mc.label, mc.document]
-    for l in locators:
-        l.setup(mc)
+    mc.apply_defaults(ctx.defaults_mc)
+    mc.ci = mc.cimin
+    mc.di = mc.dimin
 
     if mc.dimin > mc.dimax:
         raise ScrSetupError(f"dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
         raise ScrSetupError(f"cimin can't exceed cimax")
-    mc.ci = mc.cimin
-    mc.di = mc.dimin
 
     if mc.content_write_format and not mc.content_save_format:
         raise ScrSetupError(
@@ -1995,6 +2055,10 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
 
     if mc.save_path_interactive and not mc.content_save_format:
         mc.content_save_format = ""
+
+    locators = [mc.content, mc.label, mc.document]
+    for l in locators:
+        l.setup(mc)
 
     mc.has_xpath_matching = any(l.xpath is not None for l in locators)
     mc.has_label_matching = mc.label.is_active()
@@ -2729,7 +2793,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.ci += 1
-    cm.mc.content.apply_format(cm, cm.clm)
+    cm.mc.content.apply_format_for_content_match(cm, cm.clm)
 
     if cm.llm is None:
         if cm.mc.need_label:
@@ -2739,7 +2803,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
             )
             cm.llm.result = cm.llm.fres
     else:
-        cm.mc.label.apply_format(cm, cm.llm)
+        cm.mc.label.apply_format_for_content_match(cm, cm.llm)
 
     di_ci_context = get_ci_di_context(cm)
 
@@ -2893,7 +2957,7 @@ def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tu
     if mc.has_label_matching and not mc.labels_inside_content:
         label_lms = mc.label.match_xpath(text, doc.xml, doc.path, False)
         label_lms = mc.label.apply_regex_matches(label_lms)
-        label_lms = mc.label.apply_js_matches(mc.ctx, label_lms)
+        label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
     match_index = 0
     labels_none_for_n = 0
     for clm_xp in content_lms_xp:
@@ -2905,9 +2969,9 @@ def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tu
             # will be done on the LABEL xpath result, not the content one
             # even for lic=y
             label_lms = mc.label.apply_regex_matches(label_lms)
-            label_lms = mc.label.apply_js_matches(mc.ctx, label_lms)
+            label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
         content_lms = mc.content.apply_regex_matches([clm_xp])
-        content_lms = mc.content.apply_js_matches(mc.ctx, content_lms)
+        content_lms = mc.content.apply_js_matches(doc, mc, content_lms)
         for clm in content_lms:
             llm: Optional[LocatorMatch] = None
             if mc.labels_inside_content:
@@ -2916,7 +2980,8 @@ def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tu
                     llm.result = clm.result
                     label_lms = mc.label.apply_regex_matches([llm], False)
                     label_lms = mc.label.apply_js_matches(
-                        mc.ctx, label_lms, False)
+                        doc, mc, label_lms, False
+                    )
                     if len(label_lms) == 0:
                         if not mc.label_allow_missing:
                             labels_none_for_n += 1
@@ -2946,7 +3011,7 @@ def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> l
         cast(str, doc.text), doc.xml, doc.path, False
     )
     document_lms = mc.document.apply_regex_matches(document_lms)
-    document_lms = mc.document.apply_js_matches(mc.ctx, document_lms)
+    document_lms = mc.document.apply_js_matches(doc, mc, document_lms)
     for dlm in document_lms:
         ndoc = Document(
             doc.document_type.derived_type(),
@@ -2956,8 +3021,8 @@ def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> l
             None,
             dlm
         )
-        ndoc.dfmatch = mc.document.apply_format(
-            ContentMatch(LocatorMatch(), None, mc, ndoc), dlm
+        ndoc.dfmatch = mc.document.apply_format_for_document_match(
+            ndoc, mc, dlm
         )
         ndoc.path, ndoc.path_parsed = normalize_link(
             mc.ctx, mc, doc, last_doc_path, dlm.result,
@@ -3264,7 +3329,6 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                     parse_xml(ctx, doc)
                     if doc.xml is None:
                         break
-                newly_satisfied_chains = []
                 for mc in doc.match_chains:
                     if mc.satisfied:
                         continue
@@ -3772,7 +3836,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "cf", ["content", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "cjs", ["content", "js_format"], arg):
+        if apply_mc_arg(ctx, "cjs", ["content", "js_script"], arg):
             continue
         if apply_mc_arg(ctx, "cmm", ["content", "multimatch"], arg, parse_bool_arg, True):
             continue
@@ -3815,7 +3879,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "lf", ["label", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "ljs", ["label", "js_format"], arg):
+        if apply_mc_arg(ctx, "ljs", ["label", "js_script"], arg):
             continue
         if apply_mc_arg(ctx, "lmm", ["label", "multimatch"], arg, parse_bool_arg, True):
             continue
@@ -3839,7 +3903,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "df", ["document", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "djs", ["document", "js_format"], arg):
+        if apply_mc_arg(ctx, "djs", ["document", "js_script"], arg):
             continue
         if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
