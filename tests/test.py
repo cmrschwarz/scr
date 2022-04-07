@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from ntpath import join
-from optparse import Option
 import os
 import json5
 import glob

@@ -19,19 +19,16 @@ Command-line Utility for Web scring
 scr url=google.com cx='//p/text()'
 ```
 
-### Get the latest 5 Video Titles from a youtube channel
+### Open up a REPL to explore, using firefox selenium 
 ```bash 
-scr url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuRXz02jbQ" cx="//feed/entry[position()<=5]/title/text()"
+scr repl sel=firefox url=example.org
+screp> cr="some regex to match in the open firefox tab" cpf="print_on_stdout:{cr}"
+screp> exit
 ```
 
-### Get absolute links to all images on a website:
+### Interactively scroll through top reddit posts (max to page 42) :
 ```bash 
-scr url=google.com cx='//img/@src' cl cpf='{cm}\n'
-```
-
-### Interactively scroll through top reddit posts:
-```bash 
-scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3
+scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=42
 ```
 
 ### Download the first 10 pdfs from a site and add their number (zero padded) before the filename:
@@ -39,39 +36,36 @@ scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[conta
 scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*\.pdf$' cl csf='{ci:02}_{fn}' cimax=10
 ```
 
-### Downloading first 3 pdfs and 5 gifs from a site interactively:
+### Downloading first 3 pdfs and 5 gifs from a site, use selenium tor for the fetch:
 ```bash 
-scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif' cl csf='{fn}' cin=1 cimax0=3 cimax1=5
+scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif' cl csf='{fn}' cin=1 cimax0=3 cimax1=5 sel=tor
 ```
 
 ## Setup
 
-### Python packages
+SCR can be installed from pypi using
 
-The required non standard pip packages can be installed using:
- ```bash
- pip3 install tbselenium lxml selenium random_user_agent readline pyrfc6266 requests json5 shellescape
- ```
-
-### Setting up Selenium
+```bash
+pip install scr
+```
 
 To use the selenium feature,
 you need to have a driver for the selected browser installed.
 
-#### Setting up Firefox for selenium 
+### Setting up Firefox for selenium 
 
 The geckodriver executable can be downloaded from
 https://github.com/mozilla/geckodriver/releases
 It must be in a folder on the PATH for scr to find it.
 
-#### Setting up Tor Browser for selenium
+### Setting up Tor Browser for selenium
 Once the Tor Browser have bin installed in any directory, add a 
 TOR_BROWSER_DIR environment variable for screp to find it.
 (Alternatively pass it explicitly using ```tbdir=<folder path>```)
 Since Tor Browser is based on Firefox, the geckodriver executable
 is also needed.
 
-#### Setting up Chrome for Selenium
+### Setting up Chrome for Selenium
 
 Simply install the `chromium-driver` (debian +deriviates),
 `chromium-chromedriver` (alpine) or `chromedriver` (arch aur)
