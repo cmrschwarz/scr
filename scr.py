@@ -3637,7 +3637,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                     stable_ctx = ctx
                     ctx = None
                 try:
-                    line = input("Scr> " if tty else "")
+                    line = input("scr> " if tty else "")
                 except EOFError:
                     if tty:
                         print("")

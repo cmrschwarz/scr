@@ -22,8 +22,8 @@ scr url=google.com cx='//p/text()'
 ### Open up a REPL to explore, using firefox selenium 
 ```bash 
 scr repl sel=firefox url=example.org
-screp> cr="some regex to match in the open firefox tab" cpf="print_on_stdout:{cr}"
-screp> exit
+scr> cr="some regex to match in the open firefox tab" cpf="print regex result on stdout: {cr}"
+scr> exit
 ```
 
 ### Interactively scroll through top reddit posts (max to page 42) :
@@ -60,7 +60,7 @@ It must be in a folder on the PATH for scr to find it.
 
 ### Setting up Tor Browser for selenium
 Once the Tor Browser have bin installed in any directory, add a 
-TOR_BROWSER_DIR environment variable for screp to find it.
+TOR_BROWSER_DIR environment variable for scr to find it.
 (Alternatively pass it explicitly using ```tbdir=<folder path>```)
 Since Tor Browser is based on Firefox, the geckodriver executable
 is also needed.
