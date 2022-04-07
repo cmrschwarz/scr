@@ -49,7 +49,7 @@ import tempfile
 import itertools
 import warnings
 import urllib.request
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 
 T = TypeVar("T")
@@ -104,7 +104,7 @@ DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
-INTERNAL_USER_AGENT = f"scr/{VERSION}"
+SCR_USER_AGENT = f"scr/{VERSION}"
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
@@ -2067,7 +2067,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
             RANDOM_USER_AGENT_INSTANCE = UserAgent()
         ctx.user_agent = RANDOM_USER_AGENT_INSTANCE.get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
-        ctx.user_agent = INTERNAL_USER_AGENT
+        ctx.user_agent = SCR_USER_AGENT
 
     # if no chains are specified, use the origin chain as chain 0
     if not ctx.match_chains:
@@ -3676,14 +3676,28 @@ def run_repl(initial_ctx: ScrContext) -> int:
         finalize(stable_ctx)
 
 
+def match_traditional_cli_arg(arg, true_opt_name, aliases) -> Optional[bool]:
+    tolen = len(true_opt_name)
+    arglen = len(arg)
+    if begins(arg, f"{true_opt_name}"):
+        if arglen > tolen:
+            if arg[tolen] != "=":
+                return None
+        return parse_bool_arg(arg[len("{true_opt_name}="):], arg)
+    if arg in aliases:
+        return True
+    return None
+
+
 def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
     for arg in args:
-        if (
-            arg in ["-h", "--help", "help"]
-            or (begins(arg, "help=") and parse_bool_arg(arg[len("help="):], arg))
-        ):
+        if match_traditional_cli_arg(arg, "help", ["-h", "--help"]):
             help()
             sys.exit(0)
+        if match_traditional_cli_arg(arg, "version", ["-v", "--version"]):
+            print(f"scr {VERSION}")
+            sys.exit(0)
+
          # content args
         if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg):
             continue
