@@ -49,13 +49,31 @@ import tempfile
 import itertools
 import warnings
 import urllib.request
-VERSION = "0.3.2"
-
 
 T = TypeVar("T")
 K = TypeVar("K")
 V = TypeVar("V")
 
+# because for python, sys.argv[0] does not reflect what the user typed anyways,
+# we just use this fixed value for --help etc.
+SCRIPT_NAME = "scr"
+VERSION = "0.3.2"
+
+SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
+
+FALLBACK_DOCUMENT_SCHEME = "https"
+
+DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TRUNCATION_LENGTH = 200
+DEFAULT_RESPONSE_BUFFER_SIZE = 32768
+DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
+
+# mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
+DUMMY_MIMETYPE = "application/zip"
+
+DEFAULT_CPF = "{c}\\n"
+DEFAULT_CWF = "{c}"
+DEFAULT_ESCAPE_SEQUENCE = "<END>"
 
 def prefixes(str: str) -> set[str]:
     return set(str[:i] for i in range(len(str), 0, -1))
@@ -93,18 +111,9 @@ EDIT_INDICATING_STRINGS = OptionIndicatingStrings("edit")
 DOC_SKIP_INDICATING_STRINGS = OptionIndicatingStrings("docskip")
 INSPECT_INDICATING_STRINGS = OptionIndicatingStrings("inspect")
 ACCEPT_CHAIN_INDICATING_STRINGS = OptionIndicatingStrings("acceptchain")
-CHAIN_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
-DEFAULT_ESCAPE_SEQUENCE = "<END>"
-DEFAULT_CPF = "{c}\\n"
-DEFAULT_CWF = "{c}"
-DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_TRUNCATION_LENGTH = 200
-DEFAULT_RESPONSE_BUFFER_SIZE = 32768
-DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
-# mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
-DUMMY_MIMETYPE = "application/zip"
-FALLBACK_DOCUMENT_SCHEME = "https"
-SCR_USER_AGENT = f"scr/{VERSION}"
+
+MATCH_CHAIN_ARGUMENT_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
+
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
@@ -1529,7 +1538,7 @@ def log(ctx: ScrContext, verbosity: Verbosity, msg: str) -> None:
 def help(err: bool = False) -> None:
     global DEFAULT_CPF
     global DEFAULT_CWF
-    text = f"""{sys.argv[0]} [OPTIONS]
+    text = f"""{SCRIPT_NAME} [OPTIONS]
     Extract content from urls or files by specifying content matching chains
     (xpath -> regex -> python format string).
 
@@ -1623,6 +1632,8 @@ def help(err: bool = False) -> None:
         {{chain}}             id of the match chain that generated this content
 
         {{fn}}                suggested download filename from the http response
+        {{fb}}                basename component of {{fn}} (extension stripped away)
+        {{fe}}                extension component of {{fn}}, including the dot (empty string if there is no extension)
         {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
     Chain Syntax:
@@ -1644,7 +1655,7 @@ def help(err: bool = False) -> None:
                             (default: disabled, values: tor, chrome, firefox, disabled)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
-        mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count.
+        mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count
         repl=<bool>         accept commands in a read eval print loop
         exit=<bool>         exit the repl (with the result of the current command)
         """.strip()
@@ -3369,7 +3380,7 @@ def parse_mc_arg(
         mc_spec = arg[argname_len:]
     else:
         mc_spec = arg[argname_len: eq_pos]
-        if not CHAIN_REGEX.match(mc_spec):
+        if not MATCH_CHAIN_ARGUMENT_REGEX.match(mc_spec):
             return None
         pre_eq_arg = arg[:eq_pos]
         value = arg[eq_pos+1:]
@@ -3537,7 +3548,7 @@ def apply_ctx_arg(
             )
     else:
         nc = arg[len(optname):]
-        if CHAIN_REGEX.match(nc):
+        if MATCH_CHAIN_ARGUMENT_REGEX.match(nc):
             raise ScrSetupError(
                 "option '{optname}' does not support match chain specification"
             )
@@ -3637,7 +3648,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                     stable_ctx = ctx
                     ctx = None
                 try:
-                    line = input("scr> " if tty else "")
+                    line = input(f"{SCRIPT_NAME}> " if tty else "")
                 except EOFError:
                     if tty:
                         print("")
@@ -3846,7 +3857,7 @@ def run_scr() -> int:
     if len(sys.argv) < 2:
         log_raw(
             Verbosity.ERROR,
-            f"missing command line options. Consider {sys.argv[0]} --help"
+            f"missing command line options. Consider {SCRIPT_NAME} --help"
         )
         return 1
 

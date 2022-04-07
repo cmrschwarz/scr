@@ -1,6 +1,6 @@
 # SCR
 
-Command-line Utility for Web scring
+Command-line Utility for Web Scraping
 
 ## Core Features
 * Matches web content using XPath-, Regex- and Python Format Expressions 
@@ -158,14 +158,18 @@ scr [OPTIONS]
         <dr capture groups> the named regex capture groups (?P<name>...) from dr are available as {name},
                             the unnamed ones (...) as {dg<unnamed capture group number>}
         {df}                document link after applying df
-        {d}                 final document link after user interaction (din)
+        {d}                final document link after user interaction (din)
 
         {di}                document index
         {ci}                content index
         {dl}                document link (even for df, this still refers to the parent document)
         {cenc}              content encoding, deduced while respecting cenc and cfenc
         {cesc}              escape sequence for separating content, can be overwritten using cesc
+        {chain}             id of the match chain that generated this content
 
+        {fn}                suggested download filename from the http response
+        {fb}                basename component of {fn} (extension stripped away)
+        {fe}                extension component of {fn}, including the dot (empty string if there is no extension)
         {c}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
     Chain Syntax:
@@ -187,7 +191,7 @@ scr [OPTIONS]
                             (default: disabled, values: tor, chrome, firefox, disabled)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
-        mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count.
+        mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count
         repl=<bool>         accept commands in a read eval print loop
         exit=<bool>         exit the repl (with the result of the current command)
   ```
