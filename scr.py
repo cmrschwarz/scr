@@ -75,6 +75,7 @@ DEFAULT_CPF = "{c}\\n"
 DEFAULT_CWF = "{c}"
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 
+
 def prefixes(str: str) -> set[str]:
     return set(str[:i] for i in range(len(str), 0, -1))
 
@@ -113,10 +114,6 @@ INSPECT_INDICATING_STRINGS = OptionIndicatingStrings("inspect")
 ACCEPT_CHAIN_INDICATING_STRINGS = OptionIndicatingStrings("acceptchain")
 
 MATCH_CHAIN_ARGUMENT_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
-
-
-# very slow to initialize, so we do it lazily cached
-RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
 
 
 class ScrSetupError(Exception):
@@ -2061,6 +2058,14 @@ def load_cookie_jar(ctx: ScrContext) -> None:
             ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
 
 
+def get_random_user_agent():
+    # since this initialization is very slow, we cache it 
+    # this is mainly useful for the repl where the uar value can change
+    if not hasattr(get_random_user_agent, "instance"):
+        get_random_user_agent.instance = UserAgent()
+    return get_random_user_agent.instance.get_random_user_agent()
+
+
 def setup(ctx: ScrContext, for_repl: bool = False) -> None:
     global DEFAULT_CPF
     ctx.apply_defaults(ScrContext())
@@ -2073,10 +2078,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
     if ctx.user_agent is not None and ctx.user_agent_random:
         raise ScrSetupError(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
-        global RANDOM_USER_AGENT_INSTANCE
-        if RANDOM_USER_AGENT_INSTANCE is None:
-            RANDOM_USER_AGENT_INSTANCE = UserAgent()
-        ctx.user_agent = RANDOM_USER_AGENT_INSTANCE.get_random_user_agent()
+        ctx.user_agent = get_random_user_agent()
     elif ctx.user_agent is None and ctx.selenium_variant == SeleniumVariant.DISABLED:
         ctx.user_agent = SCR_USER_AGENT
 
