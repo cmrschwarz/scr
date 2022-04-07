@@ -1,6 +1,6 @@
-# scrap
+# SCR
 
-Command-line Utility for Web Scraping
+Command-line Utility for Web scring
 
 ## Core Features
 * Matches web content using XPath-, Regex- and Python Format Expressions 
@@ -11,38 +11,37 @@ Command-line Utility for Web Scraping
 * Multithreaded Downloads
 * Interactive modes for rejecting false matches, adjusting filenames etc. 
 
-The name "scrap" is a recursive acronym for "**S**crap **CR**awls **A**nd **P**arses".
 
 ## Examples
 
 ### Get text from all paragraphs on a site:
 ```bash 
-scrap url=google.com cx='//p/text()'
+scr url=google.com cx='//p/text()'
 ```
 
 ### Get the latest 5 Video Titles from a youtube channel
 ```bash 
-scrap url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuRXz02jbQ" cx="//feed/entry[position()<=5]/title/text()"
+scr url="https://www.youtube.com/feeds/videos.xml?channel_id=UCmtyQOKKmrMVaKuRXz02jbQ" cx="//feed/entry[position()<=5]/title/text()"
 ```
 
 ### Get absolute links to all images on a website:
 ```bash 
-scrap url=google.com cx='//img/@src' cl cpf='{cm}\n'
+scr url=google.com cx='//img/@src' cl cpf='{cm}\n'
 ```
 
 ### Interactively scroll through top reddit posts:
 ```bash 
-scrap url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3
+scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=3
 ```
 
 ### Download the first 10 pdfs from a site and add their number (zero padded) before the filename:
 ```bash 
-scrap url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*\.pdf$' cl csf='{ci:02}_{fn}' cimax=10
+scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*\.pdf$' cl csf='{ci:02}_{fn}' cimax=10
 ```
 
 ### Downloading first 3 pdfs and 5 gifs from a site interactively:
 ```bash 
-scrap url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif' cl csf='{fn}' cin=1 cimax0=3 cimax1=5
+scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif' cl csf='{fn}' cin=1 cimax0=3 cimax1=5
 ```
 
 ## Setup
@@ -63,7 +62,7 @@ you need to have a driver for the selected browser installed.
 
 The geckodriver executable can be downloaded from
 https://github.com/mozilla/geckodriver/releases
-It must be in a folder on the PATH for scrap to find it.
+It must be in a folder on the PATH for scr to find it.
 
 #### Setting up Tor Browser for selenium
 Once the Tor Browser have bin installed in any directory, add a 
@@ -81,7 +80,7 @@ package for your distribution.
 
 ## Options List
 ```
-scrap [OPTIONS]
+scr [OPTIONS]
     Extract content from urls or files by specifying content matching chains
     (xpath -> regex -> python format string).
 

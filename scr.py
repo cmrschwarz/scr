@@ -26,6 +26,7 @@ import select
 import re
 import concurrent.futures
 import os
+import scr
 from string import Formatter
 import readline
 import urllib.parse
@@ -103,21 +104,21 @@ DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
 # mimetype to use for selenium downloading to avoid triggering pdf viewers etc.
 DUMMY_MIMETYPE = "application/zip"
 FALLBACK_DOCUMENT_SCHEME = "https"
-INTERNAL_USER_AGENT = f"scrap/{VERSION}"
+INTERNAL_USER_AGENT = f"scr/{VERSION}"
 
 # very slow to initialize, so we do it lazily cached
 RANDOM_USER_AGENT_INSTANCE: Optional[UserAgent] = None
 
 
-class ScrapSetupError(Exception):
+class ScrSetupError(Exception):
     pass
 
 
-class ScrapFetchError(Exception):
+class ScrFetchError(Exception):
     pass
 
 
-class ScrapMatchError(Exception):
+class ScrMatchError(Exception):
     pass
 
 
@@ -496,7 +497,7 @@ class Locator(ConfigDataClass):
         except (lxml.etree.XPathSyntaxError, lxml.etree.XPathEvalError):
             # don't use the XPathSyntaxError message because they are spectacularily bad
             # e.g. XPath("/div/text(") -> XPathSyntaxError("Missing closing CURLY BRACE")
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"invalid xpath in {self.get_configuring_argument(['xpath'])}"
             )
         self.xpath = xp
@@ -524,7 +525,7 @@ class Locator(ConfigDataClass):
         try:
             self.regex = re.compile(self.regex, re.DOTALL)
         except re.error as err:
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
             )
 
@@ -545,7 +546,7 @@ class Locator(ConfigDataClass):
         self.validated = True
 
     def match_xpath(
-        self, ctx: 'ScrapContext', src_xml: lxml.html.HtmlElement, path: str,
+        self, ctx: 'ScrContext', src_xml: lxml.html.HtmlElement, path: str,
         default: tuple[
             list[str],
             Optional[list[lxml.html.HtmlElement]]
@@ -559,15 +560,15 @@ class Locator(ConfigDataClass):
                 cast(lxml.etree.XPath, self.xpath).evaluate(src_xml)
             )
         except lxml.etree.XPathEvalError as ex:
-            raise ScrapMatchError(f"invalid xpath: '{self.xpath}'")
+            raise ScrMatchError(f"invalid xpath: '{self.xpath}'")
         except lxml.etree.LxmlError as ex:
-            raise ScrapMatchError(
+            raise ScrMatchError(
                 f"failed to apply xpath '{self.xpath}' to {path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
             )
 
         if not isinstance(xpath_matches, list):
-            raise ScrapMatchError(f"invalid xpath: '{self.xpath}'")
+            raise ScrMatchError(f"invalid xpath: '{self.xpath}'")
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
@@ -588,7 +589,7 @@ class Locator(ConfigDataClass):
                     if return_xml:
                         res_xml.append(xm)
                 except (lxml.LxmlError, UnicodeEncodeError) as ex1:
-                    raise ScrapMatchError(
+                    raise ScrMatchError(
                         f"{path}: xpath match encoding failed: {str(ex1)}"
                     )
         return res, res_xml
@@ -619,7 +620,7 @@ class Locator(ConfigDataClass):
 
 class MatchChain(ConfigDataClass):
     # config members
-    ctx: 'ScrapContext'  # this is a config member so it is copied on apply_defaults
+    ctx: 'ScrContext'  # this is a config member so it is copied on apply_defaults
     content_escape_sequence: str = DEFAULT_ESCAPE_SEQUENCE
     cimin: int = 1
     cimax: Union[int, float] = float("inf")
@@ -688,7 +689,7 @@ class MatchChain(ConfigDataClass):
     satisfied: bool = True
     labels_none_for_n: int = 0
 
-    def __init__(self, ctx: 'ScrapContext', chain_id: int, blank: bool = False) -> None:
+    def __init__(self, ctx: 'ScrContext', chain_id: int, blank: bool = False) -> None:
         super().__init__(blank)
 
         self.ctx = ctx
@@ -800,7 +801,7 @@ class ContentMatch:
         return hash(self.__key__())
 
 
-class ScrapContext(ConfigDataClass):
+class ScrContext(ConfigDataClass):
     # config members
     cookie_file: Optional[str] = None
     exit: bool = False
@@ -1196,7 +1197,7 @@ class DownloadJob:
                             self.filename = request_try_get_filename(res)
                             self.content_format = ContentFormat.STREAM
                         except requests.exceptions.RequestException as ex:
-                            ex = request_exception_to_Scrap_fetch_error(ex)
+                            ex = request_exception_to_Scr_fetch_error(ex)
                             log(self.cm.mc.ctx, Verbosity.ERROR,
                                 f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
                             return False
@@ -1246,7 +1247,7 @@ class DownloadJob:
             self.content_stream = cast(BinaryIO, fetch_file(
                 self.cm.mc.ctx, self.content, stream=True)
             )
-        except ScrapFetchError as ex:
+        except ScrFetchError as ex:
             log(self.cm.mc.ctx, Verbosity.ERROR,
                 f"{self.context}: failed to open file '{truncate(self.content)}': {str(ex)}")
             self.aborted = True
@@ -1349,13 +1350,13 @@ class DownloadJob:
 
 
 class DownloadManager:
-    ctx: ScrapContext
+    ctx: ScrContext
     max_threads: int
     pending_jobs: list[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
 
-    def __init__(self, ctx: ScrapContext, max_threads: int):
+    def __init__(self, ctx: ScrContext, max_threads: int):
         self.ctx = ctx
         self.max_threads = max_threads
         self.pending_jobs = []
@@ -1518,7 +1519,7 @@ def unescape_string(txt: str):
     return txt
 
 
-def log(ctx: ScrapContext, verbosity: Verbosity, msg: str) -> None:
+def log(ctx: ScrContext, verbosity: Verbosity, msg: str) -> None:
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
     if ctx.verbosity >= verbosity:
@@ -1673,7 +1674,7 @@ def truncate(
 
 
 def selenium_build_firefox_options(
-    ctx: ScrapContext
+    ctx: ScrContext
 ) -> selenium.webdriver.FirefoxOptions:
     ff_options = selenium.webdriver.FirefoxOptions()
     if ctx.user_agent is not None:
@@ -1709,7 +1710,7 @@ def selenium_build_firefox_options(
     return ff_options
 
 
-def setup_selenium_tor(ctx: ScrapContext) -> None:
+def setup_selenium_tor(ctx: ScrContext) -> None:
     # use bundled geckodriver if available
     cwd = os.getcwd()
     add_script_dir_to_path()
@@ -1718,7 +1719,7 @@ def setup_selenium_tor(ctx: ScrapContext) -> None:
         if tb_env_var in os.environ:
             ctx.tor_browser_dir = os.environ[tb_env_var]
         else:
-            raise ScrapSetupError(f"no tbdir specified, check --help")
+            raise ScrSetupError(f"no tbdir specified, check --help")
     try:
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path,
@@ -1726,11 +1727,11 @@ def setup_selenium_tor(ctx: ScrapContext) -> None:
         )
 
     except SeleniumWebDriverException as ex:
-        raise ScrapSetupError(f"failed to start tor browser: {str(ex)}")
+        raise ScrSetupError(f"failed to start tor browser: {str(ex)}")
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
-def setup_selenium_firefox(ctx: ScrapContext) -> None:
+def setup_selenium_firefox(ctx: ScrContext) -> None:
     # use bundled geckodriver if available
     add_script_dir_to_path()
     try:
@@ -1740,10 +1741,10 @@ def setup_selenium_firefox(ctx: ScrapContext) -> None:
                 log_path=ctx.selenium_log_path),  # type: ignore
         )
     except SeleniumWebDriverException as ex:
-        raise ScrapSetupError(f"failed to start geckodriver: {str(ex)}")
+        raise ScrSetupError(f"failed to start geckodriver: {str(ex)}")
 
 
-def setup_selenium_chrome(ctx: ScrapContext) -> None:
+def setup_selenium_chrome(ctx: ScrContext) -> None:
     # allow usage of bundled chromedriver
     add_script_dir_to_path()
     options = selenium.webdriver.ChromeOptions()
@@ -1766,10 +1767,10 @@ def setup_selenium_chrome(ctx: ScrapContext) -> None:
                 log_path=ctx.selenium_log_path)  # type: ignore
         )
     except SeleniumWebDriverException as ex:
-        raise ScrapSetupError(f"failed to start chromedriver: {str(ex)}")
+        raise ScrSetupError(f"failed to start chromedriver: {str(ex)}")
 
 
-def selenium_add_cookies_through_get(ctx: ScrapContext) -> None:
+def selenium_add_cookies_through_get(ctx: ScrContext) -> None:
     # ctx.selenium_driver.set_page_load_timeout(0.01)
     assert ctx.selenium_driver is not None
     for domain, cookies in ctx.cookie_dict.items():
@@ -1805,7 +1806,7 @@ def prevent_selenium_sigint() -> None:
     selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
 
 
-def setup_selenium(ctx: ScrapContext) -> None:
+def setup_selenium(ctx: ScrContext) -> None:
     if ctx.repl:
         prevent_selenium_sigint()
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -1866,15 +1867,15 @@ def validate_format(
             if k == "":
                 named_arg_count += 1
                 if named_arg_count > unnamed_key_count:
-                    raise ScrapSetupError(
+                    raise ScrSetupError(
                         f"exceeded number of ordered keys in {conf.get_configuring_argument(attrib_path)}"
                     )
             elif k not in known_keys:
-                raise ScrapSetupError(
+                raise ScrSetupError(
                     f"unavailable key '{{{k}}}' in {conf.get_configuring_argument(attrib_path)}"
                 )
     except (re.error, ValueError) as ex:
-        raise ScrapSetupError(
+        raise ScrSetupError(
             f"{str(ex)} in {conf.get_configuring_argument(attrib_path)}"
         )
 
@@ -1899,7 +1900,7 @@ def gen_default_format(mc: MatchChain):
     return form
 
 
-def setup_match_chain(mc: MatchChain, ctx: ScrapContext) -> None:
+def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
     mc.apply_defaults(ctx.defaults_mc)
 
     locators = [mc.content, mc.label, mc.document]
@@ -1907,14 +1908,14 @@ def setup_match_chain(mc: MatchChain, ctx: ScrapContext) -> None:
         l.setup(mc)
 
     if mc.dimin > mc.dimax:
-        raise ScrapSetupError(f"dimin can't exceed dimax")
+        raise ScrSetupError(f"dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
-        raise ScrapSetupError(f"cimin can't exceed cimax")
+        raise ScrSetupError(f"cimin can't exceed cimax")
     mc.ci = mc.cimin
     mc.di = mc.dimin
 
     if mc.content_write_format and not mc.content_save_format:
-        raise ScrapSetupError(
+        raise ScrSetupError(
             f"match chain {mc.chain_id}: cannot specify cwf without csf"
         )
 
@@ -1954,7 +1955,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrapContext) -> None:
     if not mc.has_label_matching:
         mc.label_allow_missing = True
         if mc.labels_inside_content:
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"match chain {mc.chain_id}: cannot specify lic without lx or lr"
             )
     default_format: Optional[str] = None
@@ -2000,12 +2001,12 @@ def setup_match_chain(mc: MatchChain, ctx: ScrapContext) -> None:
     )
     if not mc.has_content_matching and not mc.has_document_matching:
         if not (mc.chain_id == 0 and mc.ctx.repl):
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
             )
 
 
-def load_selenium_cookies(ctx: ScrapContext) -> dict[str, dict[str, dict[str, Any]]]:
+def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]]]:
     assert ctx.selenium_driver is not None
     cookies: list[dict[str, Any]] = ctx.selenium_driver.get_cookies()
     cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
@@ -2016,7 +2017,7 @@ def load_selenium_cookies(ctx: ScrapContext) -> dict[str, dict[str, dict[str, An
     return cookie_dict
 
 
-def load_cookie_jar(ctx: ScrapContext) -> None:
+def load_cookie_jar(ctx: ScrContext) -> None:
     if ctx.cookie_file is None:
         return
     try:
@@ -2031,7 +2032,7 @@ def load_cookie_jar(ctx: ScrapContext) -> None:
     except OSError:
         raise
     except Exception as ex:
-        raise ScrapSetupError(f"failed to read cookie file: {str(ex)}")
+        raise ScrSetupError(f"failed to read cookie file: {str(ex)}")
     for cookie in ctx.cookie_jar:
         ck: dict[str, Any] = {
             'domain': cookie.domain,
@@ -2049,9 +2050,9 @@ def load_cookie_jar(ctx: ScrapContext) -> None:
             ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
 
 
-def setup(ctx: ScrapContext, for_repl: bool = False) -> None:
+def setup(ctx: ScrContext, for_repl: bool = False) -> None:
     global DEFAULT_CPF
-    ctx.apply_defaults(ScrapContext())
+    ctx.apply_defaults(ScrContext())
 
     if ctx.tor_browser_dir:
         if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -2059,7 +2060,7 @@ def setup(ctx: ScrapContext, for_repl: bool = False) -> None:
     load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
-        raise ScrapSetupError(f"the options ua and uar are incompatible")
+        raise ScrSetupError(f"the options ua and uar are incompatible")
     elif ctx.user_agent_random:
         global RANDOM_USER_AGENT_INSTANCE
         if RANDOM_USER_AGENT_INSTANCE is None:
@@ -2087,7 +2088,7 @@ def setup(ctx: ScrapContext, for_repl: bool = False) -> None:
             if not any(mc.has_content_matching or mc.has_document_matching for mc in ctx.match_chains):
                 report = False
         if report:
-            raise ScrapSetupError("must specify at least one url or (r)file")
+            raise ScrSetupError("must specify at least one url or (r)file")
 
     if not ctx.downloads_temp_dir:
         have_internal_dls = any(
@@ -2101,7 +2102,7 @@ def setup(ctx: ScrapContext, for_repl: bool = False) -> None:
 
         if (have_dls_to_temp or have_internal_dls):
             ctx.downloads_temp_dir = tempfile.mkdtemp(
-                prefix="Scrap_downloads_"
+                prefix="Scr_downloads_"
             )
 
     if ctx.selenium_variant == SeleniumVariant.DISABLED:
@@ -2149,7 +2150,7 @@ def prompt_yes_no(prompt_text: str, default: Optional[bool] = None) -> Optional[
     return prompt(prompt_text, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def selenium_get_url(ctx: ScrapContext) -> Optional[str]:
+def selenium_get_url(ctx: ScrContext) -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
         return ctx.selenium_driver.current_url
@@ -2158,7 +2159,7 @@ def selenium_get_url(ctx: ScrapContext) -> Optional[str]:
         return None
 
 
-def selenium_has_died(ctx: ScrapContext) -> bool:
+def selenium_has_died(ctx: ScrContext) -> bool:
     assert ctx.selenium_driver is not None
     try:
         # throws an exception if the session died
@@ -2168,7 +2169,7 @@ def selenium_has_died(ctx: ScrapContext) -> bool:
 
 
 def gen_dl_temp_name(
-    ctx: ScrapContext, final_filepath: Optional[str]
+    ctx: ScrContext, final_filepath: Optional[str]
 ) -> tuple[str, str]:
     assert ctx.downloads_temp_dir is not None
     dl_index = ctx.download_tmp_index
@@ -2214,8 +2215,8 @@ def selenium_download_external(
                 request_try_get_filename(req)
             )
         except requests.exceptions.RequestException as ex:
-            raise request_exception_to_Scrap_fetch_error(ex)
-    except ScrapFetchError as ex:
+            raise request_exception_to_Scr_fetch_error(ex)
+    except ScrFetchError as ex:
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
@@ -2368,7 +2369,7 @@ def selenium_download(
     return selenium_download_fetch(cm)
 
 
-def fetch_file(ctx: ScrapContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
+def fetch_file(ctx: ScrContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
     try:
         f = open(path, "rb")
         if stream:
@@ -2378,9 +2379,9 @@ def fetch_file(ctx: ScrapContext, path: str, stream: bool = False) -> Union[byte
         finally:
             f.close()
     except FileNotFoundError as ex:
-        raise ScrapFetchError("no such file or directory") from ex
+        raise ScrFetchError("no such file or directory") from ex
     except IOError as ex:
-        raise ScrapFetchError(truncate(str(ex))) from ex
+        raise ScrFetchError(truncate(str(ex))) from ex
 
 
 def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
@@ -2398,18 +2399,18 @@ def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
     return None
 
 
-def request_exception_to_Scrap_fetch_error(ex: requests.exceptions.RequestException):
+def request_exception_to_Scr_fetch_error(ex: requests.exceptions.RequestException):
     if isinstance(ex, requests.exceptions.InvalidURL):
-        return ScrapFetchError("invalid url")
+        return ScrFetchError("invalid url")
     if isinstance(ex, requests.exceptions.ConnectionError):
-        return ScrapFetchError("connection failed")
+        return ScrFetchError("connection failed")
     if isinstance(ex, requests.exceptions.ConnectTimeout):
-        return ScrapFetchError("connection timeout")
-    return ScrapFetchError(truncate(str(ex)))
+        return ScrFetchError("connection timeout")
+    return ScrFetchError(truncate(str(ex)))
 
 
 def request_raw(
-    ctx: ScrapContext, path: str, path_parsed: urllib.parse.ParseResult,
+    ctx: ScrContext, path: str, path_parsed: urllib.parse.ParseResult,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
     proxies=None, stream=False
 ):
@@ -2455,7 +2456,7 @@ def request_try_get_filename(res: requests.Response) -> Optional[str]:
 
 
 def requests_dl(
-    ctx: ScrapContext, path: str,
+    ctx: ScrContext, path: str,
     path_parsed: urllib.parse.ParseResult,
 
 
@@ -2467,15 +2468,15 @@ def requests_dl(
         req.close()
         return data, encoding
     except requests.exceptions.RequestException as ex:
-        raise request_exception_to_Scrap_fetch_error(ex)
+        raise request_exception_to_Scr_fetch_error(ex)
 
 
-def report_selenium_died(ctx: ScrapContext, is_err: bool = True) -> None:
+def report_selenium_died(ctx: ScrContext, is_err: bool = True) -> None:
     log(ctx, Verbosity.ERROR if is_err else Verbosity.WARN,
         "the selenium instance was closed unexpectedly")
 
 
-def report_selenium_error(ctx: ScrapContext, ex: Exception) -> None:
+def report_selenium_error(ctx: ScrContext, ex: Exception) -> None:
     log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
@@ -2488,7 +2489,7 @@ def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Opt
             del output_formatters[i]
 
 
-def selenium_get_full_page_source(ctx: ScrapContext):
+def selenium_get_full_page_source(ctx: ScrContext):
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     doc_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
@@ -2548,7 +2549,7 @@ def selenium_get_full_page_source(ctx: ScrapContext):
         drv.switch_to.default_content()
 
 
-def fetch_doc(ctx: ScrapContext, doc: Document) -> None:
+def fetch_doc(ctx: ScrContext, doc: Document) -> None:
     if ctx.selenium_variant != SeleniumVariant.DISABLED:
         if doc is not ctx.reused_doc or ctx.changed_selenium:
             selpath = doc.path
@@ -2557,7 +2558,7 @@ def fetch_doc(ctx: ScrapContext, doc: Document) -> None:
             try:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
-                ScrapFetchError("selenium timeout")
+                ScrFetchError("selenium timeout")
 
         decide_document_encoding(ctx, doc)
         doc.text, doc.xml = selenium_get_full_page_source(ctx)
@@ -2577,7 +2578,7 @@ def fetch_doc(ctx: ScrapContext, doc: Document) -> None:
         ctx, doc.path, doc.path_parsed
     ))
     if data is None:
-        raise ScrapFetchError("empty response")
+        raise ScrFetchError("empty response")
     doc.encoding = encoding
     encoding = decide_document_encoding(ctx, doc)
     doc.text = data.decode(encoding, errors="surrogateescape")
@@ -2595,7 +2596,7 @@ def gen_final_content_format(format_str: str, cm: ContentMatch, filename: Option
 
 
 def normalize_link(
-    ctx: ScrapContext, mc: Optional[MatchChain], src_doc: Document,
+    ctx: ScrContext, mc: Optional[MatchChain], src_doc: Document,
     doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
@@ -2904,7 +2905,7 @@ def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> l
     return document_matches
 
 
-def make_padding(ctx: ScrapContext, count_number: int) -> tuple[str, str]:
+def make_padding(ctx: ScrContext, count_number: int) -> tuple[str, str]:
     content_count_pad_len = (
         ctx.selenium_content_count_pad_length
         - min(len(str(count_number)), ctx.selenium_content_count_pad_length)
@@ -2915,7 +2916,7 @@ def make_padding(ctx: ScrapContext, count_number: int) -> tuple[str, str]:
 
 
 def handle_interactive_chains(
-    ctx: ScrapContext,
+    ctx: ScrContext,
     interactive_chains: list[MatchChain],
     doc: Document,
     last_doc_path: str,
@@ -3096,7 +3097,7 @@ def accept_for_match_chain(
     return content_skip_doc, documents_skip_doc
 
 
-def decide_document_encoding(ctx: ScrapContext, doc: Document) -> str:
+def decide_document_encoding(ctx: ScrContext, doc: Document) -> str:
     forced = False
     mc = doc.src_mc
     if not mc:
@@ -3113,7 +3114,7 @@ def decide_document_encoding(ctx: ScrapContext, doc: Document) -> str:
     return enc
 
 
-def parse_xml(ctx: ScrapContext, doc: Document) -> None:
+def parse_xml(ctx: ScrContext, doc: Document) -> None:
     try:
         text = cast(str, doc.text)
         src_bytes = text.encode(cast(str, doc.encoding),
@@ -3133,7 +3134,7 @@ def parse_xml(ctx: ScrapContext, doc: Document) -> None:
             f"{doc.path}: failed to parse as xml: {str(ex)}")
 
 
-def dl(ctx: ScrapContext) -> Optional[Document]:
+def dl(ctx: ScrContext) -> Optional[Document]:
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
@@ -3164,7 +3165,7 @@ def dl(ctx: ScrapContext) -> Optional[Document]:
                 log(ctx, Verbosity.ERROR,
                     f"Failed to fetch {doc.path}: {str(ex)}")
             break
-        except ScrapFetchError as ex:
+        except ScrFetchError as ex:
             log(ctx, Verbosity.ERROR, f"Failed to fetch {doc.path}: {str(ex)}")
             continue
         static_content = (
@@ -3243,7 +3244,7 @@ def dl(ctx: ScrapContext) -> Optional[Document]:
     return doc
 
 
-def finalize(ctx: ScrapContext) -> None:
+def finalize(ctx: ScrContext) -> None:
     if ctx.dl_manager:
         try:
             ctx.dl_manager.pom.main_thread_done()
@@ -3268,16 +3269,16 @@ def begins(string, begin) -> bool:
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 
 
-def parse_mc_range_int(ctx: ScrapContext, v, arg) -> int:
+def parse_mc_range_int(ctx: ScrContext, v, arg) -> int:
     try:
         return int(v)
     except ValueError as ex:
-        raise ScrapSetupError(
+        raise ScrSetupError(
             f"failed to parse '{v}' as an integer for match chain specification of '{arg}'"
         )
 
 
-def extend_match_chain_list(ctx: ScrapContext, needed_id: int) -> None:
+def extend_match_chain_list(ctx: ScrContext, needed_id: int) -> None:
     if len(ctx.match_chains) > needed_id:
         return
     for i in range(len(ctx.match_chains), needed_id+1):
@@ -3286,17 +3287,17 @@ def extend_match_chain_list(ctx: ScrapContext, needed_id: int) -> None:
         ctx.match_chains.append(mc)
 
 
-def parse_simple_mc_range(ctx: ScrapContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
+def parse_simple_mc_range(ctx: ScrContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
     sections = mc_spec.split(",")
     ranges = []
     for s in sections:
         s = s.strip()
         if s == "":
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 "invalid empty range in match chain specification of '{arg}'")
         dash_split = [r.strip() for r in s.split("-")]
         if len(dash_split) > 2 or s == "-":
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 "invalid range '{s}' in match chain specification of '{arg}'")
         if len(dash_split) == 1:
             id = parse_mc_range_int(ctx, dash_split[0], arg)
@@ -3315,7 +3316,7 @@ def parse_simple_mc_range(ctx: ScrapContext, mc_spec: str, arg: str) -> Iterable
             else:
                 snd = parse_mc_range_int(ctx, dash_split[1], arg)
                 if fst > snd:
-                    raise ScrapSetupError(
+                    raise ScrSetupError(
                         f"second value must be larger than first for range {s} "
                         + f"in match chain specification of '{arg}'"
                     )
@@ -3324,13 +3325,13 @@ def parse_simple_mc_range(ctx: ScrapContext, mc_spec: str, arg: str) -> Iterable
     return itertools.chain(*ranges)
 
 
-def parse_mc_range(ctx: ScrapContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
+def parse_mc_range(ctx: ScrContext, mc_spec: str, arg: str) -> Iterable[MatchChain]:
     if mc_spec == "":
         return [ctx.defaults_mc]
 
     esc_split = [x.strip() for x in mc_spec.split("^")]
     if len(esc_split) > 2:
-        raise ScrapSetupError(
+        raise ScrSetupError(
             f"cannot have more than one '^' in match chain specification of '{arg}'"
         )
     if len(esc_split) == 1:
@@ -3351,7 +3352,7 @@ def parse_mc_range(ctx: ScrapContext, mc_spec: str, arg: str) -> Iterable[MatchC
 
 
 def parse_mc_arg(
-    ctx: ScrapContext, argname: str, arg: str,
+    ctx: ScrContext, argname: str, arg: str,
     support_blank: bool = False, blank_value: str = ""
 ) -> Optional[tuple[Iterable[MatchChain], str]]:
     if not begins(arg, argname):
@@ -3362,7 +3363,7 @@ def parse_mc_arg(
         if arg != argname:
             return None
         if not support_blank:
-            raise ScrapSetupError("missing equals sign in argument '{arg}'")
+            raise ScrSetupError("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
         value = blank_value
         mc_spec = arg[argname_len:]
@@ -3375,12 +3376,12 @@ def parse_mc_arg(
     return parse_mc_range(ctx, mc_spec, pre_eq_arg), value
 
 
-def parse_mc_arg_as_range(ctx: ScrapContext, argname: str, argval: str) -> list[MatchChain]:
+def parse_mc_arg_as_range(ctx: ScrContext, argname: str, argval: str) -> list[MatchChain]:
     return list(parse_mc_range(ctx, argval, argname))
 
 
 def apply_mc_arg(
-    ctx: ScrapContext, argname: str, config_opt_names: list[str], arg: str,
+    ctx: ScrContext, argname: str, config_opt_names: list[str], arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
     support_blank=False, blank_value: str = ""
 ) -> bool:
@@ -3402,7 +3403,7 @@ def apply_mc_arg(
                 chainid = ""
             else:
                 chainid = str(mc.chain_id)
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"{argname}{chainid} specified twice in: "
                 + f"'{prev}' and '{arg}'"
             )
@@ -3423,29 +3424,29 @@ def parse_bool_arg(v: str, arg: str, blank_val: bool = True) -> bool:
         return True
     if v in NO_INDICATING_STRINGS.matching:
         return False
-    raise ScrapSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
+    raise ScrSetupError(f"cannot parse '{v}' as a boolean in '{arg}'")
 
 
 def parse_int_arg(v: str, arg: str) -> int:
     try:
         return int(v)
     except ValueError:
-        raise ScrapSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
+        raise ScrSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
 
 
 def parse_non_negative_float_arg(v: str, arg: str) -> float:
     try:
         f = float(v)
     except ValueError:
-        raise ScrapSetupError(f"cannot parse '{v}' as an number in '{arg}'")
+        raise ScrSetupError(f"cannot parse '{v}' as an number in '{arg}'")
     if f < 0:
-        raise ScrapSetupError(f"negative number '{v}' not allowed for '{arg}'")
+        raise ScrSetupError(f"negative number '{v}' not allowed for '{arg}'")
     return f
 
 
 def parse_encoding_arg(v: str, arg: str) -> str:
     if not verify_encoding(v):
-        raise ScrapSetupError(f"unknown encoding in '{arg}'")
+        raise ScrSetupError(f"unknown encoding in '{arg}'")
     return v
 
 
@@ -3467,7 +3468,7 @@ def select_variant(val: str, variants_dict: dict[str, T]) -> Optional[T]:
 def parse_variant_arg(val: str, variants_dict: dict[str, T], arg: str) -> T:
     res = select_variant(val, variants_dict)
     if res is None:
-        raise ScrapSetupError(
+        raise ScrSetupError(
             f"illegal argument '{arg}', valid options for "
             + f"{arg[:len(arg)-len(val)-1]} are: "
             + f"{', '.join(sorted(variants_dict.keys()))}"
@@ -3484,7 +3485,7 @@ def verify_encoding(encoding: str) -> bool:
 
 
 def apply_doc_arg(
-    ctx: ScrapContext, argname: str, doctype: DocumentType, arg: str
+    ctx: ScrContext, argname: str, doctype: DocumentType, arg: str
 ) -> bool:
     parse_result = parse_mc_arg(ctx, argname, arg)
     if parse_result is None:
@@ -3520,7 +3521,7 @@ def apply_doc_arg(
 
 
 def apply_ctx_arg(
-    ctx: ScrapContext, optname: str, argname: str, arg: str,
+    ctx: ScrContext, optname: str, argname: str, arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
     support_blank: bool = False,
     blank_val: str = ""
@@ -3531,26 +3532,26 @@ def apply_ctx_arg(
         if support_blank:
             val = blank_val
         else:
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 f"missing '=' and value for option '{optname}'"
             )
     else:
         nc = arg[len(optname):]
         if CHAIN_REGEX.match(nc):
-            raise ScrapSetupError(
+            raise ScrSetupError(
                 "option '{optname}' does not support match chain specification"
             )
         if nc[0] != "=":
             return False
         val = get_arg_val(arg)
     if ctx.__dict__[argname] is not None:
-        raise ScrapSetupError(f"error: {argname} specified twice")
+        raise ScrSetupError(f"error: {argname} specified twice")
     ctx.__dict__[argname] = value_parse(val, arg)
     return True
 
 
 def resolve_repl_defaults(
-    ctx_new: ScrapContext, ctx: ScrapContext, last_doc: Optional[Document]
+    ctx_new: ScrContext, ctx: ScrContext, last_doc: Optional[Document]
 ) -> None:
     if ctx_new.user_agent_random and not ctx_new.user_agent:
         ctx.user_agent = None
@@ -3614,19 +3615,19 @@ def resolve_repl_defaults(
         last_doc.xml = None
 
 
-def run_repl(initial_ctx: ScrapContext) -> int:
+def run_repl(initial_ctx: ScrContext) -> int:
     try:
         # run with initial args
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
-        ctx: Optional[ScrapContext] = initial_ctx
+        ctx: Optional[ScrContext] = initial_ctx
         while True:
             try:
                 if ctx is not None:
                     try:
                         last_doc = dl(ctx)
-                    except ScrapMatchError as ex:
+                    except ScrMatchError as ex:
                         log(ctx, Verbosity.ERROR, str(ex))
                     if ctx.dl_manager:
                         ctx.dl_manager.pom.main_thread_done()
@@ -3636,7 +3637,7 @@ def run_repl(initial_ctx: ScrapContext) -> int:
                     stable_ctx = ctx
                     ctx = None
                 try:
-                    line = input("Scrap> " if tty else "")
+                    line = input("Scr> " if tty else "")
                 except EOFError:
                     if tty:
                         print("")
@@ -3650,10 +3651,10 @@ def run_repl(initial_ctx: ScrapContext) -> int:
                 if not len(args):
                     continue
 
-                ctx_new = ScrapContext(blank=True)
+                ctx_new = ScrContext(blank=True)
                 try:
                     parse_args(ctx_new, args)
-                except ScrapSetupError as ex:
+                except ScrSetupError as ex:
                     log(stable_ctx, Verbosity.ERROR, str(ex))
                     continue
 
@@ -3662,8 +3663,8 @@ def run_repl(initial_ctx: ScrapContext) -> int:
 
                 try:
                     setup(ctx, True)
-                except ScrapSetupError as ex:
-                    log(cast(ScrapContext, ctx), Verbosity.ERROR, str(ex))
+                except ScrSetupError as ex:
+                    log(cast(ScrContext, ctx), Verbosity.ERROR, str(ex))
                     if ctx.exit:
                         stable_ctx = ctx
                         return ctx.error_code
@@ -3675,7 +3676,7 @@ def run_repl(initial_ctx: ScrapContext) -> int:
         finalize(stable_ctx)
 
 
-def parse_args(ctx: ScrapContext, args: Iterable[str]) -> None:
+def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
     for arg in args:
         if (
             arg in ["-h", "--help", "help"]
@@ -3823,11 +3824,11 @@ def parse_args(ctx: ScrapContext, args: Iterable[str]) -> None:
         if apply_ctx_arg(ctx, "timeout", "request_timeout_seconds", arg,  parse_non_negative_float_arg):
             continue
 
-        raise ScrapSetupError(f"unrecognized option: '{arg}'")
+        raise ScrSetupError(f"unrecognized option: '{arg}'")
 
 
-def run_scrap() -> int:
-    ctx = ScrapContext(blank=True)
+def run_scr() -> int:
+    ctx = ScrContext(blank=True)
     if len(sys.argv) < 2:
         log_raw(
             Verbosity.ERROR,
@@ -3838,7 +3839,7 @@ def run_scrap() -> int:
     try:
         parse_args(ctx, sys.argv[1:])
         setup(ctx)
-    except ScrapSetupError as ex:
+    except ScrSetupError as ex:
         log_raw(Verbosity.ERROR, str(ex))
         return 1
 
@@ -3847,7 +3848,7 @@ def run_scrap() -> int:
     else:
         try:
             dl(ctx)
-        except ScrapMatchError as ex:
+        except ScrMatchError as ex:
             log(ctx, Verbosity.ERROR, str(ex))
         finally:
             finalize(ctx)
@@ -3861,7 +3862,7 @@ def main() -> None:
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
-        exit(run_scrap())
+        exit(run_scr())
     except BrokenPipeError:
         abort_on_broken_pipe()
     except KeyboardInterrupt:
