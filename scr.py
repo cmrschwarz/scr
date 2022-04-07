@@ -49,7 +49,7 @@ import tempfile
 import itertools
 import warnings
 import urllib.request
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 
 T = TypeVar("T")
