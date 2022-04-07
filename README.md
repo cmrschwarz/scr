@@ -38,7 +38,7 @@ scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr=
 
 ### Downloading first 3 pdfs and 5 gifs from a site, use selenium tor for the fetch:
 ```bash 
-scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif' cl csf='{fn}' cin=1 cimax0=3 cimax1=5 sel=tor
+scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif$' cl csf='{fn}' cin=1 cimax0=3 cimax1=5 sel=tor
 ```
 
 ## Setup

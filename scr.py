@@ -304,31 +304,31 @@ class ResponseStreamWrapper(MinimalInputStream):
         self.close()
 
 
-class RegexMatch:
-    xmatch: str
-    rmatch: str
-    unnamed_cgroups: list[str]
-    named_cgroups: dict[str, str]
+class LocatorMatch:
+    xmatch: Optional[str] = None
+    xmatch_xml: Optional[lxml.html.HtmlElement] = None
+    rmatch: Optional[str] = None
+    fres: Optional[str] = None
+    jsres: Optional[str] = None
+    result: str = ""
+    named_cgroups: Optional[dict[str, str]] = None
+    unnamed_cgroups: Optional[list[str]] = None
 
-    def __init__(
-        self, xmatch: str, rmatch: str,
-        unnamed_cgroups: list[str] = [],
-        named_cgroups: dict[str, str] = {}
-    ) -> None:
-        self.xmatch = xmatch
-        self.rmatch = rmatch
-        self.unnamed_cgroups = [
-            x if x is not None else "" for x in unnamed_cgroups
-        ]
+    def set_regex_match(self, match: re.Match):
+        self.result = match.group(0)
+        self.rmatch = self.result
         self.named_cgroups = {
             k: (v if v is not None else "")
-            for (k, v) in named_cgroups.items()
+            for (k, v) in match.groupdict().items()
         }
+        self.unnamed_cgroups = [
+            x if x is not None else "" for x in match.groups()
+        ]
 
-    def __key__(self) -> tuple[str, str]:
-        # we only ever compare regex matches from the same match chain
+    def __key__(self) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+        # we only ever compare locator matches from the same match chain
         # therefore it is enough that the complete match is equivalent
-        return (self.xmatch, self.rmatch)
+        return (self.xmatch, self.rmatch, self.fres, self.jsres)
 
     def __eq__(self, other) -> bool:
         return isinstance(other, self.__class__) and self.__key__() == other.__key__()
@@ -337,10 +337,32 @@ class RegexMatch:
         return hash(self.__key__())
 
     def unnamed_group_list_to_dict(self, name_prefix: str) -> dict[str, str]:
+        if self.rmatch is None:
+            return {}
         group_dict = {f"{name_prefix}0": self.rmatch}
-        for i, g in enumerate(self.unnamed_cgroups):
+        for i, g in enumerate(cast(list[str], self.unnamed_cgroups)):
             group_dict[f"{name_prefix}{i+1}"] = g
         return group_dict
+
+    def clone(self) -> 'LocatorMatch':
+        c = LocatorMatch()
+        if self.xmatch is not None:
+            c.xmatch = self.xmatch
+        if self.xmatch_xml is not None:
+            c.xmatch_xml = self.xmatch_xml
+        if self.rmatch is not None:
+            c.rmatch = self.rmatch
+        if self.fres is not None:
+            c.fres = self.fres
+        if self.jsres is not None:
+            c.jsres = self.jsres
+        if self.result is not None:
+            c.result = self.result
+        if self.named_cgroups is not None:
+            c.named_cgroups = self.named_cgroups
+        if self.unnamed_cgroups is not None:
+            c.unnamed_cgroups = self.unnamed_cgroups
+        return c
 
 
 class Document:
@@ -352,7 +374,7 @@ class Document:
     text: Optional[str]
     xml: Optional[lxml.html.HtmlElement]
     src_mc: Optional['MatchChain']
-    regex_match: Optional[RegexMatch]
+    locator_match: Optional[LocatorMatch]
     dfmatch: Optional[str]
 
     def __init__(
@@ -360,7 +382,7 @@ class Document:
         src_mc: Optional['MatchChain'],
         match_chains: list['MatchChain'] = None,
         expand_match_chains_above: Optional[int] = None,
-        regex_match: Optional[RegexMatch] = None,
+        locator_match: Optional[LocatorMatch] = None,
         path_parsed: Optional[urllib.parse.ParseResult] = None
     ) -> None:
         self.document_type = document_type
@@ -374,7 +396,7 @@ class Document:
         self.text = None
         self.xml = None
         self.src_mc = src_mc
-        self.regex_match = regex_match
+        self.locator_match = locator_match
         self.dfmatch = None
         if not match_chains:
             self.match_chains = []
@@ -494,6 +516,9 @@ class Locator(ConfigDataClass):
         super().__init__(blank)
         self.name = name
 
+    def is_active(self) -> bool:
+        return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_format])
+
     def compile_xpath(self, mc: 'MatchChain') -> None:
         if self.xpath is None:
             return
@@ -508,22 +533,23 @@ class Locator(ConfigDataClass):
             )
         self.xpath = xp
 
-    def gen_dummy_regex_match(self):
-        if self.regex is None:
-            if self.xpath is not None:
-                return RegexMatch("", "")
-            return None
-        if type(self.regex) is not re.Pattern:
-            return None
-        capture_group_keys = list(self.regex.groupindex.keys())
-        unnamed_regex_group_count = (
-            self.regex.groups - len(capture_group_keys)
-        )
-        return RegexMatch(
-            "", "",
-            [""] * unnamed_regex_group_count,
-            {k: "" for k in capture_group_keys}
-        )
+    def gen_dummy_locator_match(self):
+        lm = LocatorMatch()
+        if self.xpath:
+            lm.xmatch = ""
+        if self.regex and type(self.regex) is re.Pattern:
+            lm.rmatch = ""
+            capture_group_keys = list(self.regex.groupindex.keys())
+            unnamed_regex_group_count = (
+                self.regex.groups - len(capture_group_keys)
+            )
+            lm.named_cgroups = {k: "" for k in capture_group_keys}
+            lm.unnamed_cgroups = [""] * unnamed_regex_group_count
+        if self.format:
+            lm.fres = ""
+        if self.js_format:
+            lm.jsres = ""
+        return lm
 
     def compile_regex(self, mc: 'MatchChain') -> None:
         if self.regex is None:
@@ -552,73 +578,82 @@ class Locator(ConfigDataClass):
         self.validated = True
 
     def match_xpath(
-        self, ctx: 'ScrContext', src_xml: lxml.html.HtmlElement, path: str,
-        default: tuple[
-            list[str],
-            Optional[list[lxml.html.HtmlElement]]
-        ] = ([], []),
-        return_xml: bool = False
-    ) -> tuple[list[str], Optional[list[lxml.html.HtmlElement]]]:
+        self,
+        src_text: str,
+        src_xml: lxml.html.HtmlElement,
+        doc_path: str,
+        store_xml: bool = False
+    ) -> list[LocatorMatch]:
         if self.xpath is None:
-            return default
+            lm = LocatorMatch()
+            lm.result = src_text
+            return [lm]
         try:
             xpath_matches = (
                 cast(lxml.etree.XPath, self.xpath).evaluate(src_xml)
             )
         except lxml.etree.XPathEvalError as ex:
-            raise ScrMatchError(f"invalid xpath: '{self.xpath}'")
+            raise ScrMatchError(
+                f"xpath matching failed for: '{self.xpath}' in {doc_path}"
+            )
         except lxml.etree.LxmlError as ex:
             raise ScrMatchError(
-                f"failed to apply xpath '{self.xpath}' to {path}: "
+                f"xpath '{self.xpath}' to {doc_path}: "
                 + f"{ex.__class__.__name__}:  {str(ex)}"
             )
 
         if not isinstance(xpath_matches, list):
-            raise ScrMatchError(f"invalid xpath: '{self.xpath}'")
+            raise ScrMatchError(
+                f"xpath matching failed for: '{self.xpath}' in {doc_path}"
+            )
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]
         res = []
-        res_xml = []
         for xm in xpath_matches:
+            lm = LocatorMatch()
             if type(xm) == lxml.etree._ElementUnicodeResult:
-                string = str(xm)
-                res.append(string)
-                if return_xml:
+                lm.xmatch = str(xm)
+                if store_xml:
                     try:
-                        res_xml.append(lxml.html.fromstring(string))
+                        lm.xmatch_xml = lxml.html.fromstring(lm.xmatch)
                     except lxml.LxmlError:
-                        pass
+                        continue
             else:
                 try:
-                    res.append(lxml.html.tostring(xm, encoding="unicode"))
-                    if return_xml:
-                        res_xml.append(xm)
+                    lm.result = lxml.html.tostring(xm, encoding="unicode")
+                    lm.xmatch = lm.result
+                    if store_xml:
+                        lm.xmatch_xml = xm
                 except (lxml.LxmlError, UnicodeEncodeError) as ex1:
                     raise ScrMatchError(
-                        f"{path}: xpath match encoding failed: {str(ex1)}"
+                        f"{doc_path}: xpath match encoding failed: {str(ex1)}"
                     )
-        return res, res_xml
+            lm.result = lm.xmatch
+            res.append(lm)
+        return res
 
-    def match_regex(
-        self, xmatch: str, default: list[RegexMatch] = []
-    ) -> list[RegexMatch]:
-        if self.regex is None or xmatch is None:
-            return default
-        res = []
-        for m in cast(re.Pattern, self.regex).finditer(xmatch):
-            res.append(
-                RegexMatch(xmatch, m.string, list(m.groups()), m.groupdict())
-            )
-            if not self.multimatch:
+    def match_regex(self, lm: LocatorMatch, multimatch: bool = None) -> list[LocatorMatch]:
+        if self.regex is None:
+            return [lm]
+        if multimatch is None:
+            multimatch = self.multimatch
+        text = lm.result
+        res: list[LocatorMatch] = []
+        for match in cast(re.Pattern, self.regex).finditer(text):
+            if res:
+                lm = lm.clone()
+            lm.set_regex_match(match)
+            res.append(lm)
+            if not multimatch:
                 break
         return res
 
-    def apply_format(self, cm: 'ContentMatch', rm: Optional[RegexMatch]) -> str:
+    def apply_format(self, cm: 'ContentMatch', lm: LocatorMatch):
         if not self.format:
-            assert rm is not None
-            return rm.rmatch
-        return self.format.format(**content_match_build_format_args(cm))
+            return lm
+        lm.fres = self.format.format(**content_match_build_format_args(cm))
+        lm.result = lm.fres
 
     def is_unset(self):
         return min([v is None for v in [self.xpath, self.regex, self.format]])
@@ -684,10 +719,9 @@ class MatchChain(ConfigDataClass):
     has_content_matching: bool = False
     has_interactive_matching: bool = False
     need_content_download: bool = False
+    need_label: bool = False
     need_filename: bool = False
     need_output_multipass: bool = False
-    content_refs_write: int = 0
-    content_refs_print: int = 0
     content_matches: list['ContentMatch']
     document_matches: list[Document]
     handled_content_matches: set['ContentMatch']
@@ -712,31 +746,22 @@ class MatchChain(ConfigDataClass):
         self.handled_document_matches = set()
 
     def gen_dummy_content_match(self):
+        clm = self.content.gen_dummy_locator_match()
+        if self.has_label_matching:
+            llm = self.label.gen_dummy_locator_match()
+        elif self.label_default_format:
+            llm = LocatorMatch()
+            llm.fres = ""
+        else:
+            llm = None
+
         dcm = ContentMatch(
-            self.label.gen_dummy_regex_match(),
-            self.content.gen_dummy_regex_match(),
-            self,
+            clm, llm, self,
             Document(
                 DocumentType.FILE, "", None,
-                regex_match=self.document.gen_dummy_regex_match()
+                locator_match=self.document.gen_dummy_locator_match()
             )
         )
-        if dcm.content_regex_match or (
-            self.content.format and self.content.validated
-        ):
-            dcm.cfmatch = ""
-            dcm.cmatch = ""
-
-        if dcm.label_regex_match or (
-            self.label.format and self.label.validated
-        ):
-            dcm.lfmatch = ""
-            dcm.lmatch = ""
-
-        if dcm.doc.regex_match or (
-            self.document.format and self.document.validated
-        ):
-            dcm.doc.dfmatch = ""
         if self.content.multimatch:
             dcm.ci = 0
         if self.has_document_matching:
@@ -765,39 +790,33 @@ class MatchChain(ConfigDataClass):
 
 
 class ContentMatch:
-    label_regex_match: Optional[RegexMatch] = None
-    content_regex_match: Optional[RegexMatch] = None
+    clm: LocatorMatch
+    llm: Optional[LocatorMatch] = None
     mc: MatchChain
     doc: Document
 
     # these are set once we accept the CM, not during it's creation
     ci: Optional[int] = None
     di: Optional[int] = None
-    cfmatch: Optional[str] = None
-    lfmatch: Optional[str] = None
 
-    # these are potentially different from cfmatch/lfmatch due to interactive
-    # matching or link normalization
-    lmatch: Optional[str] = None
-    cmatch: Optional[str] = None
     url_parsed: Optional[urllib.parse.ParseResult]
 
     def __init__(
         self,
-        label_regex_match: Optional[RegexMatch],
-        content_regex_match: Optional[RegexMatch],
-        mc: MatchChain, doc: Document
+        clm: LocatorMatch,
+        llm: Optional[LocatorMatch],
+        mc: MatchChain,
+        doc: Document
     ):
-        self.label_regex_match = label_regex_match
-        self.content_regex_match = content_regex_match
+        self.llm = llm
+        self.clm = clm
         self.mc = mc
         self.doc = doc
 
     def __key__(self) -> Any:
         return (
-            self.doc,
-            self.label_regex_match.__key__() if self.label_regex_match else None,
-            self.content_regex_match.__key__() if self.content_regex_match else None
+            self.doc, self.clm.__key__(),
+            self.llm.__key__() if self.llm else None,
         )
 
     def __eq__(x, y):
@@ -1115,9 +1134,9 @@ class DownloadJob:
         cm = self.cm
         if not cm.mc.content_save_format:
             return InteractiveResult.ACCEPT
-        if not cm.mc.is_valid_label(cm.lmatch):
+        if cm.llm and not cm.mc.is_valid_label(cm.llm.result):
             log(cm.mc.ctx, Verbosity.WARN,
-                f"matched label '{cm.lmatch}' would contain a slash, skipping this content from: {cm.doc.path}"
+                f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
                 )
             save_path = None
         if cm.mc.need_filename:
@@ -1173,9 +1192,8 @@ class DownloadJob:
         if self.content_format is not None:
             # this was already done during filename determination
             return True
-        path = cast(str, self.cm.cmatch)
         if self.cm.mc.content_raw:
-            self.content = self.cm.cmatch
+            self.content = self.cm.clm.result
             self.content_format = ContentFormat.STRING
         else:
             if not self.cm.mc.need_content_download:
@@ -1193,12 +1211,12 @@ class DownloadJob:
                         self.content = data
                         self.content_format = ContentFormat.BYTES
                     elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
-                        self.content = path
+                        self.content = self.cm.clm.result
                         self.content_format = ContentFormat.FILE
                     else:
                         try:
                             res = request_raw(
-                                self.cm.mc.ctx, path,
+                                self.cm.mc.ctx, self.cm.clm.result,
                                 cast(urllib.parse.ParseResult,
                                      self.cm.url_parsed),
                                 stream=True
@@ -1209,7 +1227,7 @@ class DownloadJob:
                         except requests.exceptions.RequestException as ex:
                             ex = request_exception_to_Scr_fetch_error(ex)
                             log(self.cm.mc.ctx, Verbosity.ERROR,
-                                f"{self.context}: failed to download '{truncate(path)}': {str(ex)}")
+                                f"{self.context}: failed to download '{truncate(self.cm.clm.result)}': {str(ex)}")
                             return False
         if not self.gen_fallback_filename():
             return False
@@ -1276,6 +1294,7 @@ class DownloadJob:
             stream: Union[PrintOutputStream, BinaryIO] = self.print_stream
         else:
             stream = sys.stdout.buffer
+        content = self.content
         self.output_formatters.append(OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
             stream, self.content, self.filename
@@ -1356,8 +1375,9 @@ class DownloadJob:
                 os.remove(self.temp_file_path)
             if self.save_file is not None:
                 self.save_file.close()
+            path = self.cm.clm.result
             log(self.cm.mc.ctx, Verbosity.DEBUG,
-                f"finished downloading {self.cm.cmatch}" if success else f"failed to download {self.cm.cmatch}"
+                f"finished downloading {path}" if success else f"failed to download {path}"
                 )
 
 
@@ -1379,9 +1399,10 @@ class DownloadManager:
         self.pom = PrintOutputManager()
 
     def submit(self, dj: DownloadJob):
-        log(self.ctx, Verbosity.DEBUG,
-            f"enqueuing download for {dj.cm.cmatch}"
-            )
+        log(
+            self.ctx, Verbosity.DEBUG,
+            f"enqueuing download for {dj.cm.clm.result}"
+        )
         dj.setup_print_stream(self)
         self.pending_jobs.append(self.executor.submit(dj.run_job))
 
@@ -1425,29 +1446,26 @@ def content_match_build_format_args(
         "cesc": cm.mc.content_escape_sequence,
         "dl":   cm.doc.path,
     }
-    potential_regex_matches = [
-        ("d", cm.doc.regex_match),
-        ("l", cm.label_regex_match),
-        ("c", cm.content_regex_match)
+    potential_locator_matches = [
+        ("d", cm.doc.locator_match),
+        ("l", cm.llm),
+        ("c", cm.clm)
     ]
     # remove None regex matches (and type cast this to make mypy happy)
-    regex_matches = list(map(lambda p: cast(tuple[str, RegexMatch], p),
-                             filter(
-        lambda rm: rm[1] is not None, potential_regex_matches)
+    locator_matches = list(map(lambda p: cast(tuple[str, LocatorMatch], p),
+                               filter(
+        lambda rm: rm[1] is not None, potential_locator_matches)
     ))
-    for p, rm in regex_matches:
-        args_dict.update({
+    for p, rm in locator_matches:
+        dict_update_unless_none(args_dict, {
             f"{p}x": rm.xmatch,
             f"{p}r": rm.rmatch,
+            f"{p}f": rm.fres,
+            f"{p}js": rm.jsres,
+            f"{p}{'m' if p == 'c' else ''}": rm.result,
         })
 
     dict_update_unless_none(args_dict, {
-        "cf": cm.cfmatch,
-        "cm": cm.cmatch,
-        "lf": cm.lfmatch,
-        "l": cm.lmatch,
-        "df": cm.doc.dfmatch,
-        "d": cm.doc.path,
         "di": cm.di,
         "ci": cm.ci,
         "c": content,
@@ -1463,12 +1481,13 @@ def content_match_build_format_args(
         })
 
         # apply the unnamed groups first in case somebody overwrote it with a named group
-    for p, rm in regex_matches:
-        args_dict.update(rm.unnamed_group_list_to_dict(f"{p}g"))
+    for p, lm in locator_matches:
+        args_dict.update(lm.unnamed_group_list_to_dict(f"{p}g"))
 
     # finally apply the named groups
-    for p, rm in regex_matches:
-        args_dict.update(rm.named_cgroups)
+    for p, lm in locator_matches:
+        if lm.named_cgroups:
+            args_dict.update(lm.named_cgroups)
 
     return args_dict
 
@@ -1616,6 +1635,7 @@ def help(err: bool = False) -> None:
         {{cf}}                content after applying cf
         {{cjs}}               output of cjs
         {{cm}}                final content match after link normalization (cl) and user interaction (cin)
+        {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
 
         {{lx}}                label xpath match
         {{lr}}                label regex match, equal to {{lx}} if lr is unspecified
@@ -1635,15 +1655,15 @@ def help(err: bool = False) -> None:
 
         {{di}}                document index
         {{ci}}                content index
-        {{dl}}                document link (even for df, this still refers to the parent document)
+        {{dl}}                document link (inside df, this refers to the parent document)
         {{cenc}}              content encoding, deduced while respecting cenc and cfenc
         {{cesc}}              escape sequence for separating content, can be overwritten using cesc
         {{chain}}             id of the match chain that generated this content
 
-        {{fn}}                suggested download filename from the http response
+        {{fn}}                filename from the url of a cm with cl 
         {{fb}}                basename component of {{fn}} (extension stripped away)
         {{fe}}                extension component of {{fn}}, including the dot (empty string if there is no extension)
-        {{c}}                 content, downloaded from cm in case of cl, otherwise equal to cm
+
 
     Chain Syntax:
         Any option above can restrict the matching chains is should apply to using opt<chainspec>=<value>.
@@ -1853,20 +1873,27 @@ def get_format_string_keys(fmt_string) -> list[str]:
     return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
 
 
-def format_string_arg_occurences(fmt_string, arg_name) -> int:
+def format_string_arg_occurence(fmt_string, arg_name) -> int:
     if fmt_string is None:
         return 0
     fmt_args = get_format_string_keys(fmt_string)
     return fmt_args.count(arg_name)
 
 
-def format_string_args_occurences(fmt_string, arg_names) -> int:
+def format_string_args_occurence(fmt_string, arg_names) -> int:
     if fmt_string is None:
         return 0
-    fmt_args = get_format_string_keys(fmt_string)
     count = 0
+    fmt_args = get_format_string_keys(fmt_string)
     for an in arg_names:
         count += fmt_args.count(an)
+    return count
+
+
+def format_strings_args_occurence(fmt_strings, arg_names) -> int:
+    count = 0
+    for f in fmt_strings:
+        count += format_string_args_occurence(f, arg_names)
     return count
 
 
@@ -1946,10 +1973,10 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
         mc.content_save_format = ""
 
     mc.has_xpath_matching = any(l.xpath is not None for l in locators)
-    mc.has_label_matching = mc.label.xpath is not None or mc.label.regex is not None
+    mc.has_label_matching = mc.label.is_active()
     mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
-    mc.has_document_matching = mc.has_document_matching or mc.document.xpath is not None or mc.document.regex is not None or mc.document.format is not None
-    mc.has_content_matching = mc.has_content_matching or mc.content.xpath is not None or mc.content.regex is not None or mc.content.format is not None
+    mc.has_document_matching = mc.document.is_active()
+    mc.has_content_matching = mc.has_label_matching or mc.content.is_active()
     mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
 
     if mc.content_print_format or mc.content_save_format:
@@ -1980,12 +2007,28 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
             )
     default_format: Optional[str] = None
 
-    filename_fkeys = ["fn", "fb", "fe"]
-    mc.need_filename = (
-        format_string_args_occurences(mc.content_print_format, filename_fkeys)
-        + format_string_args_occurences(mc.content_save_format, filename_fkeys)
-        + format_string_args_occurences(mc.content_write_format, filename_fkeys)
+    output_formats = [
+        mc.content_print_format,
+        mc.content_save_format,
+        mc.content_write_format  # this is none if save is None
+    ]
+
+    mc.need_filename = format_strings_args_occurence(
+        output_formats,
+        ["fn", "fb", "fe"]
     ) > 0
+
+    mc.need_content_download = format_strings_args_occurence(
+        output_formats, ["c"]
+    ) > 0
+
+    mc.need_label = format_strings_args_occurence(
+        output_formats, ["l"]
+    ) > 0
+
+    mc.need_output_multipass = any(
+        format_string_arg_occurence(of, "c") for of in output_formats
+    )
 
     if mc.filename_default_format is None:
         if mc.need_filename:
@@ -1996,7 +2039,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
                         dummy_cm, True, False, False)
 
     if mc.label_default_format is None:
-        if mc.label_allow_missing:
+        if mc.label_allow_missing and mc.need_label:
             if default_format is None:
                 default_format = gen_default_format(mc)
             mc.label_default_format = default_format
@@ -2005,20 +2048,6 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
             mc, ["label_default_format"],
             dummy_cm, True, False, False
         )
-
-    mc.content_refs_print = format_string_arg_occurences(
-        mc.content_print_format,  "c"
-    )
-    mc.content_refs_write = format_string_arg_occurences(
-        mc.content_write_format, "c"
-    )
-    mc.need_content_download = (
-        mc.content_refs_print + mc.content_refs_write) > 0
-
-    mc.need_output_multipass = (
-        mc.content_refs_print > 1
-        or mc.content_refs_write > 1
-    )
     if not mc.has_content_matching and not mc.has_document_matching:
         if not (mc.chain_id == 0 and mc.ctx.repl):
             raise ScrSetupError(
@@ -2211,7 +2240,7 @@ def gen_dl_temp_name(
 def selenium_download_from_local_file(
     cm: ContentMatch
 ) -> tuple[Optional[str], ContentFormat, str]:
-    path = cast(str, cm.cmatch)
+    path = cast(str, cm.clm.result)
     return path, ContentFormat.FILE, os.path.basename(path)
 
 
@@ -2219,7 +2248,7 @@ def selenium_download_external(
     cm: ContentMatch
 ) -> tuple[Optional[MinimalInputStream], ContentFormat, Optional[str]]:
     proxies = None
-    path = cast(str, cm.cmatch)
+    path = cast(str, cm.clm.result)
     if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         tbdriver = cast(TorBrowserDriver, cm.mc.ctx.selenium_driver)
         proxies = {
@@ -2261,7 +2290,7 @@ def selenium_download_internal(
     if doc_url.netloc != cast(urllib.parse.ParseResult, cm.url_parsed).netloc:
         log(
             cm.mc.ctx, Verbosity.ERROR,
-            f"{cm.cmatch}{get_ci_di_context(cm)}: "
+            f"{cm.clm.result}{get_ci_di_context(cm)}: "
             + f"failed to download: seldl=internal does not work across origins"
         )
         return None, ContentFormat.TEMP_FILE, None
@@ -2279,7 +2308,7 @@ def selenium_download_internal(
     """
     try:
         cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver).execute_script(
-            script_source, cm.cmatch, tmp_filename
+            script_source, cm.clm.result, tmp_filename
         )
     except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
@@ -2287,7 +2316,7 @@ def selenium_download_internal(
         else:
             log(
                 cm.mc.ctx, Verbosity.ERROR,
-                f"{cm.cmatch}{get_ci_di_context(cm)}: "
+                f"{cm.clm.result}{get_ci_di_context(cm)}: "
                 + f"selenium download failed: {str(ex)}"
             )
         return None, ContentFormat.TEMP_FILE, None
@@ -2348,7 +2377,7 @@ def selenium_download_fetch(
     try:
         doc_url = driver.current_url
         res = driver.execute_script(
-            script_source, cm.cmatch
+            script_source, cm.clm.result
         )
     except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
@@ -2359,12 +2388,12 @@ def selenium_download_fetch(
         err = res["error"]
     if err is not None:
         cors_warn = ""
-        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(cm.cmatch).netloc:
+        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(cm.clm.result).netloc:
             cors_warn = " (potential CORS issue)"
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
-            + f"selenium download of '{cm.cmatch}' failed{cors_warn}: {err}"
+            + f"selenium download of '{cm.clm.result}' failed{cors_warn}: {err}"
         )
         return None, ContentFormat.BYTES, None
     data = binascii.a2b_base64(res["ok"])
@@ -2413,7 +2442,7 @@ def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
     assert cm.url_parsed is not None
     if cm.url_parsed.scheme == "data":
         res = urllib.request.urlopen(
-            cast(str, cm.cmatch),
+            cast(str, cm.clm.result),
             timeout=cm.mc.ctx.request_timeout_seconds
         )
         try:
@@ -2676,29 +2705,28 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.ci += 1
-    cm.cfmatch = cm.mc.content.apply_format(cm, cm.content_regex_match)
-    cm.cmatch = cm.cfmatch
+    cm.mc.content.apply_format(cm, cm.clm)
 
-    if cm.label_regex_match is None:
-        cm.lfmatch = cast(str, cm.mc.label_default_format).format(
-            **content_match_build_format_args(cm)
-        )
+    if cm.llm is None:
+        if cm.mc.need_label:
+            cm.llm = LocatorMatch()
+            cm.llm.fres = cast(str, cm.mc.label_default_format).format(
+                **content_match_build_format_args(cm)
+            )
+            cm.llm.result = cm.llm.fres
     else:
-        cm.lfmatch = cm.mc.label.apply_format(
-            cm, cm.label_regex_match
-        )
-    cm.lmatch = cm.lfmatch
+        cm.mc.label.apply_format(cm, cm.llm)
 
     di_ci_context = get_ci_di_context(cm)
 
-    if cm.mc.has_label_matching:
-        label_context = f' (label "{cm.lmatch}")'
+    if cm.llm is not None:
+        label_context = f' (label "{cm.llm.result}")'
     else:
         label_context = ""
 
     while True:
         if not cm.mc.content_raw:
-            cm.url_parsed = urllib.parse.urlparse(cm.cmatch)
+            cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
             if cm.mc.ctx.selenium_variant == SeleniumVariant.DISABLED:
                 doc_url = cm.doc.path
             else:
@@ -2707,8 +2735,8 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return InteractiveResult.ERROR
                 doc_url = sel_url
 
-            cm.cmatch, cm.url_parsed = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.cmatch, cm.url_parsed
+            cm.clm.result, cm.url_parsed = normalize_link(
+                cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.clm.result, cm.url_parsed
             )
         content_type = "content match" if cm.mc.content_raw else "content link"
         if cm.mc.content.interactive:
@@ -2726,7 +2754,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                 prompt_msg = f'accept {content_type} from "{cm.doc.path}"{di_ci_context}{label_context}'
             else:
                 inspect_opt_str = ""
-                prompt_msg = f'"{cm.doc.path}"{di_ci_context}{label_context}: accept {content_type} "{cm.cmatch}"'
+                prompt_msg = f'"{cm.doc.path}"{di_ci_context}{label_context}: accept {content_type} "{cm.clm.result}"'
 
             res = prompt(
                 f'{prompt_msg} [Yes/no/edit{inspect_opt_str}/chainskip/docskip]? ',
@@ -2737,29 +2765,30 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                 break
             if res == InteractiveResult.INSPECT:
                 print(
-                    f'content for "{cm.doc.path}"{label_context}:\n' + cm.cmatch)
+                    f'content for "{cm.doc.path}"{label_context}:\n' + cm.clm.result)
                 continue
             if res is not InteractiveResult.EDIT:
                 return res
             if not cm.mc.content_raw:
-                cm.cmatch = input(f"enter new {content_type}:\n")
+                cm.clm.result = input(f"enter new {content_type}:\n")
             else:
                 print(
                     f'enter new {content_type} (terminate with a newline followed by the string "{cm.mc.content_escape_sequence}"):\n')
-                cm.cmatch = ""
+                cm.clm.result = ""
                 while True:
-                    cm.cmatch += input() + "\n"
-                    i = cm.cmatch.find(
+                    cm.clm.result += input() + "\n"
+                    i = cm.clm.result.find(
                         "\n" + cm.mc.content_escape_sequence)
                     if i != -1:
-                        cm.cmatch = cm.cmatch[:i]
+                        cm.clm.result = cm.clm.result[:i]
                         break
         break
     if cm.mc.label.interactive:
+        assert cm.llm is not None
         while True:
-            if not cm.mc.is_valid_label(cm.lmatch):
+            if not cm.mc.is_valid_label(cm.clm.result):
                 log(cm.mc.ctx, Verbosity.WARN,
-                    f'"{cm.doc.path}": labels cannot contain a slash ("{cm.lmatch}")')
+                    f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")')
             else:
                 prompt_options = [
                     (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
@@ -2772,10 +2801,10 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     prompt_options.append(
                         (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
                     inspect_opt_str = "/inspect"
-                    prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.lmatch}"'
+                    prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.llm.result}"'
                 else:
                     inspect_opt_str = ""
-                    prompt_msg = f'"{cm.doc.path}": {content_type} {cm.cmatch}{di_ci_context}: accept content label "{cm.lmatch}"'
+                    prompt_msg = f'"{cm.doc.path}": {content_type} {cm.clm.result}{di_ci_context}: accept content label "{cm.llm.result}"'
 
                 res = prompt(
                     f'{prompt_msg} [Yes/no/edit/{inspect_opt_str}/chainskip/docskip]? ',
@@ -2786,11 +2815,11 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     break
                 if res == InteractiveResult.INSPECT:
                     print(
-                        f'"{cm.doc.path}": {content_type} for "{cm.lmatch}":\n' + cm.cmatch)
+                        f'"{cm.doc.path}": {content_type} for "{cm.llm.result}":\n' + cm.clm.result)
                     continue
                 if res != InteractiveResult.EDIT:
                     return res
-            cm.lmatch = input("enter new label: ")
+            cm.llm.result = input("enter new label: ")
 
     job = DownloadJob(cm)
     if cm.mc.save_path_interactive:
@@ -2802,7 +2831,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     else:
         log(
             cm.mc.ctx, Verbosity.DEBUG,
-            f"choosing synchronous download for {job.cm.cmatch}"
+            f"choosing synchronous download for {job.cm.clm.result}"
         )
         job.run_job()
 
@@ -2831,72 +2860,56 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
 
 
 def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tuple[list[ContentMatch], int]:
-    content_matches = []
     text = cast(str, doc.text)
-    xmatches, xmatches_xml = mc.content.match_xpath(
-        mc.ctx, doc.xml, doc.path,
-        ([text], [doc.xml]), mc.has_content_xpaths
+    content_matches: list[ContentMatch] = []
+    content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
+        text, doc.xml, doc.path, mc.has_content_xpaths
     )
-    label_regex_matches = []
+    label_lms: list[LocatorMatch] = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        lxmatches, _xml = mc.label.match_xpath(
-            mc.ctx, doc.xml, doc.path, ([text], []))
-        for lxmatch in lxmatches:
-            label_regex_matches.extend(mc.label.match_regex(
-                text, [RegexMatch(lxmatch, lxmatch)]
-            ))
+        label_lms_xp = mc.label.match_xpath(text, doc.xml, doc.path, False)
+        for lm in label_lms_xp:
+            label_lms.extend(mc.label.match_regex(lm))
     match_index = 0
     labels_none_for_n = 0
-    for xmatch in xmatches:
-        content_regex_matches = mc.content.match_regex(
-            xmatch, [RegexMatch(xmatch, xmatch)]
-        )
+    for clm_xp in content_lms_xp:
         if mc.labels_inside_content and mc.label.xpath:
-            xmatch_xml = (
-                cast(list[lxml.html.HtmlElement], xmatches_xml)[match_index]
-                if mc.has_content_xpaths
-                else None
+            label_lms = []
+            label_lms_xp = mc.label.match_xpath(
+                clm_xp.result, clm_xp.xmatch_xml, doc.path, False
             )
-            label_regex_matches = []
-            lxmatches, _xml = mc.label.match_xpath(
-                mc.ctx, xmatch_xml, doc.path, ([text], []))
-            for lxmatch in lxmatches:
-                label_regex_matches.extend(mc.label.match_regex(
-                    text, [RegexMatch(lxmatch, lxmatch)])
-                )
-            if len(label_regex_matches) == 0:
-                if not mc.label_allow_missing:
-                    labels_none_for_n += len(content_regex_matches)
-                    continue
-                lrm = None
-            else:
-                lrm = label_regex_matches[0]
+            # in case we have label xpath matching, the label regex matching
+            # will be done on the LABEL xpath result, not the content one
+            # even for lic=y
+            for llm_xp in label_lms_xp:
+                label_lms.extend(mc.label.match_regex(llm_xp))
 
-        for crm in content_regex_matches:
+        content_lms_r = mc.content.match_regex(clm_xp)
+        for clm in content_lms_r:
+            llm: Optional[LocatorMatch] = None
             if mc.labels_inside_content:
                 if not mc.label.xpath:
-                    label_regex_matches = mc.label.match_regex(
-                        crm.rmatch, [RegexMatch(crm.rmatch, crm.rmatch)]
-                    )
-                    if len(label_regex_matches) == 0:
+                    llm = LocatorMatch()
+                    llm.result = clm.result
+                    label_lms = mc.label.match_regex(llm, False)
+                    if len(label_lms) == 0:
                         if not mc.label_allow_missing:
                             labels_none_for_n += 1
                             continue
-                        lrm = None
                     else:
-                        lrm = label_regex_matches[0]
+                        llm = label_lms[0]
             else:
-                if not mc.label.multimatch and len(label_regex_matches) > 0:
-                    lrm = label_regex_matches[0]
-                elif match_index < len(label_regex_matches):
-                    lrm = label_regex_matches[match_index]
+                if not mc.label.multimatch and len(label_lms) > 0:
+                    llm = label_lms[0]
+                elif match_index < len(label_lms):
+                    llm = label_lms[match_index]
                 elif not mc.label_allow_missing:
                     labels_none_for_n += 1
                     continue
                 else:
-                    lrm = None
+                    llm = None
 
-            content_matches.append(ContentMatch(lrm, crm, mc, doc))
+            content_matches.append(ContentMatch(clm, llm, mc, doc))
         match_index += 1
     return content_matches, labels_none_for_n
 
@@ -2904,28 +2917,26 @@ def gen_content_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> tu
 def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> list[Document]:
     document_matches = []
     base_dir = os.path.dirname(doc.path)
-    xmatches, _xml = mc.document.match_xpath(
-        mc.ctx, doc.xml, doc.path, ([cast(str, doc.text)], [])
+    document_lms_xp = mc.document.match_xpath(
+        cast(str, doc.text), doc.xml, doc.path, False
     )
-    for xmatch in xmatches:
-        rmatches = mc.document.match_regex(
-            xmatch, [RegexMatch(xmatch, xmatch)]
-        )
-        for rm in rmatches:
+    for dlm_xp in document_lms_xp:
+        document_lms = mc.document.match_regex(dlm_xp)
+        for dlm in document_lms:
             ndoc = Document(
                 doc.document_type.derived_type(),
                 "",
                 mc,
                 mc.document_output_chains,
                 None,
-                rm
+                dlm
             )
             ndoc.dfmatch = mc.document.apply_format(
-                ContentMatch(None, None, mc, ndoc), rm
+                ContentMatch(LocatorMatch(), None, mc, ndoc), dlm
             )
             ndoc.path, ndoc.path_parsed = normalize_link(
-                mc.ctx, mc, doc, last_doc_path, ndoc.dfmatch,
-                urllib.parse.urlparse(ndoc.dfmatch)
+                mc.ctx, mc, doc, last_doc_path, dlm.result,
+                urllib.parse.urlparse(dlm.result)
             )
             document_matches.append(ndoc)
 
@@ -3089,7 +3100,7 @@ def accept_for_match_chain(
         mc.ci = mc.cimin
     if not content_skip_doc:
         for i, cm in enumerate(mc.content_matches):
-            if not mc.has_label_matching or cm.label_regex_match is not None:
+            if not mc.has_label_matching or cm.llm is not None:
                 if mc.ci > mc.cimax:
                     break
                 res = handle_content_match(cm)

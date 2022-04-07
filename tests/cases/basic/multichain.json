@@ -5,10 +5,10 @@
         "doc0=1",
         "cx0=//@id",
         "cr1=a",
-        "cpf1={cr}",
+        "cpf1={cr}\n",
         "file2=./tests/res/b.txt",
         "cr2=b",
-        "cpf2={c}"
+        "cpf2={c}\n"
     ],
     "stdout": "a.txt\na\nb\n"
 }

@@ -26,7 +26,7 @@ class TestOptions:
     tags_need: list[str]
     tags_avoid: list[str]
     parallelism: int = cpu_count()
-    scr_main_file_path: str
+    scr_main_dir: str
     script_dir: str
     script_dir_abs: str
     script_dir_name: str
@@ -43,7 +43,7 @@ def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
 
 
 def get_cmd_string(tc: dict[str, Any]) -> str:
-    cmd = tc.get("command", "scr")
+    cmd = tc.get("command", "scr.py")
     args: list[str] = tc.get("args", [])
     assert type(args) is list
     for arg in args:
@@ -238,20 +238,14 @@ def main() -> int:
     to.script_dir = os.path.relpath(to.script_dir_abs)
     to.script_dir_name = os.path.basename(to.script_dir)
 
-    to.scr_main_file_path = os.path.abspath(
-        os.path.realpath(os.path.join(to.script_dir, "../scr.py"))
+    to.scr_main_dir = os.path.abspath(
+        os.path.realpath(os.path.join(to.script_dir, ".."))
     )
 
     to.test_output_dir = tempfile.mkdtemp(prefix="scr_test_")
     try:
-        # prepend a scr command symlink to the PATH so the tests can use it
-        os.symlink(
-            to.scr_main_file_path,
-            os.path.join(to.test_output_dir, "scr")
-        )
-        os.environ["PATH"] = (
-            to.test_output_dir + ":" + os.environ["PATH"]
-        )
+        # prepend the scr folder to the PATH so the tests can use it
+        os.environ["PATH"] = (to.scr_main_dir + ":" + os.environ["PATH"])
         i = 1
         while i < len(sys.argv):
             arg = sys.argv[i]
