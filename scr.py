@@ -6,7 +6,6 @@ import selenium.webdriver
 from abc import ABC, abstractmethod
 import multiprocessing
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
-import urllib3.exceptions  # for selenium MaxRetryError
 import mimetypes
 import shutil
 from io import BytesIO, SEEK_SET
@@ -40,6 +39,10 @@ from selenium.webdriver.chrome.service import Service as SeleniumChromeService
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
+# this is of course not really a selenium exception,
+# but selenium throws it arbitrarily, just like SeleniumWebDriverException,
+# and that is the only way in which we use it
+from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
 import selenium.webdriver.firefox.webdriver
 from collections import deque, OrderedDict
 from enum import Enum, IntEnum
@@ -694,7 +697,7 @@ class Locator(ConfigDataClass):
                 results = cast(SeleniumWebDriver, mc.ctx.selenium_driver).execute_script(
                     self.js_script, args_dict.values()
                 )
-            except (SeleniumWebDriverException, SeleniumTimeoutException) as ex:
+            except (SeleniumWebDriverException, SeleniumMaxRetryError) as ex:
                 if selenium_has_died(mc.ctx):
                     raise ScrMatchError(
                         "the selenium instance was closed unexpectedly")
@@ -2296,7 +2299,7 @@ def selenium_get_url(ctx: ScrContext) -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
         return ctx.selenium_driver.current_url
-    except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
+    except (SeleniumWebDriverException, SeleniumMaxRetryError) as e:
         report_selenium_died(ctx)
         return None
 
@@ -2306,7 +2309,7 @@ def selenium_has_died(ctx: ScrContext) -> bool:
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as e:
+    except (SeleniumWebDriverException, SeleniumMaxRetryError) as e:
         return True
 
 
@@ -3714,7 +3717,7 @@ def resolve_repl_defaults(
         doc_url = None
         try:
             doc_url = ctx_new.selenium_driver.current_url
-        except (SeleniumWebDriverException, urllib3.exceptions.MaxRetryError) as ex:
+        except (SeleniumWebDriverException, SeleniumMaxRetryError) as ex:
             # selenium died, abort
             if selenium_has_died(ctx_new):
                 report_selenium_died(ctx_new)
