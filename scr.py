@@ -22,6 +22,7 @@ import requests
 import sys
 import xml.sax.saxutils
 import select
+import textwrap
 import re
 import concurrent.futures
 import os
@@ -37,6 +38,7 @@ from selenium.webdriver.remote.webelement import WebElement as SeleniumWebElemen
 from selenium.webdriver.firefox.service import Service as SeleniumFirefoxService
 from selenium.webdriver.chrome.service import Service as SeleniumChromeService
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
+import selenium.common.exceptions
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
 # this is of course not really a selenium exception,
@@ -159,9 +161,10 @@ class SeleniumDownloadStrategy(Enum):
 
 class SeleniumStrategy(Enum):
     DISABLED = 0
-    FIRST = 1
-    INTERACTIVE = 2
-    DEDUP = 3
+    PLAIN = 1
+    ANYMATCH = 2
+    INTERACTIVE = 3
+    DEDUP = 4
 
 
 class Verbosity(IntEnum):
@@ -218,7 +221,8 @@ selenium_download_strategies_dict: dict[str, SeleniumDownloadStrategy] = {
 }
 
 selenium_strats_dict: dict[str, SeleniumStrategy] = {
-    "first": SeleniumStrategy.FIRST,
+    "plain": SeleniumStrategy.PLAIN,
+    "anymatch": SeleniumStrategy.ANYMATCH,
     "interactive": SeleniumStrategy.INTERACTIVE,
     "dedup": SeleniumStrategy.DEDUP,
 }
@@ -695,14 +699,22 @@ class Locator(ConfigDataClass):
             apply_locator_match_format_args(self.name, lm, args_dict)
             try:
                 results = cast(SeleniumWebDriver, mc.ctx.selenium_driver).execute_script(
-                    self.js_script, args_dict.values()
+                    self.js_script, list(args_dict.values())
                 )
+            except selenium.common.exceptions.JavascriptException as ex:
+                arg = cast(str, self.get_configuring_argument(['js_script']))
+                name = arg[0: arg.find("=")]
+                log(
+                    mc.ctx, Verbosity.WARN,
+                    f"{name}: js exception on {truncate(doc.path)}:\n{textwrap.indent(str(ex), '    ')}"
+                )
+                continue
             except (SeleniumWebDriverException, SeleniumMaxRetryError) as ex:
                 if selenium_has_died(mc.ctx):
                     raise ScrMatchError(
                         "the selenium instance was closed unexpectedly")
                 continue
-            if type(results) is None:
+            if results is None:
                 continue
             if type(results) is not list:
                 results = [str(results)]
@@ -769,7 +781,7 @@ class MatchChain(ConfigDataClass):
     prefer_parent_document_scheme: bool = True
     forced_document_scheme: Optional[str] = None
 
-    selenium_strategy: SeleniumStrategy = SeleniumStrategy.FIRST
+    selenium_strategy: SeleniumStrategy = SeleniumStrategy.PLAIN
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
 
     document_output_chains: list['MatchChain']
@@ -1709,7 +1721,7 @@ def help(err: bool = False) -> None:
         rfile=<path>        fetch a document from a file, derived documents matches are urls
 
     Other:
-        selstrat=<strategy> matching strategy for selenium (default: first, values: first, interactive, deduplicate)
+        selstrat=<strategy> matching strategy for selenium (default: plain, values: anymatch, plain, interactive, deduplicate)
         seldl=<dl strategy> download strategy for selenium (default: external, values: external, internal, fetch)
         owf=<bool>          allow to overwrite existing files, defaults to true
 
@@ -3138,9 +3150,9 @@ def handle_interactive_chains(
 def match_chain_was_satisfied(mc: MatchChain):
     satisfied = False
     interactive = False
-    if not mc.ctx.selenium_variant.enabled():
+    if not mc.ctx.selenium_variant.enabled() or mc.selenium_strategy is SeleniumStrategy.PLAIN:
         satisfied = True
-    elif mc.selenium_strategy == SeleniumStrategy.FIRST:
+    elif mc.selenium_strategy == SeleniumStrategy.ANYMATCH:
         if mc.need_content_matches():
             if mc.content_matches:
                 satisfied = True
