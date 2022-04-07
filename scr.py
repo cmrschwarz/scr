@@ -61,7 +61,7 @@ V = TypeVar("V")
 # because for python, sys.argv[0] does not reflect what the user typed anyways,
 # we just use this fixed value for --help etc.
 SCRIPT_NAME = "scr"
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 
