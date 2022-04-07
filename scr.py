@@ -26,7 +26,6 @@ import select
 import re
 import concurrent.futures
 import os
-import scr
 from string import Formatter
 import readline
 import urllib.parse
@@ -1108,7 +1107,10 @@ class DownloadJob:
             )
             return False
 
-    def handle_safe_path(self) -> InteractiveResult:
+    def handle_save_path(self) -> InteractiveResult:
+        if self.save_path is not None:
+            # this was already done during for interactive filename determination
+            return InteractiveResult.ACCEPT
         cm = self.cm
         if not cm.mc.content_save_format:
             return InteractiveResult.ACCEPT
@@ -1168,7 +1170,8 @@ class DownloadJob:
 
     def fetch_content(self) -> bool:
         if self.content_format is not None:
-            return self.gen_fallback_filename()
+            # this was already done during filename determination
+            return True
         path = cast(str, self.cm.cmatch)
         if self.cm.mc.content_raw:
             self.content = self.cm.cmatch
@@ -1278,9 +1281,11 @@ class DownloadJob:
         ))
         return True
 
-    def download_content(self) -> bool:
+    def run_job(self) -> bool:
         success = False
         try:
+            if self.handle_save_path() != InteractiveResult.ACCEPT:
+                return False
             if not self.fetch_content():
                 return False
 
@@ -1377,7 +1382,7 @@ class DownloadManager:
             f"enqueuing download for {dj.cm.cmatch}"
             )
         dj.setup_print_stream(self)
-        self.pending_jobs.append(self.executor.submit(dj.download_content))
+        self.pending_jobs.append(self.executor.submit(dj.run_job))
 
     def wait_until_jobs_done(self):
         results = concurrent.futures.wait(self.pending_jobs)
@@ -2059,7 +2064,7 @@ def load_cookie_jar(ctx: ScrContext) -> None:
 
 
 def get_random_user_agent():
-    # since this initialization is very slow, we cache it 
+    # since this initialization is very slow, we cache it
     # this is mainly useful for the repl where the uar value can change
     if not hasattr(get_random_user_agent, "instance"):
         get_random_user_agent.instance = UserAgent()
@@ -2781,16 +2786,18 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
             cm.lmatch = input("enter new label: ")
 
     job = DownloadJob(cm)
-    res = job.handle_safe_path()
-    if res != InteractiveResult.ACCEPT:
-        return res
+    if cm.mc.save_path_interactive:
+        res = job.handle_save_path()
+        if res != InteractiveResult.ACCEPT:
+            return res
     if cm.mc.ctx.dl_manager is not None:
         cm.mc.ctx.dl_manager.submit(job)
     else:
-        log(cm.mc.ctx, Verbosity.DEBUG,
+        log(
+            cm.mc.ctx, Verbosity.DEBUG,
             f"choosing synchronous download for {job.cm.cmatch}"
-            )
-        job.download_content()
+        )
+        job.run_job()
 
     return InteractiveResult.ACCEPT
 
