@@ -1,6 +1,5 @@
 /geckodriver
 /geckodriver.log
-/dl*.txt
 /cookies.txt
 /.vscode
 /.mypy_cache
