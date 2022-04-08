@@ -34,6 +34,7 @@ import readline
 import urllib.parse
 from http.cookiejar import MozillaCookieJar
 from random_user_agent.user_agent import UserAgent
+import pyparsing.exceptions
 from tbselenium.tbdriver import TorBrowserDriver
 import selenium
 import selenium.webdriver.common.by
@@ -1202,7 +1203,8 @@ class DownloadStatusReport:
     name: str
     expected_size: Optional[int] = None
     downloaded_size: int = 0
-    start_time: datetime.datetime
+    download_begin_time: datetime.datetime
+    download_end_time: datetime.datetime = None
     updates: deque[tuple[datetime.datetime, int]]
     download_finished: bool = False
     download_manager: 'DownloadManager'
@@ -1250,9 +1252,10 @@ class DownloadStatusReport:
     def enqueue(self) -> None:
         with self.download_manager.status_report_lock:
             self.download_manager.download_status_reports.append(self)
-        self.start_time = datetime.datetime.now()
+        self.download_begin_time = datetime.datetime.now()
 
     def finished(self) -> None:
+        self.download_end_time = datetime.datetime.now()
         with self.download_manager.status_report_lock:
             self.download_finished = True
 
@@ -1762,28 +1765,56 @@ class DownloadJob:
 class StatusReportLine:
     name: str
     expected_size: Optional[int]
+
     downloaded_size: int
     speed_calculatable: bool
-    speed_frame_start: datetime.datetime
-    speed_frame_end: datetime.datetime
-    speed_frame_size_start: int
+    download_begin: datetime.datetime
+    download_end: datetime.datetime
+    speed_frame_time_begin: datetime.datetime
+    speed_frame_time_end: datetime.datetime
+    speed_frame_size_begin: int
     speed_frame_size_end: int
     star_pos: int = 1
     star_dir: int = 1
     last_line_length: int = 0
+    finished: bool = False
 
 
 BYTE_SIZE_STRING_LEN_MAX = 10
 
 
-def get_byte_size_string(size: int) -> str:
+def get_byte_size_string(size: Union[int, float]) -> str:
     if size < 2**10:
-        return f"{size:03} B"
+        if type(size) is int:
+            return f"{size:03} B"
+        return f"{size:.2f} B"
     units = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
     unit = int(math.log(size, 1024))
     if unit >= len(units):
         return "??? B"  # good look with your download
     return f"{float(size)/2**(10 * unit):.2f} {units[unit - 1]}iB"
+
+
+TIMESPAN_STRING_LEN_MAX = 10
+
+
+def get_timespan_string(ts: float) -> str:
+    if ts < 60:
+        return f"{ts:.1f} s"
+    if ts < 3600:
+        return f"{int(ts / 60)} min, {int(ts % 60):.1f} s"
+    if ts < 86400:
+        return f"{int(ts / 3600)} h, {int(ts / 60):.2f} min"
+    if ts < 86400 * 1000:
+        days = int(ts / 86400)
+        return f"{days} day{'s' if days > 1 else ''}, {int(ts / 3600):.2f} h"
+
+    # once again, good luck
+    return "??? days"
+
+
+def lpad(string: str, tgt_len: int) -> str:
+    return " " * max(0, tgt_len - len(string)) + string
 
 
 class DownloadManager:
@@ -1838,6 +1869,7 @@ class DownloadManager:
                 # otherwise print one more report so everything is displayed as done
                 if not committed_report_line_count:
                     break
+            now = datetime.datetime.now()
             with self.status_report_lock:
                 # when we have more reports than report lines,
                 # we remove the oldest finished report
@@ -1860,22 +1892,24 @@ class DownloadManager:
                     rl.name = dsr.name
                     rl.expected_size = dsr.expected_size
                     rl.downloaded_size = dsr.downloaded_size
+                    rl.download_begin = dsr.download_begin_time
+                    rl.download_end = dsr.download_end_time
+                    rl.finished = dsr.download_finished
                     if not len(dsr.updates):
                         rl.speed_calculatable = False
                     elif len(dsr.updates) == 1:
                         rl.speed_calculatable = True
-                        rl.speed_frame_start = dsr.start_time
-                        rl.speed_frame_size_start = 0
-                        rl.speed_frame_end = dsr.updates[0][0]
+                        rl.speed_frame_time_begin = dsr.download_begin_time
+                        rl.speed_frame_size_begin = 0
+                        rl.speed_frame_time_end = dsr.updates[0][0]
                         rl.speed_frame_size_end = dsr.updates[0][1]
                     else:
                         rl.speed_calculatable = True
-                        rl.speed_frame_start = dsr.updates[0][0]
-                        rl.speed_frame_size_start = dsr.updates[0][1]
-                        rl.speed_frame_end = dsr.updates[-1][0]
+                        rl.speed_frame_time_begin = dsr.updates[0][0]
+                        rl.speed_frame_size_begin = dsr.updates[0][1]
+                        rl.speed_frame_time_end = dsr.updates[-1][0]
                         rl.speed_frame_size_end = dsr.updates[-1][1]
-                    if dsr.download_finished:
-                        rl.expected_size = rl.downloaded_size
+
             if len(report_lines) == 0:
                 continue
             name_length_max = max(map(lambda rl: len(rl.name), report_lines))
@@ -1884,7 +1918,9 @@ class DownloadManager:
                 report += f"\x1B[{committed_report_line_count}A"
             for rl in report_lines:
                 line = rl.name
-                line += " " * (3 + name_length_max - len(line))
+                line += " " * (2 + name_length_max - len(line))
+                if rl.finished:
+                    rl.expected_size = rl.downloaded_size
                 if rl.expected_size and rl.expected_size >= rl.downloaded_size:
                     frac = float(rl.downloaded_size) / rl.expected_size
                     filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
@@ -1901,14 +1937,59 @@ class DownloadManager:
                         rl.star_dir = 1
                     rl.star_pos += rl.star_dir
                 line += " "
-                bss = get_byte_size_string(rl.downloaded_size)
-                bss += " / "
+                line += lpad(
+                    get_byte_size_string(rl.downloaded_size),
+                    BYTE_SIZE_STRING_LEN_MAX
+                )
+                line += " / "
                 if rl.expected_size:
-                    bss += get_byte_size_string(rl.expected_size)
+                    expected = get_byte_size_string(rl.expected_size)
                 else:
-                    bss += "??? B"
-                line += " " * (2 * BYTE_SIZE_STRING_LEN_MAX + 2 - len(bss))
-                line += bss
+                    expected = "??? B"
+                line += lpad(expected, BYTE_SIZE_STRING_LEN_MAX)
+
+                if rl.finished:
+                    rl.speed_frame_size_begin = 0
+                    rl.speed_frame_time_begin = rl.download_begin
+                    rl.speed_frame_size_end = rl.downloaded_size
+                    rl.speed_frame_time_end = rl.download_end
+                    rl.speed_calculatable = True
+                else:
+                    rl.download_end = now
+                if rl.speed_calculatable:
+                    duration = (
+                        (rl.speed_frame_time_end -
+                         rl.speed_frame_time_begin).total_seconds()
+                    )
+                    handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
+                    if handled_size == 0:
+                        speed_bytes_s = 0.0
+                        speed = get_byte_size_string(0)
+                        eta = None
+                    else:
+                        speed_bytes_s = float(handled_size) / duration
+                        if rl.expected_size and rl.expected_size > rl.downloaded_size:
+                            eta = get_timespan_string(
+                                (rl.expected_size - rl.downloaded_size) /
+                                speed_bytes_s
+                            )
+                        else:
+                            eta = None
+                    speed = get_byte_size_string(speed_bytes_s)
+                else:
+                    rl.speed_frame_time_end = now
+                    eta = None
+                    speed = "??? B"
+                line += "  " + lpad(speed, BYTE_SIZE_STRING_LEN_MAX) + "/s"
+               
+                line += "  " + get_timespan_string(
+                    (rl.download_end - rl.download_begin).total_seconds()
+                ) + " elapsed"
+
+                if eta is not None:
+                    line += ", " + eta + " remaining"
+
+
                 if len(line) < rl.last_line_length:
                     lll = len(line)
                     # fill with spaces to clear previous line
@@ -2182,7 +2263,7 @@ def help(err: bool = False) -> None:
         {{cesc}}              escape sequence for separating content, can be overwritten using cesc
         {{chain}}             id of the match chain that generated this content
 
-        {{fn}}                filename from the url of a cm with cl 
+        {{fn}}                filename from the url of a cm with cl
         {{fb}}                basename component of {{fn}} (extension stripped away)
         {{fe}}                extension component of {{fn}}, including the dot (empty string if there is no extension)
 
@@ -2708,7 +2789,9 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
         setup_selenium(ctx)
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
-        ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads, True)
+        ctx.dl_manager = DownloadManager(
+            ctx, ctx.max_download_threads, sys.stdout.isatty()
+        )
     if ctx.dl_manager is not None:
         ctx.dl_manager.pom.reset()
 
@@ -3079,11 +3162,11 @@ def normalize_link(
 def get_ci_di_context(cm: ContentMatch) -> str:
     if cm.mc.has_document_matching:
         if cm.mc.content.multimatch:
-            di_ci_context = f" (di={cm.di}, ci={cm.ci})"
+            di_ci_context = f" (di = {cm.di}, ci = {cm.ci})"
         else:
-            di_ci_context = f" (di={cm.di})"
+            di_ci_context = f" (di = {cm.di})"
     elif cm.mc.content.multimatch:
-        di_ci_context = f" (ci={cm.ci})"
+        di_ci_context = f" (ci = {cm.ci})"
     else:
         di_ci_context = f""
     return di_ci_context
@@ -3269,7 +3352,7 @@ def gen_content_matches(
             )
             # in case we have label xpath matching, the label regex matching
             # will be done on the LABEL xpath result, not the content one
-            # even for lic=y
+            # even for lic = y
             label_lms = mc.label.apply_regex_matches(label_lms)
             label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
 
