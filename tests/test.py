@@ -118,7 +118,7 @@ def run_test(name: str, to: TestOptions) -> TestResult:
         return TestResult.SKIPPED
 
     ec = tc.get("ec", 0)
-    command = tc.get("command", "scr")
+    command = tc.get("command", "scr.py")
     args = tc.get("args", [])
     stdin = join_lines(tc.get("stdin", ""))
     expected_stdout = join_lines(tc.get("stdout", ""))
