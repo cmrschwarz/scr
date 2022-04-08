@@ -50,6 +50,7 @@ import selenium.webdriver.firefox.webdriver
 from collections import deque, OrderedDict
 from enum import Enum, IntEnum
 import time
+import datetime
 import tempfile
 import itertools
 import warnings
@@ -69,6 +70,7 @@ SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
 
 DEFAULT_TIMEOUT_SECONDS = 30
+DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH = 50
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
@@ -1189,9 +1191,50 @@ class PrintOutputStream:
         self.pom.declare_done(self.id)
 
 
+class DownloadStatusReport:
+    name: str
+    file_size: Optional[int] = None
+    downloaded_size: int = 0
+    start_time: datetime.time
+    download_manager: 'DownloadManager'
+    updates: deque[tuple[datetime.time, int]]
+
+    def __init__(self, download_manager: 'DownloadManager') -> None:
+        self.download_manager = download_manager
+
+    def gen_display_name(
+        self,
+        url: urllib.parse.ParseResult,
+        filename: Optional[str],
+        save_path: Optional[str]
+    ) -> None:
+        if save_path:
+            if len(save_path) < DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH:
+                self.name = save_path
+                return
+            self.name = os.path.basename(save_path)
+        elif filename:
+            self.name = filename
+        else:
+            url_str = url.geturl()
+            if len(url_str) < DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH:
+                self.name = url_str
+                return
+            self.name = (
+                "~~ "
+                + url._replace(fragment="", scheme="", query="").geturl()
+            )
+        self.name = truncate(
+            self.name, DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH
+        )
+
+    def submit_update(self, filesize: int) -> None:
+        # todo
+        pass
+
+
 class DownloadJob:
-    expected_size: int = 0
-    fetched_size: int = 0
+    expected_size: Optional[int] = None
     save_file: Optional[BinaryIO] = None
     temp_file: Optional[BinaryIO] = None
     temp_file_path: Optional[str] = None
@@ -1201,6 +1244,7 @@ class DownloadJob:
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: Optional[ContentFormat] = None
     filename: Optional[str] = None
+    status_report: Optional[DownloadStatusReport] = None
 
     cm: ContentMatch
     save_path: Optional[str] = None
@@ -1220,6 +1264,9 @@ class DownloadJob:
     def setup_print_stream(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(pom)
+
+    def request_status_report(self, download_manager: 'DownloadManager') -> None:
+        self.status_report = DownloadStatusReport(download_manager)
 
     def gen_fallback_filename(self) -> bool:
         if not self.cm.mc.need_filename or self.filename is not None:
@@ -1302,6 +1349,180 @@ class DownloadJob:
         self.save_path = save_path
         return InteractiveResult.ACCEPT
 
+    def selenium_download_from_local_file(self) -> bool:
+        self.content = self.cm.clm.result
+        self.content_format = ContentFormat.FILE
+        self.filename = os.path.basename(self.cm.clm.result)
+        return True
+
+    def selenium_download_external(self) -> bool:
+        proxies = None
+        if self.cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
+            tbdriver = cast(TorBrowserDriver, self.cm.mc.ctx.selenium_driver)
+            proxies = {
+                "http": f"socks5h://localhost:{tbdriver.socks_port}",
+                "https": f"socks5h://localhost:{tbdriver.socks_port}",
+                "data": None
+            }
+        try:
+            try:
+                req = request_raw(
+                    self.cm.mc.ctx, self.cm.clm.result, cast(
+                        urllib.parse.ParseResult, self.cm.url_parsed),
+                    load_selenium_cookies(self.cm.mc.ctx),
+                    proxies=proxies, stream=True
+                )
+                self.content = ResponseStreamWrapper(req)
+                self.content_format = ContentFormat.STREAM
+                self.filename = request_try_get_filename(req)
+                return True
+            except requests.exceptions.RequestException as ex:
+                raise request_exception_to_scr_fetch_error(ex)
+        except ScrFetchError as ex:
+            log(
+                self.cm.mc.ctx, Verbosity.ERROR,
+                f"{truncate(self.cm.doc.path)}{get_ci_di_context(self.cm)}: "
+                + f"failed to download '{truncate(self.cm.clm.result)}': {str(ex)}"
+            )
+            return False
+
+    def selenium_download_internal(self) -> bool:
+        doc_url_str = selenium_get_url(self.cm.mc.ctx)
+        if doc_url_str is None:
+            return False
+        doc_url = urllib.parse.urlparse(doc_url_str)
+
+        if doc_url.netloc != cast(urllib.parse.ParseResult, self.cm.url_parsed).netloc:
+            log(
+                self.cm.mc.ctx, Verbosity.ERROR,
+                f"{self.cm.clm.result}{get_ci_di_context(self.cm)}: "
+                + f"failed to download: seldl=internal does not work across origins"
+            )
+            return False
+
+        tmp_path, tmp_filename = gen_dl_temp_name(self.cm.mc.ctx, None)
+        script_source = """
+            const url = arguments[0];
+            const filename = arguments[1];
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        """
+        try:
+            selenium_exec_script(self.cm.mc.ctx, script_source,
+                                 self.cm.clm.result, tmp_filename)
+        except SeleniumWebDriverException as ex:
+            if selenium_has_died(self.cm.mc.ctx):
+                report_selenium_died(self.cm.mc.ctx)
+            else:
+                log(
+                    self.cm.mc.ctx, Verbosity.ERROR,
+                    f"{self.cm.clm.result}{get_ci_di_context(self.cm)}: "
+                    + f"selenium download failed: {str(ex)}"
+                )
+            return False
+        i = 0
+        while True:
+            if os.path.exists(tmp_path):
+                time.sleep(0.1)
+                break
+            if i < 10:
+                time.sleep(0.01)
+            else:
+                time.sleep(0.1)
+                if i > 15:
+                    i = 10
+                    if selenium_has_died(self.cm.mc.ctx):
+                        return False
+
+            i += 1
+        self.content = tmp_path
+        self.content_format = ContentFormat.TEMP_FILE
+        # TODO: maybe support filenames here ?
+        return True
+
+    def selenium_download_fetch(self) -> bool:
+        script_source = """
+            const url = arguments[0];
+            var content_disposition = null;
+            return (async () => {
+                return await fetch(url, {
+                    method: 'GET',
+                })
+                .then(res => {
+                    content_disposition = res.headers.get('Content-Disposition'); 
+                    return res.blob();
+                })
+                .then((blob, cd) => new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(blob);
+                    reader.onload = () => (resolve(reader.result.substr(reader.result.indexOf(',') + 1)), cd);
+                    reader.onerror = error => reject(error);
+                }))
+                .then(result => {
+                    return {
+                        "ok": result,
+                        "content_disposition": content_disposition,
+                    };
+                })
+                .catch(ex => {
+                    return {
+                        "error": ex.message
+                    };
+                });
+            })();
+        """
+        err = None
+        driver = cast(SeleniumWebDriver, self.cm.mc.ctx.selenium_driver)
+        try:
+            doc_url = driver.current_url
+            res = selenium_exec_script(
+                self.cm.mc.ctx, script_source, self.cm.clm.result)
+        except SeleniumWebDriverException as ex:
+            if selenium_has_died(self.cm.mc.ctx):
+                report_selenium_died(self.cm.mc.ctx)
+                return False
+            err = str(ex)
+        if "error" in res:
+            err = res["error"]
+        if err is not None:
+            cors_warn = ""
+            if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(self.cm.clm.result).netloc:
+                cors_warn = " (potential CORS issue)"
+            log(
+                self.cm.mc.ctx, Verbosity.ERROR,
+                f"{truncate(self.cm.doc.path)}{get_ci_di_context(self.cm)}: "
+                + f"selenium download of '{self.cm.clm.result}' failed{cors_warn}: {err}"
+            )
+            return False
+        self.content = binascii.a2b_base64(res["ok"])
+        self.expected_size = len(self.content)
+        self.filename = try_get_filename_from_content_disposition(
+            res.get("content_disposition", "")
+        )
+        self.content_format = ContentFormat.BYTES
+        return True
+
+    def selenium_download(self) -> bool:
+        if (
+            self.cm.doc.document_type == DocumentType.FILE
+            and cast(urllib.parse.ParseResult, self.cm.url_parsed).scheme in ["", "file"]
+        ):
+            return self.selenium_download_from_local_file()
+
+        if self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
+            return self.selenium_download_external()
+
+        if self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
+            return self.selenium_download_internal()
+
+        assert self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
+
+        return self.selenium_download_fetch()
+
     def fetch_content(self) -> bool:
         if self.content_format is not None:
             # this was already done during filename determination
@@ -1314,19 +1535,21 @@ class DownloadJob:
                 self.content_format = ContentFormat.UNNEEDED
             else:
                 if self.cm.mc.ctx.selenium_variant.enabled():
-                    self.content, self.content_format, self.filename = selenium_download(
-                        self.cm
-                    )
-                    if self.content is None:
+                    if not self.selenium_download():
                         return False
                 else:
                     data = try_read_data_url(self.cm)
                     if data is not None:
                         self.content = data
                         self.content_format = ContentFormat.BYTES
+                        self.expected_size = len(data)
                     elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
                         self.content = self.cm.clm.result
                         self.content_format = ContentFormat.FILE
+                        try:
+                            self.expected_size = os.path.getsize(self.content)
+                        except IOError:
+                            pass
                     else:
                         try:
                             res = request_raw(
@@ -1337,6 +1560,9 @@ class DownloadJob:
                             )
                             self.content = ResponseStreamWrapper(res)
                             self.filename = request_try_get_filename(res)
+                            self.expected_size = request_try_get_filesize(
+                                res
+                            )
                             self.content_format = ContentFormat.STREAM
                         except requests.exceptions.RequestException as ex:
                             fe = request_exception_to_scr_fetch_error(ex)
@@ -1502,16 +1728,16 @@ class DownloadManager:
     pending_jobs: list[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
+    status_report_lock: threading.Lock
+    download_status_reports: list[DownloadStatusReport]
 
     def __init__(self, ctx: ScrContext, max_threads: int) -> None:
         self.ctx = ctx
-        self.max_threads = max_threads
         self.pending_jobs = []
-        self.idle_threads: int = 0
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_threads)
-        self.pending_job_count = threading.Semaphore(value=0)
         self.pom = PrintOutputManager()
+        self.lock = threading.Lock()
 
     def submit(self, dj: DownloadJob) -> None:
         log(
@@ -1519,6 +1745,7 @@ class DownloadManager:
             f"enqueuing download for {dj.cm.clm.result}"
         )
         dj.setup_print_stream(self.pom)
+        dj.request_status_report(self)
         self.pending_jobs.append(self.executor.submit(dj.run_job))
 
     def wait_until_jobs_done(self) -> None:
@@ -2383,188 +2610,6 @@ def gen_dl_temp_name(
     return tmp_path, tmp_filename
 
 
-def selenium_download_from_local_file(
-    cm: ContentMatch
-) -> tuple[Optional[str], ContentFormat, str]:
-    return cm.clm.result, ContentFormat.FILE, os.path.basename(cm.clm.result)
-
-
-def selenium_download_external(
-    cm: ContentMatch
-) -> tuple[Optional[MinimalInputStream], ContentFormat, Optional[str]]:
-    proxies = None
-    if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
-        tbdriver = cast(TorBrowserDriver, cm.mc.ctx.selenium_driver)
-        proxies = {
-            "http": f"socks5h://localhost:{tbdriver.socks_port}",
-            "https": f"socks5h://localhost:{tbdriver.socks_port}",
-            "data": None
-        }
-    try:
-        try:
-            req = request_raw(
-                cm.mc.ctx, cm.clm.result, cast(
-                    urllib.parse.ParseResult, cm.url_parsed),
-                load_selenium_cookies(cm.mc.ctx),
-                proxies=proxies, stream=True
-            )
-            return (
-                cast(MinimalInputStream, ResponseStreamWrapper(req)),
-                ContentFormat.STREAM,
-                request_try_get_filename(req)
-            )
-        except requests.exceptions.RequestException as ex:
-            raise request_exception_to_scr_fetch_error(ex)
-    except ScrFetchError as ex:
-        log(
-            cm.mc.ctx, Verbosity.ERROR,
-            f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
-            + f"failed to download '{truncate(cm.clm.result)}': {str(ex)}"
-        )
-        return None, ContentFormat.STREAM, ""
-
-
-def selenium_download_internal(
-    cm: ContentMatch
-) -> tuple[Optional[str], ContentFormat, Optional[str]]:
-    doc_url_str = selenium_get_url(cm.mc.ctx)
-    if doc_url_str is None:
-        return None, ContentFormat.TEMP_FILE, None
-    doc_url = urllib.parse.urlparse(doc_url_str)
-
-    if doc_url.netloc != cast(urllib.parse.ParseResult, cm.url_parsed).netloc:
-        log(
-            cm.mc.ctx, Verbosity.ERROR,
-            f"{cm.clm.result}{get_ci_di_context(cm)}: "
-            + f"failed to download: seldl=internal does not work across origins"
-        )
-        return None, ContentFormat.TEMP_FILE, None
-
-    tmp_path, tmp_filename = gen_dl_temp_name(cm.mc.ctx, None)
-    script_source = """
-        const url = arguments[0];
-        const filename = arguments[1];
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    """
-    try:
-        selenium_exec_script(cm.mc.ctx, script_source,
-                             cm.clm.result, tmp_filename)
-    except SeleniumWebDriverException as ex:
-        if selenium_has_died(cm.mc.ctx):
-            report_selenium_died(cm.mc.ctx)
-        else:
-            log(
-                cm.mc.ctx, Verbosity.ERROR,
-                f"{cm.clm.result}{get_ci_di_context(cm)}: "
-                + f"selenium download failed: {str(ex)}"
-            )
-        return None, ContentFormat.TEMP_FILE, None
-    i = 0
-    while True:
-        if os.path.exists(tmp_path):
-            time.sleep(0.1)
-            break
-        if i < 10:
-            time.sleep(0.01)
-        else:
-            time.sleep(0.1)
-            if i > 15:
-                i = 10
-                if selenium_has_died(cm.mc.ctx):
-                    return None, ContentFormat.TEMP_FILE, None
-
-        i += 1
-    # TODO: maybe support filenames here ?
-    return tmp_path, ContentFormat.TEMP_FILE, None
-
-
-def selenium_download_fetch(
-    cm: ContentMatch
-) -> tuple[Optional[bytes], ContentFormat, Optional[str]]:
-    script_source = """
-        const url = arguments[0];
-        var content_disposition = null;
-        return (async () => {
-            return await fetch(url, {
-                method: 'GET',
-            })
-            .then(res => {
-                content_disposition = res.headers.get('Content-Disposition'); 
-                return res.blob();
-            })
-            .then((blob, cd) => new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(blob);
-                reader.onload = () => (resolve(reader.result.substr(reader.result.indexOf(',') + 1)), cd);
-                reader.onerror = error => reject(error);
-            }))
-            .then(result => {
-                return {
-                    "ok": result,
-                    "content_disposition": content_disposition,
-                };
-            })
-            .catch(ex => {
-                return {
-                    "error": ex.message
-                };
-            });
-        })();
-    """
-    err = None
-    driver = cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver)
-    try:
-        doc_url = driver.current_url
-        res = selenium_exec_script(cm.mc.ctx, script_source, cm.clm.result)
-    except SeleniumWebDriverException as ex:
-        if selenium_has_died(cm.mc.ctx):
-            report_selenium_died(cm.mc.ctx)
-            return None, ContentFormat.BYTES, None
-        err = str(ex)
-    if "error" in res:
-        err = res["error"]
-    if err is not None:
-        cors_warn = ""
-        if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(cm.clm.result).netloc:
-            cors_warn = " (potential CORS issue)"
-        log(
-            cm.mc.ctx, Verbosity.ERROR,
-            f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
-            + f"selenium download of '{cm.clm.result}' failed{cors_warn}: {err}"
-        )
-        return None, ContentFormat.BYTES, None
-    data = binascii.a2b_base64(res["ok"])
-    filename = try_get_filename_from_content_disposition(
-        res.get("content_disposition", "")
-    )
-    return data, ContentFormat.BYTES, filename
-
-
-def selenium_download(
-    cm: ContentMatch
-) -> tuple[Union[str, bytes, MinimalInputStream, None], ContentFormat, Optional[str]]:
-    if (
-        cm.doc.document_type == DocumentType.FILE
-        and cast(urllib.parse.ParseResult, cm.url_parsed).scheme in ["", "file"]
-    ):
-        return selenium_download_from_local_file(cm)
-
-    if cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-        return selenium_download_external(cm)
-
-    if cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
-        return selenium_download_internal(cm)
-
-    assert cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
-
-    return selenium_download_fetch(cm)
-
-
 def fetch_file(ctx: ScrContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
     try:
         f = open(path, "rb")
@@ -2647,8 +2692,18 @@ def try_get_filename_from_content_disposition(content_dispositon: Optional[str])
 
 def request_try_get_filename(res: requests.Response) -> Optional[str]:
     return try_get_filename_from_content_disposition(
-        res.headers.get('content-disposition')
+        res.headers.get('Content-Disposition')
     )
+
+
+def request_try_get_filesize(res: requests.Response) -> Optional[int]:
+    cl = res.headers.get('Content-Length', None)
+    if cl is None:
+        return None
+    try:
+        return int(cl)
+    except ValueError:
+        return None
 
 
 def requests_dl(
