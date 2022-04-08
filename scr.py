@@ -1217,9 +1217,9 @@ class DownloadJob:
     def requires_download(self) -> bool:
         return self.cm.mc.need_content_download
 
-    def setup_print_stream(self, dm: 'DownloadManager') -> None:
+    def setup_print_stream(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
-            self.print_stream = PrintOutputStream(dm.pom)
+            self.print_stream = PrintOutputStream(pom)
 
     def gen_fallback_filename(self) -> bool:
         if not self.cm.mc.need_filename or self.filename is not None:
@@ -1517,7 +1517,7 @@ class DownloadManager:
             self.ctx, Verbosity.DEBUG,
             f"enqueuing download for {dj.cm.clm.result}"
         )
-        dj.setup_print_stream(self)
+        dj.setup_print_stream(self.pom)
         self.pending_jobs.append(self.executor.submit(dj.run_job))
 
     def wait_until_jobs_done(self) -> None:
@@ -2968,12 +2968,12 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
         if res != InteractiveResult.ACCEPT:
             return res
     if cm.mc.ctx.dl_manager is not None:
-        cm.mc.ctx.dl_manager.submit(job)
+        if job.requires_download():
+            cm.mc.ctx.dl_manager.submit(job)
+        else:
+            job.setup_print_stream(cm.mc.ctx.dl_manager.pom)
+            job.run_job()
     else:
-        log(
-            cm.mc.ctx, Verbosity.DEBUG,
-            f"choosing synchronous download for {job.cm.clm.result}"
-        )
         job.run_job()
 
     return InteractiveResult.ACCEPT
