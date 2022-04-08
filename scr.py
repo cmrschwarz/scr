@@ -831,7 +831,7 @@ class MatchChain(ConfigDataClass):
     has_document_matching: bool = False
     has_content_matching: bool = False
     has_interactive_matching: bool = False
-    need_content_download: bool = False
+    need_content: bool = False
     need_label: bool = False
     need_filename: bool = False
     need_output_multipass: bool = False
@@ -1215,7 +1215,7 @@ class DownloadJob:
         self.output_formatters = []
 
     def requires_download(self) -> bool:
-        return self.cm.mc.need_content_download
+        return self.cm.mc.need_content and not self.cm.mc.content_raw
 
     def setup_print_stream(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
@@ -1310,7 +1310,7 @@ class DownloadJob:
             self.content = self.cm.clm.result
             self.content_format = ContentFormat.STRING
         else:
-            if not self.cm.mc.need_content_download:
+            if not self.cm.mc.need_content:
                 self.content_format = ContentFormat.UNNEEDED
             else:
                 if self.cm.mc.ctx.selenium_variant.enabled():
@@ -1490,9 +1490,10 @@ class DownloadJob:
             if self.save_file is not None:
                 self.save_file.close()
             path = self.cm.clm.result
-            log(self.cm.mc.ctx, Verbosity.DEBUG,
-                f"finished downloading {path}" if success else f"failed to download {path}"
-                )
+            if self.requires_download():
+                log(self.cm.mc.ctx, Verbosity.DEBUG,
+                    f"finished downloading {path}" if success else f"failed to download {path}"
+                    )
 
 
 class DownloadManager:
@@ -2156,7 +2157,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
         ["fn", "fb", "fe"]
     ) > 0
 
-    mc.need_content_download = format_strings_args_occurence(
+    mc.need_content = format_strings_args_occurence(
         output_formats, ["c"]
     ) > 0
 
@@ -2747,6 +2748,10 @@ def selenium_get_full_page_source(ctx: ScrContext) -> tuple[str, lxml.html.HtmlE
 def fetch_doc(ctx: ScrContext, doc: Document) -> None:
     if ctx.selenium_variant.enabled():
         if doc is not ctx.reused_doc or ctx.changed_selenium:
+            log(
+                ctx, Verbosity.INFO,
+                f"getting selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
+            )
             selpath = doc.path
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.realpath(selpath)
@@ -2754,21 +2759,36 @@ def fetch_doc(ctx: ScrContext, doc: Document) -> None:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
                 ScrFetchError("selenium timeout")
-
+        log(
+            ctx, Verbosity.INFO,
+            f"reloading selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
+        )
         decide_document_encoding(ctx, doc)
         doc.text, doc.xml = selenium_get_full_page_source(ctx)
         return
     if doc is ctx.reused_doc:
+        log(
+            ctx, Verbosity.INFO,
+            f"reusing page content for {document_type_display_dict[doc.document_type]} '{doc.path}'"
+        )
         ctx.reused_doc = None
         if doc.text and not ctx.changed_selenium:
             return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
+        log(
+            ctx, Verbosity.INFO,
+            f"reading {document_type_display_dict[doc.document_type]} '{doc.path}'"
+        )
         data = cast(bytes, fetch_file(ctx, doc.path, stream=False))
         encoding = decide_document_encoding(ctx, doc)
         doc.text = data.decode(encoding, errors="surrogateescape")
         return
     assert doc.document_type == DocumentType.URL
 
+    log(
+        ctx, Verbosity.INFO,
+        f"downloading {document_type_display_dict[doc.document_type]} '{doc.path}'"
+    )
     data, encoding = cast(tuple[bytes, str], requests_dl(
         ctx, doc.path, doc.path_parsed
     ))
@@ -3337,9 +3357,6 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
             if not ctx.selenium_variant.enabled() or (doc is ctx.reused_doc and not ctx.changed_selenium):
                 continue
 
-        log(ctx, Verbosity.INFO,
-            f"handling {document_type_display_dict[doc.document_type]} '{doc.path}'")
-
         try_number = 0
         try:
             fetch_doc(ctx, doc)
@@ -3367,6 +3384,10 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
                     last_doc_path = drv.current_url
+                    log(
+                        ctx, Verbosity.DEBUG,
+                        f"rechecking selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
+                    )
                     src_new, xml_new = selenium_get_full_page_source(ctx)
                     same_content = (src_new == doc.text)
                     doc.text = src_new

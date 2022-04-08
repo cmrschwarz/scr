@@ -187,6 +187,8 @@ def run_test(name: str, to: TestOptions) -> TestResult:
     sys.stdout.write(msg)
     return TestResult.SUCCESS if success else TestResult.FAILED
 
+def run_test_wrapper(args: tuple[str, TestOptions]) -> TestResult:
+    return run_test(*args)
 
 def run_tests(to: TestOptions) -> dict[TestResult, int]:
     results = {
@@ -207,8 +209,6 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
     pool = Pool(to.parallelism)
     test_args = [(name, to) for name in tests]
 
-    def run_test_wrapper(args: tuple[str, TestOptions]) -> TestResult:
-        return run_test(*args)
     results_list = pool.map(run_test_wrapper, test_args)
     for res in results_list:
         results[res] += 1
