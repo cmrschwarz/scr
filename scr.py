@@ -619,9 +619,19 @@ class Locator(ConfigDataClass):
             lm.result = src_text
             return [lm]
         try:
-            xpath_matches = (
-                cast(lxml.etree.XPath, self.xpath).evaluate(src_xml)
-            )
+            xp = cast(lxml.etree.XPath, self.xpath)
+            if type(src_xml) == lxml.etree._ElementUnicodeResult:
+                # since lxml doesn't allow us to evaluate xpaths on these,
+                # but we need it for lic, we hack in support for it by
+                # generating a derived xpath that gets the expected results while
+                # actually being evaluated on the parent
+                fixed_xpath = f"./@{src_xml.attrname}"
+                if xp.path[0:1] != "/":
+                    fixed_xpath += "/"
+                fixed_xpath += xp.path
+                xpath_matches = src_xml.getparent().xpath(fixed_xpath)
+            else:
+                xpath_matches = (xp.evaluate(src_xml))
         except lxml.etree.XPathEvalError as ex:
             raise ScrMatchError(
                 f"xpath matching failed for: '{self.xpath}' in {doc_path}"
@@ -645,10 +655,7 @@ class Locator(ConfigDataClass):
             if type(xm) == lxml.etree._ElementUnicodeResult:
                 lm.xmatch = str(xm)
                 if store_xml:
-                    try:
-                        lm.xmatch_xml = lxml.html.fromstring(lm.xmatch)
-                    except lxml.LxmlError:
-                        continue
+                    lm.xmatch_xml = xm
             else:
                 try:
                     lm.result = lxml.html.tostring(xm, encoding="unicode")
@@ -2158,7 +2165,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
     ) > 0
 
     mc.need_output_multipass = any(
-        format_string_arg_occurence(of, "c") for of in output_formats 
+        format_string_arg_occurence(of, "c") for of in output_formats
     )
 
     if mc.filename_default_format is None:
@@ -2191,7 +2198,8 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
 def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]]]:
     assert ctx.selenium_driver is not None
     # the selenium function isn't type annotated properly
-    cookies: list[dict[str, Any]] = ctx.selenium_driver.get_cookies() # type: ignore
+    cookies: list[dict[str, Any]
+                  ] = ctx.selenium_driver.get_cookies()  # type: ignore
     cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
     for ck in cookies:
         if cast(str, ck["domain"]) not in cookie_dict:
@@ -2995,7 +3003,6 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
 def gen_content_matches(
     mc: MatchChain, doc: Document, last_doc_path: str
 ) -> tuple[list[ContentMatch], int]:
-    js_executed = False
     text = cast(str, doc.text)
     content_matches: list[ContentMatch] = []
     content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
@@ -3018,6 +3025,7 @@ def gen_content_matches(
             # even for lic=y
             label_lms = mc.label.apply_regex_matches(label_lms)
             label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
+
         content_lms = mc.content.apply_regex_matches([clm_xp])
         content_lms = mc.content.apply_js_matches(doc, mc, content_lms)
         for clm in content_lms:
@@ -3030,12 +3038,12 @@ def gen_content_matches(
                     label_lms = mc.label.apply_js_matches(
                         doc, mc, label_lms, False
                     )
-                    if len(label_lms) == 0:
-                        if not mc.label_allow_missing:
-                            labels_none_for_n += 1
-                            continue
-                    else:
-                        llm = label_lms[0]
+                if len(label_lms) == 0:
+                    if not mc.label_allow_missing:
+                        labels_none_for_n += 1
+                        continue
+                else:
+                    llm = label_lms[0]
             else:
                 if not mc.label.multimatch and len(label_lms) > 0:
                     llm = label_lms[0]
@@ -3248,11 +3256,12 @@ def accept_for_match_chain(
                     content_skip_doc = True
                     break
             else:
+                rem = len(mc.content_matches) - i
                 log(
                     mc.ctx,
                     Verbosity.WARN,
-                    f"no labels: skipping remaining {len(mc.content_matches) - i}"
-                    + " content element(s) in document:\n    {doc.path}"
+                    f"no labels: skipping {rem} remaining"
+                    + f" content match{'es' if rem > 1 else ''} in {doc.path}"
                 )
                 break
     if not documents_skip_doc:
