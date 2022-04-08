@@ -70,9 +70,11 @@ SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
 
 DEFAULT_TIMEOUT_SECONDS = 30
-DOWNLOAD_PROGRESS_UPDATE_WINDOW_ELEMENT_COUNT = 20
-DOWNLOAD_PROGRESS_UPDATE_WINDOW_SECONDS = 10
-DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH = 50
+
+DOWNLOAD_STATUS_LOG_ELEMENTS = 20
+DOWNLOAD_STATUS_LOG_TIME = 10
+DOWNLOAD_STATUS_NAME_LENGTH = 50
+DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.5
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
@@ -1214,7 +1216,7 @@ class DownloadStatusReport:
         save_path: Optional[str]
     ) -> None:
         if save_path:
-            if len(save_path) < DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH:
+            if len(save_path) < DOWNLOAD_STATUS_NAME_LENGTH:
                 self.name = save_path
                 return
             self.name = os.path.basename(save_path)
@@ -1222,7 +1224,7 @@ class DownloadStatusReport:
             self.name = filename
         else:
             url_str = url.geturl()
-            if len(url_str) < DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH:
+            if len(url_str) < DOWNLOAD_STATUS_NAME_LENGTH:
                 self.name = url_str
                 return
             self.name = (
@@ -1230,7 +1232,7 @@ class DownloadStatusReport:
                 + url._replace(fragment="", scheme="", query="").geturl()
             )
         self.name = truncate(
-            self.name, DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH
+            self.name, DOWNLOAD_STATUS_NAME_LENGTH
         )
 
     def submit_update(self, received_filesize: int) -> None:
@@ -1238,7 +1240,7 @@ class DownloadStatusReport:
         with self.download_manager.status_report_lock:
             self.downloaded_size += received_filesize
             self.updates.append((time, self.downloaded_size))
-            if len(self.updates) > DOWNLOAD_PROGRESS_UPDATE_WINDOW_ELEMENT_COUNT:
+            if len(self.updates) > DOWNLOAD_STATUS_NAME_LENGTH:
                 self.updates.popleft()
 
     def enqueue(self) -> None:
@@ -1751,20 +1753,23 @@ class DownloadJob:
 class DownloadManager:
     ctx: ScrContext
     max_threads: int
-    pending_jobs: list[concurrent.futures.Future[bool]]
+    pending_jobs: set[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
     status_report_lock: threading.Lock
     download_status_reports: list[DownloadStatusReport]
+    enable_status_reports: bool
 
-    def __init__(self, ctx: ScrContext, max_threads: int) -> None:
+    def __init__(self, ctx: ScrContext, max_threads: int, enable_status_reports: bool) -> None:
         self.ctx = ctx
-        self.pending_jobs = []
+        self.pending_jobs = set()
         self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_threads)
+            max_workers=max_threads
+        )
         self.pom = PrintOutputManager()
         self.status_report_lock = threading.Lock()
         self.download_status_reports = []
+        self.enable_status_reports = enable_status_reports
 
     def submit(self, dj: DownloadJob) -> None:
         log(
@@ -1772,13 +1777,28 @@ class DownloadManager:
             f"enqueuing download for {dj.cm.clm.result}"
         )
         dj.setup_print_stream(self.pom)
-        dj.request_status_report(self)
-        self.pending_jobs.append(self.executor.submit(dj.run_job))
+        if self.enable_status_reports:
+            dj.request_status_report(self)
+        self.pending_jobs.add(self.executor.submit(dj.run_job))
 
     def wait_until_jobs_done(self) -> None:
-        results = concurrent.futures.wait(self.pending_jobs)
-        for x in results.done:
-            x.result()
+        if not self.enable_status_reports:
+            results = concurrent.futures.wait(self.pending_jobs)
+            for x in results.done:
+                x.result()
+            self.pending_jobs.clear()
+
+        report_setup = False
+        while True:
+            results = concurrent.futures.wait(
+                self.pending_jobs,
+                timeout=0 if not report_setup else DOWNLOAD_STATUS_REFRESH_INTERVAL
+            )
+            for x in results.done:
+                x.result()
+            self.pending_jobs = results.not_done
+            if not self.pending_jobs:
+                break
 
     def terminate(self, cancel_running: bool = False) -> None:
         if not cancel_running:
@@ -2566,7 +2586,7 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
         setup_selenium(ctx)
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
-        ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads)
+        ctx.dl_manager = DownloadManager(ctx, ctx.max_download_threads, True)
     if ctx.dl_manager is not None:
         ctx.dl_manager.pom.reset()
 
