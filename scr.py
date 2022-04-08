@@ -70,6 +70,8 @@ SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
 
 DEFAULT_TIMEOUT_SECONDS = 30
+DOWNLOAD_PROGRESS_UPDATE_WINDOW_ELEMENT_COUNT = 20
+DOWNLOAD_PROGRESS_UPDATE_WINDOW_SECONDS = 10
 DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH = 50
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
@@ -1193,14 +1195,17 @@ class PrintOutputStream:
 
 class DownloadStatusReport:
     name: str
-    file_size: Optional[int] = None
+    expected_size: Optional[int] = None
     downloaded_size: int = 0
+    file_size: Optional[int] = None
     start_time: datetime.time
     download_manager: 'DownloadManager'
-    updates: deque[tuple[datetime.time, int]]
+    updates: deque[tuple[datetime.datetime, int]]
+    download_finished: bool = False
 
     def __init__(self, download_manager: 'DownloadManager') -> None:
         self.download_manager = download_manager
+        self.updates = deque()
 
     def gen_display_name(
         self,
@@ -1228,13 +1233,24 @@ class DownloadStatusReport:
             self.name, DOWNLOAD_DISPLAY_NAME_TRUNCATION_LENGTH
         )
 
-    def submit_update(self, filesize: int) -> None:
-        # todo
-        pass
+    def submit_update(self, received_filesize: int) -> None:
+        time = datetime.datetime.now()
+        with self.download_manager.status_report_lock:
+            self.downloaded_size += received_filesize
+            self.updates.append((time, self.downloaded_size))
+            if len(self.updates) > DOWNLOAD_PROGRESS_UPDATE_WINDOW_ELEMENT_COUNT:
+                self.updates.popleft()
+
+    def enqueue(self) -> None:
+        with self.download_manager.status_report_lock:
+            self.download_manager.download_status_reports.append(self)
+
+    def finished(self) -> None:
+        with self.download_manager.status_report_lock:
+            self.download_finished = True
 
 
 class DownloadJob:
-    expected_size: Optional[int] = None
     save_file: Optional[BinaryIO] = None
     temp_file: Optional[BinaryIO] = None
     temp_file_path: Optional[str] = None
@@ -1499,7 +1515,8 @@ class DownloadJob:
             )
             return False
         self.content = binascii.a2b_base64(res["ok"])
-        self.expected_size = len(self.content)
+        if self.status_report:
+            self.status_report.expected_size = len(self.content)
         self.filename = try_get_filename_from_content_disposition(
             res.get("content_disposition", "")
         )
@@ -1542,14 +1559,17 @@ class DownloadJob:
                     if data is not None:
                         self.content = data
                         self.content_format = ContentFormat.BYTES
-                        self.expected_size = len(data)
+                        if self.status_report:
+                            self.status_report.expected_size = len(data)
                     elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
                         self.content = self.cm.clm.result
                         self.content_format = ContentFormat.FILE
-                        try:
-                            self.expected_size = os.path.getsize(self.content)
-                        except IOError:
-                            pass
+                        if self.status_report:
+                            try:
+                                self.status_report.expected_size = os.path.getsize(
+                                    self.content)
+                            except IOError:
+                                pass
                     else:
                         try:
                             res = request_raw(
@@ -1560,9 +1580,10 @@ class DownloadJob:
                             )
                             self.content = ResponseStreamWrapper(res)
                             self.filename = request_try_get_filename(res)
-                            self.expected_size = request_try_get_filesize(
-                                res
-                            )
+                            if self.status_report:
+                                self.status_report.expected_size = (
+                                    request_try_get_filesize(res)
+                                )
                             self.content_format = ContentFormat.STREAM
                         except requests.exceptions.RequestException as ex:
                             fe = request_exception_to_scr_fetch_error(ex)
@@ -1642,6 +1663,8 @@ class DownloadJob:
         return True
 
     def run_job(self) -> bool:
+        if self.status_report:
+            self.status_report.enqueue()
         success = False
         try:
             if self.handle_save_path() != InteractiveResult.ACCEPT:
@@ -1659,7 +1682,6 @@ class DownloadJob:
                 return False
             if not self.setup_save_file():
                 return False
-
             if not self.setup_print_output():
                 return False
 
@@ -1684,6 +1706,8 @@ class DownloadJob:
                     buf = self.content_stream.read(
                         DEFAULT_RESPONSE_BUFFER_SIZE
                     )
+                    if self.status_report:
+                        self.status_report.submit_update(len(buf))
                     advance_output_formatters(self.output_formatters, buf)
                     if self.temp_file:
                         self.temp_file.write(buf)
@@ -1705,6 +1729,8 @@ class DownloadJob:
             success = True
             return True
         finally:
+            if self.status_report:
+                self.status_report.finished()
             if self.print_stream is not None:
                 self.print_stream.close()
             if self.content_stream is not None:
@@ -1737,7 +1763,8 @@ class DownloadManager:
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_threads)
         self.pom = PrintOutputManager()
-        self.lock = threading.Lock()
+        self.status_report_lock = threading.Lock()
+        self.download_status_reports = []
 
     def submit(self, dj: DownloadJob) -> None:
         log(
@@ -3137,7 +3164,6 @@ def gen_content_matches(
 
 def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> list[Document]:
     document_matches = []
-    base_dir = os.path.dirname(doc.path)
     document_lms = mc.document.match_xpath(
         cast(str, doc.text), doc.xml, doc.path, False
     )
