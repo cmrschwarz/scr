@@ -38,12 +38,8 @@ class TestOptions:
         self.tags_avoid = []
 
 
-def get_key_with_default(obj: dict[str, Any], key: str, default="") -> str:
-    return obj[key] if key in obj else default
-
-
 def get_cmd_string(tc: dict[str, Any]) -> str:
-    cmd = tc.get("command", "scr.py")
+    cmd: str = tc.get("command", "scr.py")
     args: list[str] = tc.get("args", [])
     assert type(args) is list
     for arg in args:
@@ -63,7 +59,7 @@ def timed_exec(func: Callable[[], T]) -> tuple[T, str]:
     return res, time_notice
 
 
-def execute_test(command: str, args: list[str], stdin: str, cwd=None) -> tuple[int, str, str]:
+def execute_test(command: str, args: list[str], stdin: str, cwd: Optional[str] = None) -> tuple[int, str, str]:
     proc = subprocess.Popen(
         [command] + args,
         stdin=subprocess.PIPE,
@@ -192,10 +188,6 @@ def run_test(name: str, to: TestOptions) -> TestResult:
     return TestResult.SUCCESS if success else TestResult.FAILED
 
 
-def run_test_wrapper(args):
-    return run_test(*args)
-
-
 def run_tests(to: TestOptions) -> dict[TestResult, int]:
     results = {
         TestResult.SKIPPED: 0,
@@ -214,6 +206,9 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
 
     pool = Pool(to.parallelism)
     test_args = [(name, to) for name in tests]
+
+    def run_test_wrapper(args: tuple[str, TestOptions]) -> TestResult:
+        return run_test(*args)
     results_list = pool.map(run_test_wrapper, test_args)
     for res in results_list:
         results[res] += 1
