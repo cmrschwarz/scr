@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from codecs import strict_errors
 import functools
 import subprocess
 import selenium.webdriver
@@ -95,7 +96,7 @@ class OptionIndicatingStrings:
     representative: str
     matching: set[str]
 
-    def __init__(self, representative: str, *args: set[str]):
+    def __init__(self, representative: str, *args: set[str]) -> None:
         self.representative = representative
         if args:
             self.matching = set_join(*args)
@@ -189,12 +190,12 @@ class DocumentType(Enum):
     RFILE = 3
     CONTENT_MATCH = 4
 
-    def derived_type(self):
+    def derived_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.URL
         return self
 
-    def url_handling_type(self):
+    def url_handling_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.FILE
         return self
@@ -274,7 +275,7 @@ class ResponseStreamWrapper(MinimalInputStream):
         self._request_response = request_response
         self._iterator = self._request_response.iter_content(buffer_size)
 
-    def read(self, size: int = None) -> bytes:
+    def read(self, size: Optional[int] = None) -> bytes:
         if size is None:
             goal_position = float("inf")
         else:
@@ -324,7 +325,7 @@ class LocatorMatch:
     named_cgroups: Optional[dict[str, str]] = None
     unnamed_cgroups: Optional[list[str]] = None
 
-    def set_regex_match(self, match: re.Match):
+    def set_regex_match(self, match: re.Match[str]) -> None:
         self.result = match.group(0)
         self.rmatch = self.result
         self.named_cgroups = {
@@ -340,7 +341,7 @@ class LocatorMatch:
         # therefore it is enough that the complete match is equivalent
         return (self.xmatch, self.rmatch, self.fres, self.jsres)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, self.__class__) and self.__key__() == other.__key__()
 
     def __hash__(self) -> int:
@@ -390,7 +391,7 @@ class Document:
     def __init__(
         self, document_type: DocumentType, path: str,
         src_mc: Optional['MatchChain'],
-        match_chains: list['MatchChain'] = None,
+        match_chains: Optional[list['MatchChain']] = None,
         expand_match_chains_above: Optional[int] = None,
         locator_match: Optional[LocatorMatch] = None,
         path_parsed: Optional[urllib.parse.ParseResult] = None
@@ -418,7 +419,7 @@ class Document:
     def __key__(self) -> tuple[DocumentType, str]:
         return (self.document_type, self.path)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: Any) -> bool:
         return isinstance(self, other.__class__) and self.__key__() == other.__key__()
 
     def __hash__(self) -> int:
@@ -431,7 +432,7 @@ class ConfigDataClass:
     _final_values_: set[str]
     _value_sources_: dict[str, str]
 
-    def __init__(self, blank=False) -> None:
+    def __init__(self, blank: bool = False) -> None:
         self._final_values_ = set()
         self._value_sources_ = {}
         if not blank:
@@ -447,7 +448,7 @@ class ConfigDataClass:
         subconfig_slots_dict = set(subconfig_slots + ["__annotations__"])
         return list(k for k in annotations.keys() if k not in subconfig_slots_dict)
 
-    def apply_defaults(self, defaults):
+    def apply_defaults(self, defaults: 'ConfigDataClass') -> None:
         for cs in self.__class__._config_slots_:
             if cs in defaults.__dict__:
                 def_val = defaults.__dict__[cs]
@@ -472,7 +473,10 @@ class ConfigDataClass:
         assert attr in conf._config_slots_
         return conf, attr
 
-    def resolve_attrib_path(self, attrib_path: list[str], transform: Optional[Callable[[Any], Any]] = None) -> tuple['ConfigDataClass', str]:
+    def resolve_attrib_path(
+        self, attrib_path: list[str],
+        transform: Optional[Callable[[Any], Any]] = None
+    ) -> Any:
         conf, attr = self.follow_attrib_path(attrib_path)
         if attr in conf.__dict__:
             val = conf.__dict__[attr]
@@ -507,7 +511,7 @@ class ConfigDataClass:
 class Locator(ConfigDataClass):
     name: str
     xpath: Optional[Union[str, lxml.etree.XPath]] = None
-    regex: Optional[Union[str, re.Pattern]] = None
+    regex: Optional[Union[str, re.Pattern[str]]] = None
     js_script: Optional[str] = None
     format: Optional[str] = None
     multimatch: bool = True
@@ -543,7 +547,7 @@ class Locator(ConfigDataClass):
             )
         self.xpath = xp
 
-    def gen_dummy_locator_match(self):
+    def gen_dummy_locator_match(self) -> LocatorMatch:
         lm = LocatorMatch()
         if self.xpath:
             lm.xmatch = ""
@@ -574,8 +578,9 @@ class Locator(ConfigDataClass):
     def setup_format(self, mc: 'MatchChain') -> None:
         if self.format is None:
             return
-        validate_format(self, ["format"],
-                        mc.gen_dummy_content_match(), True, False)
+        validate_format(
+            self, ["format"], mc.gen_dummy_content_match(), True, False
+        )
 
     def setup_js(self, mc: 'MatchChain') -> None:
         if self.js_script is None:
@@ -658,10 +663,13 @@ class Locator(ConfigDataClass):
             res.append(lm)
         return res
 
-    def apply_regex_matches(self, lms: list[LocatorMatch], multimatch: bool = None) -> list[LocatorMatch]:
+    def apply_regex_matches(
+        self, lms: list[LocatorMatch],
+        multimatch: Optional[bool] = None
+    ) -> list[LocatorMatch]:
         if self.regex is None:
             return lms
-        rgx = cast(re.Pattern, self.regex)
+        rgx = cast(re.Pattern[str], self.regex)
         if multimatch is None:
             multimatch = self.multimatch
 
@@ -686,7 +694,7 @@ class Locator(ConfigDataClass):
 
     def apply_js_matches(
         self, doc: Document, mc: 'MatchChain', lms: list[LocatorMatch],
-        multimatch: bool = None
+        multimatch: Optional[bool] = None
     ) -> list[LocatorMatch]:
         if self.js_script is None:
             return lms
@@ -699,9 +707,11 @@ class Locator(ConfigDataClass):
             apply_locator_match_format_args(self.name, lm, args_dict)
             try:
                 mc.js_executed = True
-                results = cast(SeleniumWebDriver, mc.ctx.selenium_driver).execute_script(
-                    self.js_script, *args_dict.values()
-                )
+                drv = cast(SeleniumWebDriver, mc.ctx.selenium_driver)
+
+                results = drv.execute_script(
+                    self.js_script, *args_dict.values())  # type: ignore
+
             except selenium.common.exceptions.JavascriptException as ex:
                 arg = cast(str, self.get_configuring_argument(['js_script']))
                 name = arg[0: arg.find("=")]
@@ -731,22 +741,26 @@ class Locator(ConfigDataClass):
                 res = None
         return lms_new
 
-    def apply_format_for_content_match(self, cm: 'ContentMatch', lm: LocatorMatch):
+    def apply_format_for_content_match(
+        self, cm: 'ContentMatch', lm: LocatorMatch
+    ) -> None:
         if not self.format:
-            return lm
+            return
         lm.fres = self.format.format(**content_match_build_format_args(cm))
         lm.result = lm.fres
 
-    def apply_format_for_document_match(self, doc: Document, mc: 'MatchChain', lm: LocatorMatch):
+    def apply_format_for_document_match(
+        self, doc: Document, mc: 'MatchChain', lm: LocatorMatch
+    ) -> None:
         if not self.format:
-            return lm
+            return
         args_dict: dict[str, Any] = {}
         apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
         apply_locator_match_format_args(self.name, lm, args_dict)
         lm.fres = self.format.format(**args_dict)
         lm.result = lm.fres
 
-    def is_unset(self):
+    def is_unset(self) -> bool:
         return min([v is None for v in [self.xpath, self.regex, self.format]])
 
 
@@ -837,7 +851,7 @@ class MatchChain(ConfigDataClass):
         self.handled_content_matches = set()
         self.handled_document_matches = set()
 
-    def gen_dummy_document(self):
+    def gen_dummy_document(self) -> Document:
         d = Document(
             DocumentType.FILE, "", None,
             locator_match=self.document.gen_dummy_locator_match()
@@ -845,7 +859,7 @@ class MatchChain(ConfigDataClass):
         d.encoding = ""
         return d
 
-    def gen_dummy_content_match(self):
+    def gen_dummy_content_match(self) -> 'ContentMatch':
         clm = self.content.gen_dummy_locator_match()
         if self.has_label_matching:
             llm = self.label.gen_dummy_locator_match()
@@ -865,7 +879,7 @@ class MatchChain(ConfigDataClass):
     def accepts_content_matches(self) -> bool:
         return self.di <= self.dimax
 
-    def need_document_matches(self, current_di_used) -> bool:
+    def need_document_matches(self, current_di_used: int) -> bool:
         return (
             self.has_document_matching
             and self.di <= (self.dimax - (1 if current_di_used else 0))
@@ -875,7 +889,7 @@ class MatchChain(ConfigDataClass):
         assert self.ci is not None and self.di is not None
         return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
 
-    def is_valid_label(self, label) -> bool:
+    def is_valid_label(self, label: str) -> bool:
         if self.allow_slashes_in_labels:
             return True
         if "/" in label or "\\" in label:
@@ -901,7 +915,7 @@ class ContentMatch:
         llm: Optional[LocatorMatch],
         mc: MatchChain,
         doc: Document
-    ):
+    ) -> None:
         self.llm = llm
         self.clm = clm
         self.mc = mc
@@ -913,10 +927,10 @@ class ContentMatch:
             self.llm.__key__() if self.llm else None,
         )
 
-    def __eq__(x, y):
-        return isinstance(y, x.__class__) and x.__key__() == y.__key__()
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, self.__class__) and other.__key__() == self.__key__()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.__key__())
 
 
@@ -961,15 +975,15 @@ class ScrContext(ConfigDataClass):
     origin_mc: MatchChain
     error_code: int = 0
 
-    def __init__(self, blank=False):
+    def __init__(self, blank: bool = False) -> None:
         super().__init__(blank)
         self.cookie_dict = {}
         self.match_chains = []
         self.docs = deque()
-        self.defaults_mc = MatchChain(self, None)
-        self.origin_mc = MatchChain(self, None, blank=True)
+        self.defaults_mc = MatchChain(self, -1)
+        self.origin_mc = MatchChain(self, -1, blank=True)
         # turn ctx to none temporarily for origin so it can be deepcopied
-        self.origin_mc.ctx = None
+        self.origin_mc.ctx = None  # type: ignore
 
 
 class OutputFormatter:
@@ -986,8 +1000,8 @@ class OutputFormatter:
         out_stream: Union[BinaryIO, 'PrintOutputStream'],
         content: Union[str, bytes, MinimalInputStream, BinaryIO, None],
         filename: Optional[str],
-        input_buffer_sizes=DEFAULT_RESPONSE_BUFFER_SIZE
-    ):
+        input_buffer_sizes: int = DEFAULT_RESPONSE_BUFFER_SIZE
+    ) -> None:
         self._args_dict = content_match_build_format_args(
             cm, content, filename)
         self._args_list = []  # no positional args right now
@@ -1055,24 +1069,24 @@ class PrintOutputManager:
     active_id: int = 0
     main_thread_id: Optional[int] = None
 
-    def __init__(self, max_buffer_size=DEFAULT_MAX_PRINT_BUFFER_CAPACITY):
+    def __init__(self, max_buffer_size: int = DEFAULT_MAX_PRINT_BUFFER_CAPACITY) -> None:
         self.lock = threading.Lock()
         self.printing_buffers = OrderedDict()
         self.finished_queues = set()
         self.size_limit = max_buffer_size
         self.size_blocked = threading.Condition(self.lock)
 
-    def reset(self):
+    def reset(self) -> None:
         self.active_id = 0
         self.dl_ids = 0
         self.main_thread_id = self.request_print_access()
 
-    def main_thread_done(self):
+    def main_thread_done(self) -> None:
         if self.main_thread_id is not None:
             self.declare_done(self.main_thread_id)
             self.main_thread_id = None
 
-    def print(self, id: int, buffer: bytes):
+    def print(self, id: int, buffer: bytes) -> None:
         is_active = False
         with self.lock:
             while True:
@@ -1094,7 +1108,6 @@ class PrintOutputManager:
             sys.stdout.buffer.write(buffer)
             if(stored_buffers):
                 self.size_blocked.notifyAll()
-            return
 
     def request_print_access(self) -> int:
         with self.lock:
@@ -1104,7 +1117,7 @@ class PrintOutputManager:
                 self.printing_buffers[id] = []
         return id
 
-    def declare_done(self, id: int):
+    def declare_done(self, id: int) -> None:
         new_active_id = None
         buffers_to_print: list[list[bytes]] = []
         with self.lock:
@@ -1143,7 +1156,7 @@ class PrintOutputManager:
             if new_active_id is None:
                 break
 
-    def flush(self, id: int):
+    def flush(self, id: int) -> None:
         with self.lock:
             if not id != self.active_id:
                 return
@@ -1154,7 +1167,7 @@ class PrintOutputStream:
     pom: PrintOutputManager
     id: int
 
-    def __init__(self, pom: PrintOutputManager):
+    def __init__(self, pom: PrintOutputManager) -> None:
         self.pom = pom
         self.id = pom.request_print_access()
 
@@ -1162,10 +1175,10 @@ class PrintOutputStream:
         self.pom.print(self.id, buffer)
         return len(buffer)
 
-    def flush(self):
+    def flush(self) -> None:
         self.pom.flush(self.id)
 
-    def close(self):
+    def close(self) -> None:
         self.pom.declare_done(self.id)
 
 
@@ -1319,9 +1332,9 @@ class DownloadJob:
                             self.filename = request_try_get_filename(res)
                             self.content_format = ContentFormat.STREAM
                         except requests.exceptions.RequestException as ex:
-                            ex = request_exception_to_Scr_fetch_error(ex)
+                            fe = request_exception_to_scr_fetch_error(ex)
                             log(self.cm.mc.ctx, Verbosity.ERROR,
-                                f"{self.context}: failed to download '{truncate(self.cm.clm.result)}': {str(ex)}")
+                                f"{self.context}: failed to download '{truncate(self.cm.clm.result)}': {str(fe)}")
                             return False
         if not self.gen_fallback_filename():
             return False
@@ -1482,7 +1495,7 @@ class DownloadManager:
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
 
-    def __init__(self, ctx: ScrContext, max_threads: int):
+    def __init__(self, ctx: ScrContext, max_threads: int) -> None:
         self.ctx = ctx
         self.max_threads = max_threads
         self.pending_jobs = []
@@ -1492,7 +1505,7 @@ class DownloadManager:
         self.pending_job_count = threading.Semaphore(value=0)
         self.pom = PrintOutputManager()
 
-    def submit(self, dj: DownloadJob):
+    def submit(self, dj: DownloadJob) -> None:
         log(
             self.ctx, Verbosity.DEBUG,
             f"enqueuing download for {dj.cm.clm.result}"
@@ -1500,18 +1513,18 @@ class DownloadManager:
         dj.setup_print_stream(self)
         self.pending_jobs.append(self.executor.submit(dj.run_job))
 
-    def wait_until_jobs_done(self):
+    def wait_until_jobs_done(self) -> None:
         results = concurrent.futures.wait(self.pending_jobs)
         for x in results.done:
             x.result()
 
-    def terminate(self, cancel_running: bool = False):
+    def terminate(self, cancel_running: bool = False) -> None:
         if not cancel_running:
             self.wait_until_jobs_done()
         self.executor.shutdown(wait=True, cancel_futures=cancel_running)
 
 
-def abort_on_broken_pipe():
+def abort_on_broken_pipe() -> None:
     # Python flushes standard streams on exit; redirect remaining output
     # to devnull to avoid another BrokenPipeError at shutdown
     os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
@@ -1604,26 +1617,26 @@ def log_raw(verbosity: Verbosity, msg: str) -> None:
 BSE_U_REGEX_MATCH = re.compile("[0-9A-Fa-f]{4}")
 
 
-def parse_bse_u(match: re.Match) -> str:
+def parse_bse_u(match: re.Match[str]) -> str:
     code = match[3]
     if not BSE_U_REGEX_MATCH.match(code):
         raise ValueError(f"invalid escape code \\u{code}")
     code = (b"\\u" + code.encode("ascii")).decode("unicodeescape")
-    return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
+    return "".join(map(lambda x: cast(str, x) if x else "", [match[1], match[2], code]))
 
 
 BSE_X_REGEX_MATCH = re.compile("[0-9A-Fa-f]{2}")
 
 
-def parse_bse_x(match: re.Match) -> str:
+def parse_bse_x(match: re.Match[str]) -> str:
     code = match[3]
     if not BSE_X_REGEX_MATCH.match(code):
         raise ValueError(f"invalid escape code \\x{code}")
     code = (b"\\udc" + code.encode("ascii")).decode("unicode_escape")
-    return "".join(map(lambda x: x if x else "", [match[1], match[2], code]))
+    return "".join(map(lambda x: cast(str, x) if x else "", [match[1], match[2], code]))
 
 
-def parse_bse_o(match: re.Match) -> str:
+def parse_bse_o(match: re.Match[str]) -> str:
     code = match[3]
     res = {
         "a": "\a",
@@ -1638,7 +1651,7 @@ def parse_bse_o(match: re.Match) -> str:
         if code == "":
             raise ValueError(f"unterminated escape sequence '\\'")
         raise ValueError(f"invalid escape code \\{code}")
-    return "".join(map(lambda x: x if x else "", [match[1], match[2], res]))
+    return "".join(map(lambda x: cast(str, x) if x else "", [match[1], match[2], res]))
 
 
 BACKSLASHESCAPE_PATTERNS = [
@@ -1649,7 +1662,7 @@ BACKSLASHESCAPE_PATTERNS = [
 ]
 
 
-def unescape_string(txt: str):
+def unescape_string(txt: str) -> str:
     for regex, parser in BACKSLASHESCAPE_PATTERNS:
         txt = regex.sub(parser, txt)
     return txt
@@ -1930,8 +1943,8 @@ def selenium_add_cookies_through_get(ctx: ScrContext) -> None:
             ctx.selenium_driver.add_cookie(c)
 
 
-def selenium_start_wrapper(*args, **kwargs) -> None:
-    def preexec_function():
+def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
+    def preexec_function() -> None:
         # this makes sure that the selenium instance does not die on SIGINT
         os.setpgrp()
     original_p_open = subprocess.Popen
@@ -1951,6 +1964,12 @@ def prevent_selenium_sigint() -> None:
     selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
 
 
+def selenium_exec_script(ctx: ScrContext, script: str, *args: Any) -> Any:
+    assert ctx.selenium_driver is not None
+    # execute_script is not annotated -> we have to eat the type error
+    return ctx.selenium_driver.execute_script(script, *args)  # type: ignore
+
+
 def setup_selenium(ctx: ScrContext) -> None:
     if ctx.repl:
         prevent_selenium_sigint()
@@ -1964,8 +1983,8 @@ def setup_selenium(ctx: ScrContext) -> None:
         assert False
     assert ctx.selenium_driver is not None
     if ctx.user_agent is None:
-        ctx.user_agent = ctx.selenium_driver.execute_script(
-            "return navigator.userAgent;")
+        ctx.user_agent = str(selenium_exec_script(
+            ctx, "return navigator.userAgent;"))
 
     ctx.selenium_driver.set_page_load_timeout(ctx.request_timeout_seconds)
     if ctx.cookie_jar:
@@ -1974,18 +1993,20 @@ def setup_selenium(ctx: ScrContext) -> None:
         selenium_add_cookies_through_get(ctx)
 
 
-def get_format_string_keys(fmt_string) -> list[str]:
+def get_format_string_keys(fmt_string: str) -> list[str]:
     return [f for (_, f, _, _) in Formatter().parse(fmt_string) if f is not None]
 
 
-def format_string_arg_occurence(fmt_string, arg_name) -> int:
+def format_string_arg_occurence(fmt_string: Optional[str], arg_name: str) -> int:
     if fmt_string is None:
         return 0
     fmt_args = get_format_string_keys(fmt_string)
     return fmt_args.count(arg_name)
 
 
-def format_string_args_occurence(fmt_string, arg_names) -> int:
+def format_string_args_occurence(
+    fmt_string: Optional[str], arg_names: list[str]
+) -> int:
     if fmt_string is None:
         return 0
     count = 0
@@ -1995,7 +2016,10 @@ def format_string_args_occurence(fmt_string, arg_names) -> int:
     return count
 
 
-def format_strings_args_occurence(fmt_strings, arg_names) -> int:
+def format_strings_args_occurence(
+    fmt_strings: list[Optional[str]],
+    arg_names: list[str]
+) -> int:
     count = 0
     for f in fmt_strings:
         count += format_string_args_occurence(f, arg_names)
@@ -2011,10 +2035,10 @@ def validate_format(
             dummy_cm, "" if has_content else None, "" if has_filename else None
         )
         unnamed_key_count = 0
-        fmt_keys = get_format_string_keys(
-            conf.resolve_attrib_path(
-                attrib_path, unescape_string if unescape else None)
-        )
+        fmt_keys = get_format_string_keys(conf.resolve_attrib_path(
+            attrib_path,
+            unescape_string if unescape else None
+        ))
         named_arg_count = 0
         for k in fmt_keys:
             if k == "":
@@ -2035,7 +2059,7 @@ def validate_format(
 # we need ctx because mc.ctx is stil None before we apply_defaults
 
 
-def gen_default_format(mc: MatchChain):
+def gen_default_format(mc: MatchChain) -> str:
     form = "dl_"
     # if max was not set it is 'inf' which has length 3 which is a fine default
     didigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
@@ -2134,16 +2158,18 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
     ) > 0
 
     mc.need_output_multipass = any(
-        format_string_arg_occurence(of, "c") for of in output_formats
+        format_string_arg_occurence(of, "c") for of in output_formats 
     )
 
     if mc.filename_default_format is None:
         if mc.need_filename:
             default_format = gen_default_format(mc)
-            mc.filename_default_format = cast(str, default_format) + ".dat"
+            mc.filename_default_format = default_format + ".dat"
     else:
-        validate_format(mc, ["filename_default_format"],
-                        dummy_cm, True, False, False)
+        validate_format(
+            mc, ["filename_default_format"],
+            dummy_cm, True, False, False
+        )
 
     if mc.label_default_format is None:
         if mc.label_allow_missing and mc.need_label:
@@ -2164,7 +2190,8 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
 
 def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]]]:
     assert ctx.selenium_driver is not None
-    cookies: list[dict[str, Any]] = ctx.selenium_driver.get_cookies()
+    # the selenium function isn't type annotated properly
+    cookies: list[dict[str, Any]] = ctx.selenium_driver.get_cookies() # type: ignore
     cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
     for ck in cookies:
         if cast(str, ck["domain"]) not in cookie_dict:
@@ -2206,12 +2233,15 @@ def load_cookie_jar(ctx: ScrContext) -> None:
             ctx.cookie_dict[cookie.domain] = {cookie.name: ck}
 
 
-def get_random_user_agent():
+def get_random_user_agent() -> UserAgent:
     # since this initialization is very slow, we cache it
     # this is mainly useful for the repl where the uar value can change
     if not hasattr(get_random_user_agent, "instance"):
-        get_random_user_agent.instance = UserAgent()
-    return get_random_user_agent.instance.get_random_user_agent()
+        get_random_user_agent.__dict__["instance"] = UserAgent()
+    return cast(
+        UserAgent,
+        get_random_user_agent.__dict__["instance"]
+    ).get_random_user_agent()
 
 
 def setup(ctx: ScrContext, for_repl: bool = False) -> None:
@@ -2314,7 +2344,7 @@ def prompt_yes_no(prompt_text: str, default: Optional[bool] = None) -> Optional[
 def selenium_get_url(ctx: ScrContext) -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
-        return ctx.selenium_driver.current_url
+        return cast(str, ctx.selenium_driver.current_url)
     except (SeleniumWebDriverException, SeleniumMaxRetryError) as e:
         report_selenium_died(ctx)
         return None
@@ -2347,15 +2377,13 @@ def gen_dl_temp_name(
 def selenium_download_from_local_file(
     cm: ContentMatch
 ) -> tuple[Optional[str], ContentFormat, str]:
-    path = cast(str, cm.clm.result)
-    return path, ContentFormat.FILE, os.path.basename(path)
+    return cm.clm.result, ContentFormat.FILE, os.path.basename(cm.clm.result)
 
 
 def selenium_download_external(
     cm: ContentMatch
 ) -> tuple[Optional[MinimalInputStream], ContentFormat, Optional[str]]:
     proxies = None
-    path = cast(str, cm.clm.result)
     if cm.mc.ctx.selenium_variant == SeleniumVariant.TORBROWSER:
         tbdriver = cast(TorBrowserDriver, cm.mc.ctx.selenium_driver)
         proxies = {
@@ -2366,7 +2394,8 @@ def selenium_download_external(
     try:
         try:
             req = request_raw(
-                cm.mc.ctx, path, cast(urllib.parse.ParseResult, cm.url_parsed),
+                cm.mc.ctx, cm.clm.result, cast(
+                    urllib.parse.ParseResult, cm.url_parsed),
                 load_selenium_cookies(cm.mc.ctx),
                 proxies=proxies, stream=True
             )
@@ -2376,12 +2405,12 @@ def selenium_download_external(
                 request_try_get_filename(req)
             )
         except requests.exceptions.RequestException as ex:
-            raise request_exception_to_Scr_fetch_error(ex)
+            raise request_exception_to_scr_fetch_error(ex)
     except ScrFetchError as ex:
         log(
             cm.mc.ctx, Verbosity.ERROR,
             f"{truncate(cm.doc.path)}{get_ci_di_context(cm)}: "
-            + f"failed to download '{truncate(path)}': {str(ex)}"
+            + f"failed to download '{truncate(cm.clm.result)}': {str(ex)}"
         )
         return None, ContentFormat.STREAM, ""
 
@@ -2414,9 +2443,8 @@ def selenium_download_internal(
         document.body.removeChild(a);
     """
     try:
-        cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver).execute_script(
-            script_source, cm.clm.result, tmp_filename
-        )
+        selenium_exec_script(cm.mc.ctx, script_source,
+                             cm.clm.result, tmp_filename)
     except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
             report_selenium_died(cm.mc.ctx)
@@ -2483,9 +2511,7 @@ def selenium_download_fetch(
     driver = cast(SeleniumWebDriver, cm.mc.ctx.selenium_driver)
     try:
         doc_url = driver.current_url
-        res = driver.execute_script(
-            script_source, cm.clm.result
-        )
+        res = selenium_exec_script(cm.mc.ctx, script_source, cm.clm.result)
     except SeleniumWebDriverException as ex:
         if selenium_has_died(cm.mc.ctx):
             report_selenium_died(cm.mc.ctx)
@@ -2549,18 +2575,18 @@ def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
     assert cm.url_parsed is not None
     if cm.url_parsed.scheme == "data":
         res = urllib.request.urlopen(
-            cast(str, cm.clm.result),
+            cm.clm.result,
             timeout=cm.mc.ctx.request_timeout_seconds
         )
         try:
             data = res.read()
         finally:
             res.close()
-        return data
+        return cast(bytes, data)
     return None
 
 
-def request_exception_to_Scr_fetch_error(ex: requests.exceptions.RequestException):
+def request_exception_to_scr_fetch_error(ex: requests.exceptions.RequestException) -> ScrFetchError:
     if isinstance(ex, requests.exceptions.InvalidURL):
         return ScrFetchError("invalid url")
     if isinstance(ex, requests.exceptions.ConnectionError):
@@ -2573,8 +2599,8 @@ def request_exception_to_Scr_fetch_error(ex: requests.exceptions.RequestExceptio
 def request_raw(
     ctx: ScrContext, path: str, path_parsed: urllib.parse.ParseResult,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
-    proxies=None, stream=False
-):
+    proxies: Optional[dict[str, Optional[str]]] = None, stream: bool = False
+) -> requests.Response:
     hostname = path_parsed.hostname if path_parsed.hostname else ""
     if cookie_dict is None:
         cookie_dict = ctx.cookie_dict
@@ -2629,7 +2655,7 @@ def requests_dl(
         req.close()
         return data, encoding
     except requests.exceptions.RequestException as ex:
-        raise request_exception_to_Scr_fetch_error(ex)
+        raise request_exception_to_scr_fetch_error(ex)
 
 
 def report_selenium_died(ctx: ScrContext, is_err: bool = True) -> None:
@@ -2650,7 +2676,7 @@ def advance_output_formatters(output_formatters: list[OutputFormatter], buf: Opt
             del output_formatters[i]
 
 
-def selenium_get_full_page_source(ctx: ScrContext):
+def selenium_get_full_page_source(ctx: ScrContext) -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     doc_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
@@ -3043,9 +3069,7 @@ def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> l
             None,
             dlm
         )
-        ndoc.dfmatch = mc.document.apply_format_for_document_match(
-            ndoc, mc, dlm
-        )
+        mc.document.apply_format_for_document_match(ndoc, mc, dlm)
         ndoc.path, ndoc.path_parsed = normalize_link(
             mc.ctx, mc, doc, last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
@@ -3154,7 +3178,7 @@ def handle_interactive_chains(
     return result, msg
 
 
-def match_chain_was_satisfied(mc: MatchChain):
+def match_chain_was_satisfied(mc: MatchChain) -> tuple[bool, bool]:
     satisfied = False
     interactive = False
     if not mc.ctx.selenium_variant.enabled() or mc.selenium_strategy is SeleniumStrategy.PLAIN:
@@ -3175,7 +3199,7 @@ def match_chain_was_satisfied(mc: MatchChain):
     return satisfied, interactive
 
 
-def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> bool:
+def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
             mc, doc, last_doc_path
@@ -3426,11 +3450,11 @@ def finalize(ctx: ScrContext) -> None:
             ctx.downloads_temp_dir = None
 
 
-def begins(string, begin) -> bool:
+def begins(string: str, begin: str) -> bool:
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 
 
-def parse_mc_range_int(ctx: ScrContext, v, arg) -> int:
+def parse_mc_range_int(ctx: ScrContext, v: str, arg: str) -> int:
     try:
         return int(v)
     except ValueError as ex:
@@ -3544,7 +3568,7 @@ def parse_mc_arg_as_range(ctx: ScrContext, argname: str, argval: str) -> list[Ma
 def apply_mc_arg(
     ctx: ScrContext, argname: str, config_opt_names: list[str], arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
-    support_blank=False, blank_value: str = ""
+    support_blank: bool = False, blank_value: str = ""
 ) -> bool:
     parse_result = parse_mc_arg(
         ctx, argname, arg, support_blank, blank_value)
@@ -3825,7 +3849,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                 try:
                     setup(ctx, True)
                 except ScrSetupError as ex:
-                    log(cast(ScrContext, ctx), Verbosity.ERROR, str(ex))
+                    log(ctx, Verbosity.ERROR, str(ex))
                     if ctx.exit:
                         stable_ctx = ctx
                         return ctx.error_code
@@ -3837,7 +3861,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
         finalize(stable_ctx)
 
 
-def match_traditional_cli_arg(arg, true_opt_name, aliases) -> Optional[bool]:
+def match_traditional_cli_arg(arg: str, true_opt_name: str, aliases: set[str]) -> Optional[bool]:
     tolen = len(true_opt_name)
     arglen = len(arg)
     if begins(arg, f"{true_opt_name}"):
@@ -3852,10 +3876,10 @@ def match_traditional_cli_arg(arg, true_opt_name, aliases) -> Optional[bool]:
 
 def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
     for arg in args:
-        if match_traditional_cli_arg(arg, "help", ["-h", "--help"]):
+        if match_traditional_cli_arg(arg, "help", {"-h", "--help"}):
             help()
             sys.exit(0)
-        if match_traditional_cli_arg(arg, "version", ["-v", "--version"]):
+        if match_traditional_cli_arg(arg, "version", {"-v", "--version"}):
             print(f"scr {VERSION}")
             sys.exit(0)
 
