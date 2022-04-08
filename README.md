@@ -28,7 +28,7 @@ scr> exit
 
 ### Interactively scroll through top reddit posts (max to page 42) :
 ```bash 
-scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=42
+scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=42 mt=0
 ```
 
 ### Download the first 10 pdfs from a site and add their number (zero padded) before the filename:
