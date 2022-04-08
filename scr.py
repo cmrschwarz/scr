@@ -3,6 +3,7 @@
 from codecs import strict_errors
 import functools
 import subprocess
+from unittest import expectedFailure
 import selenium.webdriver
 from abc import ABC, abstractmethod
 import multiprocessing
@@ -25,6 +26,7 @@ import xml.sax.saxutils
 import select
 import textwrap
 import re
+import math
 import concurrent.futures
 import os
 from string import Formatter
@@ -73,8 +75,9 @@ DEFAULT_TIMEOUT_SECONDS = 30
 
 DOWNLOAD_STATUS_LOG_ELEMENTS = 20
 DOWNLOAD_STATUS_LOG_TIME = 10
-DOWNLOAD_STATUS_NAME_LENGTH = 50
-DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.5
+DOWNLOAD_STATUS_NAME_LENGTH = 60
+DOWNLOAD_STATUS_BAR_LENGTH = 30
+DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.1
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
@@ -1199,19 +1202,18 @@ class DownloadStatusReport:
     name: str
     expected_size: Optional[int] = None
     downloaded_size: int = 0
-    file_size: Optional[int] = None
-    start_time: datetime.time
-    download_manager: 'DownloadManager'
+    start_time: datetime.datetime
     updates: deque[tuple[datetime.datetime, int]]
     download_finished: bool = False
+    download_manager: 'DownloadManager'
 
     def __init__(self, download_manager: 'DownloadManager') -> None:
-        self.download_manager = download_manager
         self.updates = deque()
+        self.download_manager = download_manager
 
     def gen_display_name(
         self,
-        url: urllib.parse.ParseResult,
+        url: Optional[urllib.parse.ParseResult],
         filename: Optional[str],
         save_path: Optional[str]
     ) -> None:
@@ -1222,7 +1224,7 @@ class DownloadStatusReport:
             self.name = os.path.basename(save_path)
         elif filename:
             self.name = filename
-        else:
+        elif url is not None:
             url_str = url.geturl()
             if len(url_str) < DOWNLOAD_STATUS_NAME_LENGTH:
                 self.name = url_str
@@ -1231,6 +1233,8 @@ class DownloadStatusReport:
                 "~~ "
                 + url._replace(fragment="", scheme="", query="").geturl()
             )
+        else:
+            self.name = "<unnamed download>"
         self.name = truncate(
             self.name, DOWNLOAD_STATUS_NAME_LENGTH
         )
@@ -1246,6 +1250,7 @@ class DownloadStatusReport:
     def enqueue(self) -> None:
         with self.download_manager.status_report_lock:
             self.download_manager.download_status_reports.append(self)
+        self.start_time = datetime.datetime.now()
 
     def finished(self) -> None:
         with self.download_manager.status_report_lock:
@@ -1471,7 +1476,8 @@ class DownloadJob:
                     method: 'GET',
                 })
                 .then(res => {
-                    content_disposition = res.headers.get('Content-Disposition'); 
+                    content_disposition = res.headers.get(
+                        'Content-Disposition');
                     return res.blob();
                 })
                 .then((blob, cd) => new Promise((resolve, reject) => {
@@ -1666,6 +1672,9 @@ class DownloadJob:
 
     def run_job(self) -> bool:
         if self.status_report:
+            self.status_report.gen_display_name(
+                self.cm.url_parsed, self.filename, self.save_path
+            )
             self.status_report.enqueue()
         success = False
         try:
@@ -1750,6 +1759,33 @@ class DownloadJob:
                     )
 
 
+class StatusReportLine:
+    name: str
+    expected_size: Optional[int]
+    downloaded_size: int
+    speed_calculatable: bool
+    speed_frame_start: datetime.datetime
+    speed_frame_end: datetime.datetime
+    speed_frame_size_start: int
+    speed_frame_size_end: int
+    star_pos: int = 1
+    star_dir: int = 1
+    last_line_length: int = 0
+
+
+BYTE_SIZE_STRING_LEN_MAX = 10
+
+
+def get_byte_size_string(size: int) -> str:
+    if size < 2**10:
+        return f"{size:03} B"
+    units = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
+    unit = int(math.log(size, 1024))
+    if unit >= len(units):
+        return "??? B"  # good look with your download
+    return f"{float(size)/2**(10 * unit):.2f} {units[unit - 1]}iB"
+
+
 class DownloadManager:
     ctx: ScrContext
     max_threads: int
@@ -1788,15 +1824,101 @@ class DownloadManager:
                 x.result()
             self.pending_jobs.clear()
 
-        report_setup = False
+        committed_report_line_count = 0
+        report_lines: list[StatusReportLine] = []
         while True:
             results = concurrent.futures.wait(
                 self.pending_jobs,
-                timeout=0 if not report_setup else DOWNLOAD_STATUS_REFRESH_INTERVAL
+                timeout=0 if not committed_report_line_count else DOWNLOAD_STATUS_REFRESH_INTERVAL
             )
             for x in results.done:
                 x.result()
             self.pending_jobs = results.not_done
+            if not self.pending_jobs:
+                # otherwise print one more report so everything is displayed as done
+                if not committed_report_line_count:
+                    break
+            with self.status_report_lock:
+                # when we have more reports than report lines,
+                # we remove the oldest finished report
+                # if none are finished, we get more report lines
+                if len(self.download_status_reports) > len(report_lines):
+                    i = 0
+                    while i < len(self.download_status_reports):
+                        if self.download_status_reports[i].download_finished:
+                            del self.download_status_reports[i]
+                            if len(self.download_status_reports) == len(report_lines):
+                                break
+                        else:
+                            i += 1
+                    else:
+                        for i in range(len(self.download_status_reports) - len(report_lines)):
+                            report_lines.append(StatusReportLine())
+                for i in range(len(report_lines)):
+                    rl = report_lines[i]
+                    dsr = self.download_status_reports[i]
+                    rl.name = dsr.name
+                    rl.expected_size = dsr.expected_size
+                    rl.downloaded_size = dsr.downloaded_size
+                    if not len(dsr.updates):
+                        rl.speed_calculatable = False
+                    elif len(dsr.updates) == 1:
+                        rl.speed_calculatable = True
+                        rl.speed_frame_start = dsr.start_time
+                        rl.speed_frame_size_start = 0
+                        rl.speed_frame_end = dsr.updates[0][0]
+                        rl.speed_frame_size_end = dsr.updates[0][1]
+                    else:
+                        rl.speed_calculatable = True
+                        rl.speed_frame_start = dsr.updates[0][0]
+                        rl.speed_frame_size_start = dsr.updates[0][1]
+                        rl.speed_frame_end = dsr.updates[-1][0]
+                        rl.speed_frame_size_end = dsr.updates[-1][1]
+                    if dsr.download_finished:
+                        rl.expected_size = rl.downloaded_size
+            if len(report_lines) == 0:
+                continue
+            name_length_max = max(map(lambda rl: len(rl.name), report_lines))
+            report = ""
+            if committed_report_line_count:
+                report += f"\x1B[{committed_report_line_count}A"
+            for rl in report_lines:
+                line = rl.name
+                line += " " * (3 + name_length_max - len(line))
+                if rl.expected_size and rl.expected_size >= rl.downloaded_size:
+                    frac = float(rl.downloaded_size) / rl.expected_size
+                    filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
+                    empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
+                    tip = ">" if rl.downloaded_size != rl.expected_size else "="
+                    line += "[" + "=" * filled + tip + " " * empty + "]"
+                else:
+                    left = rl.star_pos - 1
+                    right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
+                    line += "[" + " " * left + "***" + " " * right + "]"
+                    if rl.star_pos == DOWNLOAD_STATUS_BAR_LENGTH - 2:
+                        rl.star_dir = -1
+                    elif rl.star_pos == 1:
+                        rl.star_dir = 1
+                    rl.star_pos += rl.star_dir
+                line += " "
+                bss = get_byte_size_string(rl.downloaded_size)
+                bss += " / "
+                if rl.expected_size:
+                    bss += get_byte_size_string(rl.expected_size)
+                else:
+                    bss += "??? B"
+                line += " " * (2 * BYTE_SIZE_STRING_LEN_MAX + 2 - len(bss))
+                line += bss
+                if len(line) < rl.last_line_length:
+                    lll = len(line)
+                    # fill with spaces to clear previous line
+                    line += " " * (rl.last_line_length - lll)
+                    rl.last_line_length = lll
+                else:
+                    rl.last_line_length = len(line)
+                report += line + "\n"
+            committed_report_line_count = len(report_lines)
+            sys.stdout.write(report)
             if not self.pending_jobs:
                 break
 
