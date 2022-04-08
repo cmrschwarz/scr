@@ -2856,7 +2856,10 @@ def sanitize_filename(filename: Optional[str]) -> Optional[str]:
 def try_get_filename_from_content_disposition(content_dispositon: Optional[str]) -> Optional[str]:
     if not content_dispositon:
         return None
-    return sanitize_filename(pyrfc6266.parse_filename(content_dispositon))
+    try:
+        return sanitize_filename(pyrfc6266.parse_filename(content_dispositon))
+    except pyparsing.exceptions.ParseException as ex:
+        return None
 
 
 def request_try_get_filename(res: requests.Response) -> Optional[str]:
