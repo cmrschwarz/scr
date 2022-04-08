@@ -991,6 +991,7 @@ class ScrContext(ConfigDataClass):
     defaults_mc: MatchChain
     origin_mc: MatchChain
     error_code: int = 0
+    abort: bool = False
 
     def __init__(self, blank: bool = False) -> None:
         super().__init__(blank)
@@ -1650,7 +1651,6 @@ class DownloadJob:
         except ScrFetchError as ex:
             log(self.cm.mc.ctx, Verbosity.ERROR,
                 f"{self.context}: failed to open file '{truncate(self.content)}': {str(ex)}")
-            self.aborted = True
             return False
         if self.content_format == ContentFormat.TEMP_FILE:
             self.temp_file_path = self.content
@@ -1666,12 +1666,15 @@ class DownloadJob:
             stream: Union[PrintOutputStream, BinaryIO] = self.print_stream
         else:
             stream = sys.stdout.buffer
-        content = self.content
         self.output_formatters.append(OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
             stream, self.content, self.filename
         ))
         return True
+
+    def check_abort(self):
+        if self.cm.mc.ctx.abort:
+            raise InterruptedError
 
     def run_job(self) -> bool:
         if self.status_report:
@@ -1686,6 +1689,7 @@ class DownloadJob:
             if not self.fetch_content():
                 return False
 
+            self.check_abort()
             self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
                 cast(Union[BinaryIO, MinimalInputStream], self.content)
                 if self.content_format == ContentFormat.STREAM
@@ -1698,11 +1702,13 @@ class DownloadJob:
                 return False
             if not self.setup_print_output():
                 return False
+            self.check_abort()
 
             if self.content_stream is None:
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
+                    self.check_abort()
                 success = True
                 return True
 
@@ -1714,12 +1720,14 @@ class DownloadJob:
                 except IOError as ex:
                     return False
                 self.multipass_file = self.temp_file
+                self.check_abort()
 
             if self.content_stream is not None:
                 while True:
                     buf = self.content_stream.read(
                         DEFAULT_RESPONSE_BUFFER_SIZE
                     )
+                    self.check_abort()
                     if self.status_report:
                         self.status_report.submit_update(len(buf))
                     advance_output_formatters(self.output_formatters, buf)
@@ -1737,11 +1745,14 @@ class DownloadJob:
                     while True:
                         buf = self.multipass_file.read(
                             DEFAULT_RESPONSE_BUFFER_SIZE)
+                        self.check_abort()
                         advance_output_formatters(self.output_formatters, buf)
                         if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
                             break
             success = True
             return True
+        except InterruptedError:
+            return False
         finally:
             if self.status_report:
                 self.status_report.finished()
@@ -1765,7 +1776,6 @@ class DownloadJob:
 class StatusReportLine:
     name: str
     expected_size: Optional[int]
-
     downloaded_size: int
     speed_calculatable: bool
     download_begin: datetime.datetime
@@ -1778,6 +1788,13 @@ class StatusReportLine:
     star_dir: int = 1
     last_line_length: int = 0
     finished: bool = False
+
+    bar_str: str
+    downloaded_size_str: str
+    expected_size_str: str
+    speed_str: str
+    eta_str: str
+    total_time_str: str
 
 
 BYTE_SIZE_STRING_LEN_MAX = 10
@@ -1813,8 +1830,12 @@ def get_timespan_string(ts: float) -> str:
     return "??? days"
 
 
-def lpad(string: str, tgt_len: int) -> str:
-    return " " * max(0, tgt_len - len(string)) + string
+def lpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
+    return " " * max(min_pad, tgt_len - len(string)) + string
+
+
+def rpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
+    return string + " " * max(min_pad, tgt_len - len(string))
 
 
 class DownloadManager:
@@ -1848,6 +1869,147 @@ class DownloadManager:
             dj.request_status_report(self)
         self.pending_jobs.add(self.executor.submit(dj.run_job))
 
+    def load_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
+        with self.status_report_lock:
+            # when we have more reports than report lines,
+            # we remove the oldest finished report
+            # if none are finished, we get more report lines
+            if len(self.download_status_reports) > len(report_lines):
+                i = 0
+                while i < len(self.download_status_reports):
+                    if self.download_status_reports[i].download_finished:
+                        del self.download_status_reports[i]
+                        if len(self.download_status_reports) == len(report_lines):
+                            break
+                    else:
+                        i += 1
+                else:
+                    for i in range(len(self.download_status_reports) - len(report_lines)):
+                        report_lines.append(StatusReportLine())
+            for i in range(len(report_lines)):
+                rl = report_lines[i]
+                dsr = self.download_status_reports[i]
+                rl.name = dsr.name
+                rl.expected_size = dsr.expected_size
+                rl.downloaded_size = dsr.downloaded_size
+                rl.download_begin = dsr.download_begin_time
+                rl.download_end = dsr.download_end_time
+                rl.finished = dsr.download_finished
+                if not len(dsr.updates):
+                    rl.speed_calculatable = False
+                elif len(dsr.updates) == 1:
+                    rl.speed_calculatable = True
+                    rl.speed_frame_time_begin = dsr.download_begin_time
+                    rl.speed_frame_size_begin = 0
+                    rl.speed_frame_time_end = dsr.updates[0][0]
+                    rl.speed_frame_size_end = dsr.updates[0][1]
+                else:
+                    rl.speed_calculatable = True
+                    rl.speed_frame_time_begin = dsr.updates[0][0]
+                    rl.speed_frame_size_begin = dsr.updates[0][1]
+                    rl.speed_frame_time_end = dsr.updates[-1][0]
+                    rl.speed_frame_size_end = dsr.updates[-1][1]
+
+    def stringify_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
+        now = datetime.datetime.now()
+        for rl in report_lines:
+            if rl.finished:
+                rl.expected_size = rl.downloaded_size
+            if rl.expected_size and rl.expected_size >= rl.downloaded_size:
+                frac = float(rl.downloaded_size) / rl.expected_size
+                filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
+                empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
+                tip = ">" if rl.downloaded_size != rl.expected_size else "="
+                rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
+            else:
+                left = rl.star_pos - 1
+                right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
+                rl.bar_str = "[" + " " * left + "***" + " " * right + "]"
+                if rl.star_pos == DOWNLOAD_STATUS_BAR_LENGTH - 2:
+                    rl.star_dir = -1
+                elif rl.star_pos == 1:
+                    rl.star_dir = 1
+                rl.star_pos += rl.star_dir
+            rl.downloaded_size_str = get_byte_size_string(
+                rl.downloaded_size
+            )
+            if rl.expected_size:
+                rl.expected_size_str = get_byte_size_string(
+                    rl.expected_size
+                )
+            else:
+                rl.expected_size_str = "??? B"
+
+            if rl.finished:
+                rl.speed_frame_size_begin = 0
+                rl.speed_frame_time_begin = rl.download_begin
+                rl.speed_frame_size_end = rl.downloaded_size
+                rl.speed_frame_time_end = rl.download_end
+                rl.speed_calculatable = True
+            else:
+                rl.download_end = now
+            if rl.speed_calculatable:
+                duration = (
+                    (rl.speed_frame_time_end -
+                        rl.speed_frame_time_begin).total_seconds()
+                )
+                handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
+                if handled_size == 0:
+                    speed = 0.0
+                    rl.eta_str = ""
+                else:
+                    speed = float(handled_size) / duration
+                    if rl.expected_size and rl.expected_size > rl.downloaded_size:
+                        rl.eta_str = get_timespan_string(
+                            (rl.expected_size - rl.downloaded_size) /
+                            speed
+                        )
+                    else:
+                        rl.eta_str = ""
+                rl.speed_str = get_byte_size_string(speed) + "/s"
+            else:
+                rl.speed_frame_time_end = now
+                rl.eta_str = ""
+                rl.speed_str = "??? B/s"
+
+            rl.total_time_str = get_timespan_string(
+                (rl.download_end - rl.download_begin).total_seconds()
+            )
+
+    def append_status_report_lines_to_string(self, report_lines: list[StatusReportLine], report: str) -> str:
+        name_lm = max(map(lambda rl: len(rl.name), report_lines))
+        downloaded_size_lm = max(
+            map(lambda rl: len(rl.downloaded_size_str), report_lines)
+        )
+        expected_size_lm = max(
+            map(lambda rl: len(rl.expected_size_str), report_lines)
+        )
+        speed_lm = max(map(lambda rl: len(rl.speed_str), report_lines))
+        eta_lm = max(map(lambda rl: len(rl.eta_str), report_lines))
+        total_time_lm = max(
+            map(lambda rl: len(rl.total_time_str), report_lines)
+        )
+        for rl in report_lines:
+            line = rpad(rl.name, name_lm, 1)
+            line += rl.bar_str
+
+            line += " eta " + lpad(rl.eta_str, eta_lm)
+            line += lpad(rl.downloaded_size_str, downloaded_size_lm, 1)
+            line += " / "
+            line += rpad(rl.expected_size_str, expected_size_lm, 1)
+            line += lpad(rl.speed_str, speed_lm) + " "
+            line += rpad(rl.total_time_str, total_time_lm) + " total"
+
+            if len(line) < rl.last_line_length:
+                lll = len(line)
+                # fill with spaces to clear previous line
+                line += " " * (rl.last_line_length - lll)
+                rl.last_line_length = lll
+            else:
+                rl.last_line_length = len(line)
+            report += line + "\n"
+        return report
+
     def wait_until_jobs_done(self) -> None:
         if not self.enable_status_reports:
             results = concurrent.futures.wait(self.pending_jobs)
@@ -1869,144 +2031,30 @@ class DownloadManager:
                 # otherwise print one more report so everything is displayed as done
                 if not committed_report_line_count:
                     break
-            now = datetime.datetime.now()
-            with self.status_report_lock:
-                # when we have more reports than report lines,
-                # we remove the oldest finished report
-                # if none are finished, we get more report lines
-                if len(self.download_status_reports) > len(report_lines):
-                    i = 0
-                    while i < len(self.download_status_reports):
-                        if self.download_status_reports[i].download_finished:
-                            del self.download_status_reports[i]
-                            if len(self.download_status_reports) == len(report_lines):
-                                break
-                        else:
-                            i += 1
-                    else:
-                        for i in range(len(self.download_status_reports) - len(report_lines)):
-                            report_lines.append(StatusReportLine())
-                for i in range(len(report_lines)):
-                    rl = report_lines[i]
-                    dsr = self.download_status_reports[i]
-                    rl.name = dsr.name
-                    rl.expected_size = dsr.expected_size
-                    rl.downloaded_size = dsr.downloaded_size
-                    rl.download_begin = dsr.download_begin_time
-                    rl.download_end = dsr.download_end_time
-                    rl.finished = dsr.download_finished
-                    if not len(dsr.updates):
-                        rl.speed_calculatable = False
-                    elif len(dsr.updates) == 1:
-                        rl.speed_calculatable = True
-                        rl.speed_frame_time_begin = dsr.download_begin_time
-                        rl.speed_frame_size_begin = 0
-                        rl.speed_frame_time_end = dsr.updates[0][0]
-                        rl.speed_frame_size_end = dsr.updates[0][1]
-                    else:
-                        rl.speed_calculatable = True
-                        rl.speed_frame_time_begin = dsr.updates[0][0]
-                        rl.speed_frame_size_begin = dsr.updates[0][1]
-                        rl.speed_frame_time_end = dsr.updates[-1][0]
-                        rl.speed_frame_size_end = dsr.updates[-1][1]
-
+            self.load_status_report_lines(report_lines)
             if len(report_lines) == 0:
                 continue
-            name_length_max = max(map(lambda rl: len(rl.name), report_lines))
+            self.stringify_status_report_lines(report_lines)
             report = ""
             if committed_report_line_count:
                 report += f"\x1B[{committed_report_line_count}A"
-            for rl in report_lines:
-                line = rl.name
-                line += " " * (2 + name_length_max - len(line))
-                if rl.finished:
-                    rl.expected_size = rl.downloaded_size
-                if rl.expected_size and rl.expected_size >= rl.downloaded_size:
-                    frac = float(rl.downloaded_size) / rl.expected_size
-                    filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
-                    empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
-                    tip = ">" if rl.downloaded_size != rl.expected_size else "="
-                    line += "[" + "=" * filled + tip + " " * empty + "]"
-                else:
-                    left = rl.star_pos - 1
-                    right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
-                    line += "[" + " " * left + "***" + " " * right + "]"
-                    if rl.star_pos == DOWNLOAD_STATUS_BAR_LENGTH - 2:
-                        rl.star_dir = -1
-                    elif rl.star_pos == 1:
-                        rl.star_dir = 1
-                    rl.star_pos += rl.star_dir
-                line += " "
-                line += lpad(
-                    get_byte_size_string(rl.downloaded_size),
-                    BYTE_SIZE_STRING_LEN_MAX
-                )
-                line += " / "
-                if rl.expected_size:
-                    expected = get_byte_size_string(rl.expected_size)
-                else:
-                    expected = "??? B"
-                line += lpad(expected, BYTE_SIZE_STRING_LEN_MAX)
-
-                if rl.finished:
-                    rl.speed_frame_size_begin = 0
-                    rl.speed_frame_time_begin = rl.download_begin
-                    rl.speed_frame_size_end = rl.downloaded_size
-                    rl.speed_frame_time_end = rl.download_end
-                    rl.speed_calculatable = True
-                else:
-                    rl.download_end = now
-                if rl.speed_calculatable:
-                    duration = (
-                        (rl.speed_frame_time_end -
-                         rl.speed_frame_time_begin).total_seconds()
-                    )
-                    handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
-                    if handled_size == 0:
-                        speed_bytes_s = 0.0
-                        speed = get_byte_size_string(0)
-                        eta = None
-                    else:
-                        speed_bytes_s = float(handled_size) / duration
-                        if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                            eta = get_timespan_string(
-                                (rl.expected_size - rl.downloaded_size) /
-                                speed_bytes_s
-                            )
-                        else:
-                            eta = None
-                    speed = get_byte_size_string(speed_bytes_s)
-                else:
-                    rl.speed_frame_time_end = now
-                    eta = None
-                    speed = "??? B"
-                line += "  " + lpad(speed, BYTE_SIZE_STRING_LEN_MAX) + "/s"
-               
-                line += "  " + get_timespan_string(
-                    (rl.download_end - rl.download_begin).total_seconds()
-                ) + " elapsed"
-
-                if eta is not None:
-                    line += ", " + eta + " remaining"
-
-
-                if len(line) < rl.last_line_length:
-                    lll = len(line)
-                    # fill with spaces to clear previous line
-                    line += " " * (rl.last_line_length - lll)
-                    rl.last_line_length = lll
-                else:
-                    rl.last_line_length = len(line)
-                report += line + "\n"
+            report = self.append_status_report_lines_to_string(
+                report_lines, report)
             committed_report_line_count = len(report_lines)
             sys.stdout.write(report)
             if not self.pending_jobs:
                 break
 
     def terminate(self, cancel_running: bool = False) -> None:
-        if not cancel_running:
-            self.wait_until_jobs_done()
-        self.executor.shutdown(wait=True, cancel_futures=cancel_running)
+        try:
+            if not cancel_running:
+                cancel_running = True
+                self.wait_until_jobs_done()
+                cancel_running = False
+        finally:
+            if cancel_running:
+                self.ctx.abort = True
+            self.executor.shutdown(wait=True, cancel_futures=cancel_running)
 
 
 def abort_on_broken_pipe() -> None:
@@ -3772,9 +3820,13 @@ def finalize(ctx: ScrContext) -> None:
     if ctx.dl_manager:
         try:
             ctx.dl_manager.pom.main_thread_done()
-            ctx.dl_manager.terminate()
+            success = True
         finally:
+            if not success:
+                ctx.abort = True
+            ctx.dl_manager.terminate(ctx.abort)
             ctx.dl_manager = None
+
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_has_died(ctx):
         try:
             ctx.selenium_driver.close()
@@ -3787,6 +3839,7 @@ def finalize(ctx: ScrContext) -> None:
             shutil.rmtree(ctx.downloads_temp_dir)
         finally:
             ctx.downloads_temp_dir = None
+    success = True
 
 
 def begins(string: str, begin: str) -> bool:
@@ -4146,6 +4199,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
         ctx: Optional[ScrContext] = initial_ctx
+        success = False
         while True:
             try:
                 if ctx is not None:
@@ -4165,6 +4219,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                 except EOFError:
                     if tty:
                         print("")
+                    success = True
                     return 0
                 try:
                     args = shlex.split(line)
@@ -4197,6 +4252,8 @@ def run_repl(initial_ctx: ScrContext) -> int:
                 print("")
                 continue
     finally:
+        if not success:
+            stable_ctx.abort = True
         finalize(stable_ctx)
 
 
@@ -4386,15 +4443,17 @@ def run_scr() -> int:
     except ScrSetupError as ex:
         log_raw(Verbosity.ERROR, str(ex))
         return 1
-
     if ctx.repl:
         ec = run_repl(ctx)
     else:
         try:
             process_document_queue(ctx)
+            success = True
         except ScrMatchError as ex:
             log(ctx, Verbosity.ERROR, str(ex))
         finally:
+            if not success:
+                ctx.abort = True
             finalize(ctx)
         ec = ctx.error_code
     return ec
