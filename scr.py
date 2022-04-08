@@ -1672,7 +1672,7 @@ class DownloadJob:
         ))
         return True
 
-    def check_abort(self):
+    def check_abort(self) -> None:
         if self.cm.mc.ctx.abort:
             raise InterruptedError
 
@@ -1789,45 +1789,43 @@ class StatusReportLine:
     last_line_length: int = 0
     finished: bool = False
 
+    total_time_str: str
+    total_time_u_str: str
     bar_str: str
     downloaded_size_str: str
+    downloaded_size_u_str: str
     expected_size_str: str
+    expected_size_u_str: str
     speed_str: str
+    speed_u_str: str
     eta_str: str
-    total_time_str: str
+    eta_u_str: str
 
 
 BYTE_SIZE_STRING_LEN_MAX = 10
 
 
-def get_byte_size_string(size: Union[int, float]) -> str:
+def get_byte_size_string(size: Union[int, float]) -> tuple[str, str]:
     if size < 2**10:
         if type(size) is int:
-            return f"{size:03} B"
-        return f"{size:.2f} B"
+            return f"{size}", "B"
+        return f"{size:.2f}", "B"
     units = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
     unit = int(math.log(size, 1024))
     if unit >= len(units):
-        return "??? B"  # good look with your download
-    return f"{float(size)/2**(10 * unit):.2f} {units[unit - 1]}iB"
+        unit = len(units) - 1
+    return f"{float(size)/2**(10 * unit):.2f}", f"{units[unit - 1]}iB"
 
 
 TIMESPAN_STRING_LEN_MAX = 10
 
 
-def get_timespan_string(ts: float) -> str:
+def get_timespan_string(ts: float) -> tuple[str, str]:
     if ts < 60:
-        return f"{ts:.1f} s"
+        return f"{ts:.1f}", "s"
     if ts < 3600:
-        return f"{int(ts / 60)} min, {int(ts % 60):.1f} s"
-    if ts < 86400:
-        return f"{int(ts / 3600)} h, {int(ts / 60):.2f} min"
-    if ts < 86400 * 1000:
-        days = int(ts / 86400)
-        return f"{days} day{'s' if days > 1 else ''}, {int(ts / 3600):.2f} h"
-
-    # once again, good luck
-    return "??? days"
+        return f"{int(ts / 60):02}:{int(ts % 60):02}", "m"
+    return f"{int(ts / 3600):02}:{int((ts % 3600) / 60):02}:{int(ts % 60):02}", "h"
 
 
 def lpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
@@ -1930,15 +1928,15 @@ class DownloadManager:
                 elif rl.star_pos == 1:
                     rl.star_dir = 1
                 rl.star_pos += rl.star_dir
-            rl.downloaded_size_str = get_byte_size_string(
-                rl.downloaded_size
+            rl.downloaded_size_str, rl.downloaded_size_u_str = (
+                get_byte_size_string(rl.downloaded_size)
             )
             if rl.expected_size:
-                rl.expected_size_str = get_byte_size_string(
-                    rl.expected_size
+                rl.expected_size_str, rl.expected_size_u_str = (
+                    get_byte_size_string(rl.expected_size)
                 )
             else:
-                rl.expected_size_str = "??? B"
+                rl.expected_size_str, rl.expected_size_u_str = "???", "B"
 
             if rl.finished:
                 rl.speed_frame_size_begin = 0
@@ -1956,48 +1954,58 @@ class DownloadManager:
                 handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
                 if handled_size == 0:
                     speed = 0.0
-                    rl.eta_str = ""
+                    rl.eta_str, rl.eta_u_str = "", ""
                 else:
                     speed = float(handled_size) / duration
                     if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                        rl.eta_str = "eta " + get_timespan_string(
-                            (rl.expected_size - rl.downloaded_size) /
-                            speed
+                        rl.eta_str, rl.eta_u_str = get_timespan_string(
+                            (rl.expected_size - rl.downloaded_size) / speed
                         )
                     else:
-                        rl.eta_str = ""
-                rl.speed_str = get_byte_size_string(speed) + "/s"
+                        rl.eta_str, rl.eta_u_str = "", ""
+                rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
+                rl.speed_u_str += "/s"
             else:
                 rl.speed_frame_time_end = now
-                rl.eta_str = ""
-                rl.speed_str = "??? B/s"
+                rl.eta_str, rl.eta_u_str = "", ""
+                rl.speed_str, rl.speed_u_str = "???", "B/s"
 
-            rl.total_time_str = get_timespan_string(
+            rl.total_time_str, rl.total_time_u_str = get_timespan_string(
                 (rl.download_end - rl.download_begin).total_seconds()
             )
 
     def append_status_report_lines_to_string(self, report_lines: list[StatusReportLine], report: str) -> str:
-        name_lm = max(map(lambda rl: len(rl.name), report_lines))
-        downloaded_size_lm = max(
-            map(lambda rl: len(rl.downloaded_size_str), report_lines)
-        )
-        expected_size_lm = max(
-            map(lambda rl: len(rl.expected_size_str), report_lines)
-        )
-        speed_lm = max(map(lambda rl: len(rl.speed_str), report_lines))
-        eta_lm = max(map(lambda rl: len(rl.eta_str), report_lines))
-        total_time_lm = max(
-            map(lambda rl: len(rl.total_time_str), report_lines)
-        )
+        def field_len_max(field_name: str) -> int:
+            return max(map(lambda rl: len(rl.__dict__[field_name]), report_lines))
+
+        name_lm = field_len_max("name")
+        total_time_lm = field_len_max("total_time_str")
+        total_time_u_lm = field_len_max("total_time_u_str")
+        downloaded_size_lm = field_len_max("downloaded_size_str")
+        downloaded_size_u_lm = field_len_max("downloaded_size_u_str")
+        expected_size_lm = field_len_max("expected_size_str")
+        expected_size_u_lm = field_len_max("expected_size_u_str")
+        eta_lm = field_len_max("eta_str")
+        eta_u_lm = field_len_max("eta_u_str")
+        speed_lm = field_len_max("speed_str")
+        speed_u_lm = field_len_max("speed_u_str")
+
         for rl in report_lines:
             line = rpad(rl.name, name_lm, 1)
-            line += lpad(rl.total_time_str, total_time_lm)
-            line += " " + rl.bar_str
-            line += lpad(rl.downloaded_size_str, downloaded_size_lm, 1)
-            line += " / "
-            line += rpad(rl.expected_size_str, expected_size_lm, 1)
-            line += lpad(rl.speed_str, speed_lm) + " "
-            line += lpad(rl.eta_str, eta_lm)
+            line += lpad(rl.total_time_str, total_time_lm) + " "
+            line += rpad(rl.total_time_u_str, total_time_u_lm, 1)
+            line += rl.bar_str
+            line += lpad(rl.downloaded_size_str, downloaded_size_lm, 1) + " "
+            line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm, 1)
+            line += "/"
+            line += lpad(rl.expected_size_str, expected_size_lm, 1) + " "
+            line += rpad(rl.expected_size_u_str, expected_size_u_lm, 1)
+            line += lpad(rl.speed_str, speed_lm, 1) + " "
+            line += rpad(rl.speed_u_str, speed_u_lm, 1)
+            if rl.eta_str:
+                line += " eta "
+                line += lpad(rl.eta_str, eta_lm) + " "
+                line += lpad(rl.eta_u_str, eta_u_lm)
 
             if len(line) < rl.last_line_length:
                 lll = len(line)
