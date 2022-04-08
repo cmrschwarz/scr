@@ -1831,11 +1831,11 @@ def get_timespan_string(ts: float) -> str:
 
 
 def lpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
-    return " " * max(min_pad, tgt_len - len(string)) + string
+    return " " * (tgt_len - len(string) + min_pad) + string
 
 
 def rpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
-    return string + " " * max(min_pad, tgt_len - len(string))
+    return string + " " * (tgt_len - len(string) + min_pad)
 
 
 class DownloadManager:
@@ -1960,7 +1960,7 @@ class DownloadManager:
                 else:
                     speed = float(handled_size) / duration
                     if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                        rl.eta_str = get_timespan_string(
+                        rl.eta_str = "eta " + get_timespan_string(
                             (rl.expected_size - rl.downloaded_size) /
                             speed
                         )
@@ -1991,14 +1991,13 @@ class DownloadManager:
         )
         for rl in report_lines:
             line = rpad(rl.name, name_lm, 1)
-            line += rl.bar_str
-
-            line += " eta " + lpad(rl.eta_str, eta_lm)
+            line += lpad(rl.total_time_str, total_time_lm)
+            line += " " + rl.bar_str
             line += lpad(rl.downloaded_size_str, downloaded_size_lm, 1)
             line += " / "
             line += rpad(rl.expected_size_str, expected_size_lm, 1)
             line += lpad(rl.speed_str, speed_lm) + " "
-            line += rpad(rl.total_time_str, total_time_lm) + " total"
+            line += lpad(rl.eta_str, eta_lm)
 
             if len(line) < rl.last_line_length:
                 lll = len(line)
