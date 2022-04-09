@@ -1,7 +1,7 @@
 {
     "args": [
-        "sel"
+        "v"
     ],
     "ec": 1,
-    "stderr": "[ERROR]: missing '=' and value for option 'sel'\n"
+    "stderr": "[ERROR]: missing '=' and value for option 'v'\n"
 }

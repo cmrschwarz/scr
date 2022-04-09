@@ -45,6 +45,7 @@ from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import selenium.common.exceptions
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
+import geckodriver_autoinstaller
 # this is of course not really a selenium exception,
 # but selenium throws it arbitrarily, just like SeleniumWebDriverException,
 # and that is the only way in which we use it
@@ -2218,7 +2219,7 @@ def unescape_string(txt: str) -> str:
 def log(ctx: ScrContext, verbosity: Verbosity, msg: str) -> None:
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
-    if ctx.verbosity >= verbosity:
+    if ctx.verbosity is None or ctx.verbosity >= verbosity:
         log_raw(verbosity, msg)
 
 
@@ -2345,7 +2346,7 @@ def help(err: bool = False) -> None:
         uar=<bool>          use a rangom user agent
         selkeep=<bool>      keep selenium instance alive after the command finished
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
-        sel=<browser>       use selenium to load urls into an interactive browser session
+        sel=<browser|bool>  use selenium (default is firefox) to load urls into an interactive browser session
                             (default: disabled, values: tor, chrome, firefox, disabled)
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
@@ -2361,10 +2362,12 @@ def help(err: bool = False) -> None:
         print(text)
 
 
-def add_script_dir_to_path() -> str:
-    sd = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
-    os.environ["PATH"] += ":" + sd
-    return sd
+def get_script_dir() -> str:
+    return os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+
+
+def add_script_dir_to_path() -> None:
+    os.environ["PATH"] = get_script_dir() + ":" + os.environ["PATH"]
 
 
 def truncate(
@@ -2446,7 +2449,11 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
                 log_path=ctx.selenium_log_path),  # type: ignore
         )
     except SeleniumWebDriverException as ex:
-        raise ScrSetupError(f"failed to start geckodriver: {str(ex)}")
+        ex_msg = str(ex).strip('\n ')
+        raise ScrSetupError(
+            f"failed to start geckodriver: {ex_msg}\n" +
+            f"    consider {SCRIPT_NAME} --install-geckodriver"
+        )
 
 
 def setup_selenium_chrome(ctx: ScrContext) -> None:
@@ -2624,7 +2631,7 @@ def gen_default_format(mc: MatchChain) -> str:
     return form
 
 
-def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
+def setup_match_chain(mc: MatchChain, ctx: ScrContext, special_args_occured: bool = False) -> None:
 
     mc.apply_defaults(ctx.defaults_mc)
     mc.ci = mc.cimin
@@ -2731,7 +2738,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
             dummy_cm, True, False, False
         )
     if not mc.has_content_matching and not mc.has_document_matching:
-        if not (mc.chain_id == 0 and mc.ctx.repl):
+        if not (mc.chain_id == 0 and (mc.ctx.repl or special_args_occured)):
             raise ScrSetupError(
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
             )
@@ -2794,7 +2801,7 @@ def get_random_user_agent() -> UserAgent:
     ).get_random_user_agent()
 
 
-def setup(ctx: ScrContext, for_repl: bool = False) -> None:
+def setup(ctx: ScrContext, special_args_occured: bool = False) -> None:
     global DEFAULT_CPF
     ctx.apply_defaults(ScrContext())
 
@@ -2821,11 +2828,11 @@ def setup(ctx: ScrContext, for_repl: bool = False) -> None:
                 ctx.match_chains[d.expand_match_chains_above:])
 
     for mc in ctx.match_chains:
-        setup_match_chain(mc, ctx)
+        setup_match_chain(mc, ctx, special_args_occured)
 
     if len(ctx.docs) == 0:
         report = True
-        if ctx.repl:
+        if ctx.repl or special_args_occured:
             if not any(mc.has_content_matching or mc.has_document_matching for mc in ctx.match_chains):
                 report = False
         if report:
@@ -4043,23 +4050,23 @@ def parse_encoding_arg(v: str, arg: str) -> str:
     return v
 
 
-def select_variant(val: str, variants_dict: dict[str, T]) -> Optional[T]:
+def select_variant(val: str, variants_dict: dict[str, T], default: Optional[T] = None) -> Optional[T]:
     val = val.strip().lower()
     if val == "":
-        return None
+        return default
     if val in variants_dict:
         return variants_dict[val]
     match = None
     for k, v in variants_dict.items():
         if begins(k, val):
             if match is not None:
-                return None
+                return None  # we have two conflicting matches
             match = v
     return match
 
 
-def parse_variant_arg(val: str, variants_dict: dict[str, T], arg: str) -> T:
-    res = select_variant(val, variants_dict)
+def parse_variant_arg(val: str, variants_dict: dict[str, T], arg: str, default: Optional[T] = None) -> T:
+    res = select_variant(val, variants_dict, default)
     if res is None:
         raise ScrSetupError(
             f"illegal argument '{arg}', valid options for "
@@ -4250,7 +4257,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
 
                 ctx_new = ScrContext(blank=True)
                 try:
-                    parse_args(ctx_new, args)
+                    special_args_occured = parse_args(ctx_new, args)
                 except ScrSetupError as ex:
                     log(stable_ctx, Verbosity.ERROR, str(ex))
                     continue
@@ -4259,7 +4266,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                 ctx = ctx_new
 
                 try:
-                    setup(ctx, True)
+                    setup(ctx, special_args_occured=special_args_occured)
                 except ScrSetupError as ex:
                     log(ctx, Verbosity.ERROR, str(ex))
                     if ctx.exit:
@@ -4288,14 +4295,36 @@ def match_traditional_cli_arg(arg: str, true_opt_name: str, aliases: set[str]) -
     return None
 
 
-def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
+def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
+    special_args_occured = False
     for arg in args:
         if match_traditional_cli_arg(arg, "help", {"-h", "--help"}):
             help()
-            sys.exit(0)
+            special_args_occured = True
+            continue
         if match_traditional_cli_arg(arg, "version", {"-v", "--version"}):
             print(f"scr {VERSION}")
-            sys.exit(0)
+            special_args_occured = True
+            continue
+        if match_traditional_cli_arg(arg, "install-geckodriver", {"--install-geckodriver"}):
+            special_args_occured = True
+            try:
+                sd = get_script_dir()
+                target = os.path.join(sd, "geckodriver")
+                if os.path.exists(target):
+                    log(
+                        ctx, Verbosity.INFO,
+                        f"a file is already present in {target}"
+                    )
+                    continue
+                path = geckodriver_autoinstaller.install(cwd=True)
+                os.symlink(path, target)
+                log(ctx, Verbosity.INFO, f"installed geckodriver at {path}")
+            except (RuntimeError, urllib.error.URLError) as ex:
+                raise ScrSetupError(
+                    f"failed to install geckodriver: '{str(ex)}'"
+                )
+            continue
 
          # content args
         if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg):
@@ -4413,7 +4442,13 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):
             continue
 
-        if apply_ctx_arg(ctx, "sel", "selenium_variant", arg, lambda v, arg: parse_variant_arg(v, selenium_variants_dict, arg)):
+        if apply_ctx_arg(
+            ctx, "sel", "selenium_variant", arg,
+            lambda v, arg: parse_variant_arg(
+                v, selenium_variants_dict, arg, SeleniumVariant.FIREFOX
+            ),
+            True
+        ):
             continue
         if apply_ctx_arg(ctx, "selkeep", "selenium_keep_alive", arg, parse_bool_arg, True):
             continue
@@ -4444,6 +4479,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
 
         raise ScrSetupError(f"unrecognized option: '{arg}'")
+    return special_args_occured
 
 
 def run_scr() -> int:
@@ -4456,8 +4492,8 @@ def run_scr() -> int:
         return 1
 
     try:
-        parse_args(ctx, sys.argv[1:])
-        setup(ctx)
+        special_args_occured = parse_args(ctx, sys.argv[1:])
+        setup(ctx, special_args_occured)
     except ScrSetupError as ex:
         log_raw(Verbosity.ERROR, str(ex))
         return 1
