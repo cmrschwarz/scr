@@ -601,7 +601,7 @@ class Locator(ConfigDataClass):
             return
         args_dict: dict[str, Any] = {}
         dummy_doc = mc.gen_dummy_document()
-        apply_general_format_args(dummy_doc, mc, args_dict, unstable_ci=True)
+        apply_general_format_args(dummy_doc, mc, args_dict, ci=None)
         apply_locator_match_format_args(
             self.name, self.gen_dummy_locator_match(), args_dict
         )
@@ -724,7 +724,7 @@ class Locator(ConfigDataClass):
         lms_new: list[LocatorMatch] = []
         for lm in lms:
             args_dict: dict[str, Any] = {}
-            apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
+            apply_general_format_args(doc, mc, args_dict, ci=None)
             apply_locator_match_format_args(self.name, lm, args_dict)
             try:
                 mc.js_executed = True
@@ -776,7 +776,7 @@ class Locator(ConfigDataClass):
         if not self.format:
             return
         args_dict: dict[str, Any] = {}
-        apply_general_format_args(doc, mc, args_dict, unstable_ci=True)
+        apply_general_format_args(doc, mc, args_dict, ci=None)
         apply_locator_match_format_args(self.name, lm, args_dict)
         lm.fres = self.format.format(**args_dict)
         lm.result = lm.fres
@@ -842,6 +842,7 @@ class MatchChain(ConfigDataClass):
     has_xpath_matching: bool = False
     has_label_matching: bool = False
     has_content_xpaths: bool = False
+    # TODO: this should include if this is the target of any doc=...
     has_document_matching: bool = False
     has_content_matching: bool = False
     has_interactive_matching: bool = False
@@ -2106,14 +2107,14 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
     })
 
 
-def apply_general_format_args(doc: Document, mc: MatchChain, args_dict: dict[str, Any], unstable_ci: bool = False) -> None:
+def apply_general_format_args(doc: Document, mc: MatchChain, args_dict: dict[str, Any], ci: Optional[int]) -> None:
     dict_update_unless_none(args_dict, {
         "cenc": doc.encoding,
         "cesc": mc.content_escape_sequence,
         "dl":   doc.path,
         "chain": mc.chain_id,
         "di": mc.di,
-        "ci": mc.ci if not unstable_ci else None
+        "ci": ci
     })
 
 
@@ -2151,7 +2152,7 @@ def content_match_build_format_args(
     filename: Optional[str] = None
 ) -> dict[str, Any]:
     args_dict: dict[str, Any] = {}
-    apply_general_format_args(cm.doc, cm.mc, args_dict)
+    apply_general_format_args(cm.doc, cm.mc, args_dict, ci=cm.ci)
     apply_filename_format_args(filename, args_dict)
     if content is not None:
         args_dict["c"] = content
@@ -2643,6 +2644,10 @@ def validate_format(
 def gen_default_format(mc: MatchChain) -> str:
     form = "dl_"
     # if max was not set it is 'inf' which has length 3 which is a fine default
+    mcc = len(mc.ctx.match_chains)
+    if mcc > 1:
+        form += f"{{chain:{len(str(mcc))}}}_"
+
     didigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
     cidigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
     if mc.ci_continuous:
@@ -3276,8 +3281,8 @@ def get_ci_di_context(cm: ContentMatch) -> str:
 def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
-    cm.mc.ci += 1
     cm.mc.content.apply_format_for_content_match(cm, cm.clm)
+    cm.mc.ci += 1
 
     if cm.llm is None:
         if cm.mc.need_label:
