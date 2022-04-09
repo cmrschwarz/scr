@@ -3960,13 +3960,14 @@ def parse_mc_arg(
     argname_len = len(argname)
     eq_pos = arg.find("=")
     if eq_pos == -1:
+        mc_spec = arg[argname_len:]
         if arg != argname:
-            return None
-        if not support_blank:
+            if not MATCH_CHAIN_ARGUMENT_REGEX.match(mc_spec):
+                return None
+        elif not support_blank:
             raise ScrSetupError("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
         value = blank_value
-        mc_spec = arg[argname_len:]
     else:
         mc_spec = arg[argname_len: eq_pos]
         if not MATCH_CHAIN_ARGUMENT_REGEX.match(mc_spec):

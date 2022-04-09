@@ -1,0 +1,8 @@
+{
+    "args": [
+        "file=./tests/res/a.txt.html",
+        "cx=//@src",
+        "cl0"
+    ],
+    "stdout": "a\n\n"
+}
