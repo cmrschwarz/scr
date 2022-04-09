@@ -2000,11 +2000,11 @@ class DownloadManager:
             line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm, 1)
             line += "/"
             line += lpad(rl.expected_size_str, expected_size_lm, 1) + " "
-            line += rpad(rl.expected_size_u_str, expected_size_u_lm, 1)
-            line += lpad(rl.speed_str, speed_lm, 1) + " "
-            line += rpad(rl.speed_u_str, speed_u_lm, 1)
+            line += rpad(rl.expected_size_u_str, expected_size_u_lm, 2)
+            line += lpad(rl.speed_str, speed_lm) + " "
+            line += rpad(rl.speed_u_str, speed_u_lm)
             if rl.eta_str:
-                line += " eta "
+                line += "  eta "
                 line += lpad(rl.eta_str, eta_lm) + " "
                 line += lpad(rl.eta_u_str, eta_u_lm)
 
