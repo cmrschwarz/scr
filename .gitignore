@@ -1,3 +1,4 @@
+/v0*
 geckodriver
 /geckodriver.log
 /cookies.txt
