@@ -1,0 +1,9 @@
+{
+    "args": [
+        "rfile=./tests/res/a.txt",
+        "cr=.*",
+        "csf="
+    ],
+    "ec": 1,
+    "stderr": "[ERROR]: csf cannot be the empty string: csf=\n"
+}

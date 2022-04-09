@@ -2666,10 +2666,10 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
         validate_format(mc, ["content_print_format"],
                         dummy_cm, True, True, not mc.content_raw)
 
-    if mc.content_save_format:
+    if mc.content_save_format is not None:
         if mc.content_save_format == "":
             raise ScrSetupError(
-                f"csf cannot be the empty string: {mc.get_configuring_argument('content_save_format')}"
+                f"csf cannot be the empty string: {mc.get_configuring_argument(['content_save_format'])}"
             )
         validate_format(mc, ["content_save_format"], dummy_cm,
                         True, False, not mc.content_raw)
