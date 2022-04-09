@@ -72,11 +72,12 @@ FALLBACK_DOCUMENT_SCHEME = "https"
 
 DEFAULT_TIMEOUT_SECONDS = 30
 
-DOWNLOAD_STATUS_LOG_ELEMENTS = 20
-DOWNLOAD_STATUS_LOG_TIME = 10
-DOWNLOAD_STATUS_NAME_LENGTH = 60
+DOWNLOAD_STATUS_LOG_ELEMENTS_MIN = 5
+DOWNLOAD_STATUS_LOG_ELEMENTS_MAX = 50
+DOWNLOAD_STATUS_LOG_MAX_AGE = 10
+DOWNLOAD_STATUS_NAME_LENGTH = 80
 DOWNLOAD_STATUS_BAR_LENGTH = 30
-DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.1
+DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.2
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
 DEFAULT_MAX_PRINT_BUFFER_CAPACITY = 2**20 * 100  # 100 MiB
@@ -1232,14 +1233,7 @@ class DownloadStatusReport:
         elif filename:
             self.name = filename
         elif url is not None:
-            url_str = url.geturl()
-            if len(url_str) < DOWNLOAD_STATUS_NAME_LENGTH:
-                self.name = url_str
-                return
-            self.name = (
-                "~~ "
-                + url._replace(fragment="", scheme="", query="").geturl()
-            )
+            self.name = url.geturl()
         else:
             self.name = "<unnamed download>"
         self.name = truncate(
@@ -1251,7 +1245,15 @@ class DownloadStatusReport:
         with self.download_manager.status_report_lock:
             self.downloaded_size += received_filesize
             self.updates.append((time, self.downloaded_size))
-            if len(self.updates) > DOWNLOAD_STATUS_NAME_LENGTH:
+            drop_elem = False
+            if len(self.updates) > DOWNLOAD_STATUS_LOG_ELEMENTS_MIN:
+                if len(self.updates) > DOWNLOAD_STATUS_LOG_ELEMENTS_MAX:
+                    drop_elem = True
+                else:
+                    age = (time - self.updates[0][0]).total_seconds()
+                    if age > DOWNLOAD_STATUS_LOG_MAX_AGE:
+                        drop_elem = True
+            if drop_elem:
                 self.updates.popleft()
 
     def enqueue(self) -> None:
@@ -1837,12 +1839,12 @@ def get_timespan_string(ts: float) -> tuple[str, str]:
     return f"{int(ts / 3600):02}:{int((ts % 3600) / 60):02}:{int(ts % 60):02}", "h"
 
 
-def lpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
-    return " " * (tgt_len - len(string) + min_pad) + string
+def lpad(string: str, tgt_len: int) -> str:
+    return " " * (tgt_len - len(string)) + string
 
 
-def rpad(string: str, tgt_len: int, min_pad: int = 0) -> str:
-    return string + " " * (tgt_len - len(string) + min_pad)
+def rpad(string: str, tgt_len: int) -> str:
+    return string + " " * (tgt_len - len(string))
 
 
 class DownloadManager:
@@ -1920,14 +1922,14 @@ class DownloadManager:
     def stringify_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
         now = datetime.datetime.now()
         for rl in report_lines:
-            if rl.finished:
-                rl.expected_size = rl.downloaded_size
             if rl.expected_size and rl.expected_size >= rl.downloaded_size:
                 frac = float(rl.downloaded_size) / rl.expected_size
                 filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
                 empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
                 tip = ">" if rl.downloaded_size != rl.expected_size else "="
                 rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
+            elif rl.finished:
+                rl.bar_str = "[" + "*" * (DOWNLOAD_STATUS_BAR_LENGTH - 2) + "]"
             else:
                 left = rl.star_pos - 1
                 right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
@@ -1937,6 +1939,8 @@ class DownloadManager:
                 elif rl.star_pos == 1:
                     rl.star_dir = 1
                 rl.star_pos += rl.star_dir
+            if rl.finished:
+                rl.expected_size = rl.downloaded_size
             rl.downloaded_size_str, rl.downloaded_size_u_str = (
                 get_byte_size_string(rl.downloaded_size)
             )
@@ -1964,20 +1968,22 @@ class DownloadManager:
                 handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
                 if handled_size == 0:
                     speed = 0.0
-                    rl.eta_str, rl.eta_u_str = "", ""
+                    rl.eta_str, rl.eta_u_str = "???", "?"
                 else:
                     speed = float(handled_size) / duration
                     if rl.expected_size and rl.expected_size > rl.downloaded_size:
                         rl.eta_str, rl.eta_u_str = get_timespan_string(
                             (rl.expected_size - rl.downloaded_size) / speed
                         )
+                    elif rl.finished:
+                        rl.eta_str, rl.eta_u_str = "---", "-"
                     else:
-                        rl.eta_str, rl.eta_u_str = "", ""
+                        rl.eta_str, rl.eta_u_str = "???", "?"
                 rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
                 rl.speed_u_str += "/s"
             else:
                 rl.speed_frame_time_end = now
-                rl.eta_str, rl.eta_u_str = "", ""
+                rl.eta_str, rl.eta_u_str = "???", "?"
                 rl.speed_str, rl.speed_u_str = "???", "B/s"
 
             rl.total_time_str, rl.total_time_u_str = get_timespan_string(
@@ -2001,21 +2007,28 @@ class DownloadManager:
         speed_u_lm = field_len_max("speed_u_str")
 
         for rl in report_lines:
-            line = rpad(rl.name, name_lm, 1)
+            line = ""
+
             line += lpad(rl.total_time_str, total_time_lm) + " "
-            line += rpad(rl.total_time_u_str, total_time_u_lm, 1)
-            line += rl.bar_str
-            line += lpad(rl.downloaded_size_str, downloaded_size_lm, 1) + " "
-            line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm, 1)
-            line += "/"
-            line += lpad(rl.expected_size_str, expected_size_lm, 1) + " "
-            line += rpad(rl.expected_size_u_str, expected_size_u_lm, 2)
+            line += rpad(rl.total_time_u_str, total_time_u_lm) + " "
+
             line += lpad(rl.speed_str, speed_lm) + " "
-            line += rpad(rl.speed_u_str, speed_u_lm)
-            if rl.eta_str:
-                line += "  eta "
-                line += lpad(rl.eta_str, eta_lm) + " "
-                line += lpad(rl.eta_u_str, eta_u_lm)
+            line += rpad(rl.speed_u_str, speed_u_lm) + " "
+
+            line += rl.bar_str + " "
+
+            line += lpad(rl.downloaded_size_str, downloaded_size_lm) + " "
+            line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm)
+            line += " / "
+            line += lpad(rl.expected_size_str, expected_size_lm) + " "
+            line += rpad(rl.expected_size_u_str, expected_size_u_lm) + " "
+
+            line += "eta: "
+            line += lpad(rl.eta_str, eta_lm)
+            line += " " + rpad(rl.eta_u_str, eta_u_lm) + " "
+
+            # if everybody is done, we don't need to pad for this anymore
+            line += rl.name
 
             if len(line) < rl.last_line_length:
                 lll = len(line)
