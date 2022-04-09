@@ -2439,6 +2439,12 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
+def have_local_geckodriver() -> tuple[bool, str]:
+    sd = get_script_dir()
+    target = os.path.join(sd, "geckodriver")
+    return os.path.exists(target), target
+
+
 def setup_selenium_firefox(ctx: ScrContext) -> None:
     # use bundled geckodriver if available
     add_script_dir_to_path()
@@ -2450,10 +2456,11 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
         )
     except SeleniumWebDriverException as ex:
         ex_msg = str(ex).strip('\n ')
-        raise ScrSetupError(
-            f"failed to start geckodriver: {ex_msg}\n" +
-            f"    consider {SCRIPT_NAME} --install-geckodriver"
-        )
+        err_msg = f"failed to start geckodriver: {ex_msg}"!
+        have, _path = have_local_geckodriver()
+        if not have:
+            err_msg += f"\n    consider {SCRIPT_NAME} --install-geckodriver"
+        raise ScrSetupError(err_msg)
 
 
 def setup_selenium_chrome(ctx: ScrContext) -> None:
@@ -4310,9 +4317,8 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
         if match_traditional_cli_arg(arg, "install-geckodriver", {"--install-geckodriver"}):
             special_args_occured = True
             try:
-                sd = get_script_dir()
-                target = os.path.join(sd, "geckodriver")
-                if os.path.exists(target):
+                present, target = have_local_geckodriver()
+                if present:
                     log(
                         ctx, Verbosity.INFO,
                         f"a file is already present in {target}"
