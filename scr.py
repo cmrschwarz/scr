@@ -88,6 +88,7 @@ DUMMY_MIMETYPE = "application/zip"
 
 DEFAULT_CPF = "{c}\\n"
 DEFAULT_CWF = "{c}"
+DEFAULT_CSF = "{fn}"
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 
 
@@ -2634,15 +2635,13 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
     if mc.cimin > mc.cimax:
         raise ScrSetupError(f"cimin can't exceed cimax")
 
-    if mc.content_write_format and not mc.content_save_format:
-        raise ScrSetupError(
-            f"match chain {mc.chain_id}: cannot specify cwf without csf"
-        )
+    if mc.content_write_format is not None and mc.content_save_format is None:
+        mc.content_save_format = DEFAULT_CSF
 
     if not mc.document_output_chains:
         mc.document_output_chains = [mc]
 
-    if mc.save_path_interactive and not mc.content_save_format:
+    if mc.save_path_interactive and mc.content_save_format is not None:
         mc.content_save_format = ""
 
     locators = [mc.content, mc.label, mc.document]
@@ -2659,7 +2658,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
     if mc.content_print_format or mc.content_save_format:
         mc.has_content_matching = True
 
-    if mc.has_content_matching and not mc.content_print_format and not mc.content_save_format:
+    if mc.has_content_matching and mc.content_print_format is None and mc.content_save_format is None:
         mc.content_print_format = DEFAULT_CPF
 
     dummy_cm = mc.gen_dummy_content_match()
@@ -2668,6 +2667,10 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
                         dummy_cm, True, True, not mc.content_raw)
 
     if mc.content_save_format:
+        if mc.content_save_format == "":
+            raise ScrSetupError(
+                f"csf cannot be the empty string: {mc.get_configuring_argument('content_save_format')}"
+            )
         validate_format(mc, ["content_save_format"], dummy_cm,
                         True, False, not mc.content_raw)
         if mc.content_write_format is None:
@@ -3754,10 +3757,6 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
                     last_doc_path = drv.current_url
-                    log(
-                        ctx, Verbosity.DEBUG,
-                        f"rechecking selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
-                    )
                     src_new, xml_new = selenium_get_full_page_source(ctx)
                     same_content = (src_new == doc.text)
                     doc.text = src_new
@@ -3784,6 +3783,10 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                     handle_match_chain(mc, doc, last_doc_path)
                     satisfied, interactive = match_chain_was_satisfied(mc)
                     if satisfied:
+                        log(
+                            ctx, Verbosity.DEBUG,
+                            f"chain {mc.chain_id} satisfied for  {doc.path}"
+                        )
                         mc.satisfied = True
                         unsatisfied_chains -= 1
                         if mc.has_xpath_matching:
@@ -4208,6 +4211,7 @@ def resolve_repl_defaults(
 def run_repl(initial_ctx: ScrContext) -> int:
     try:
         # run with initial args
+        readline.set_auto_history(False)
         readline.add_history(shlex.join(sys.argv[1:]))
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
@@ -4229,6 +4233,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
                     ctx = None
                 try:
                     line = input(f"{SCRIPT_NAME}> " if tty else "")
+                    readline.add_history(line)
                 except EOFError:
                     if tty:
                         print("")
