@@ -174,7 +174,7 @@ scr [OPTIONS]
         {cesc}              escape sequence for separating content, can be overwritten using cesc
         {chain}             id of the match chain that generated this content
 
-        {fn}                filename from the url of a cm with cl 
+        {fn}                filename from the url of a cm with cl
         {fb}                basename component of {fn} (extension stripped away)
         {fe}                extension component of {fn}, including the dot (empty string if there is no extension)
 

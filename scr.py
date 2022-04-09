@@ -66,7 +66,7 @@ V = TypeVar("V")
 # because for python, sys.argv[0] does not reflect what the user typed anyways,
 # we just use this fixed value for --help etc.
 SCRIPT_NAME = "scr"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 
@@ -1700,6 +1700,11 @@ class DownloadJob:
                 return False
             if not self.setup_save_file():
                 return False
+            if self.status_report:
+                # try to generate a better name now that we have more information
+                self.status_report.gen_display_name(
+                    self.cm.url_parsed, self.filename, self.save_path
+                )
             if not self.setup_print_output():
                 return False
             self.check_abort()
@@ -3761,9 +3766,9 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                     if selenium_has_died(ctx):
                         report_selenium_died(ctx)
                     else:
-                        log(ctx, Verbosity.ERROR,
+                        log(ctx, Verbosity.WARN,
                             f"selenium failed to fetch page source: {str(ex)}")
-                    break
+                    same_content = True
 
             if not same_content or content_change:
                 content_change = False
@@ -4454,6 +4459,7 @@ def run_scr() -> int:
     if ctx.repl:
         ec = run_repl(ctx)
     else:
+        success = False
         try:
             process_document_queue(ctx)
             success = True
