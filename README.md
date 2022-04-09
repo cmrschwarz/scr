@@ -194,8 +194,9 @@ scr [OPTIONS]
         uar=<bool>          use a rangom user agent
         selkeep=<bool>      keep selenium instance alive after the command finished
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
-        sel=<browser>       use selenium to load urls into an interactive browser session
+        sel=<browser|bool>  use selenium (default is firefox) to load urls into an interactive browser session
                             (default: disabled, values: tor, chrome, firefox, disabled)
+        selh=<bool>         use selenium in headless mode, implies sel
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
         mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count

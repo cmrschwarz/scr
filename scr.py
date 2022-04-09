@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-
-from codecs import strict_errors
 import functools
 import subprocess
-from unittest import expectedFailure
 import selenium.webdriver
 from abc import ABC, abstractmethod
 import multiprocessing
@@ -161,6 +158,10 @@ class SeleniumVariant(Enum):
     CHROME = 1
     FIREFOX = 2
     TORBROWSER = 3
+
+    @staticmethod
+    def default() -> 'SeleniumVariant':
+        return SeleniumVariant.FIREFOX
 
     def enabled(self) -> bool:
         return self != SeleniumVariant.DISABLED
@@ -958,6 +959,7 @@ class ScrContext(ConfigDataClass):
     cookie_file: Optional[str] = None
     exit: bool = False
     selenium_variant: SeleniumVariant = SeleniumVariant.DISABLED
+    selenium_headless: bool = False
     tor_browser_dir: Optional[str] = None
     user_agent_random: Optional[bool] = False
     user_agent: Optional[str] = None
@@ -2348,6 +2350,7 @@ def help(err: bool = False) -> None:
         cookiefile=<path>   path to a netscape cookie file. cookies are passed along for url GETs
         sel=<browser|bool>  use selenium (default is firefox) to load urls into an interactive browser session
                             (default: disabled, values: tor, chrome, firefox, disabled)
+        selh=<bool>         use selenium in headless mode, implies sel
         tbdir=<path>        root directory of the tor browser installation, implies sel=tor
                             (default: environment variable TOR_BROWSER_DIR)
         mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count
@@ -2456,7 +2459,7 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
         )
     except SeleniumWebDriverException as ex:
         ex_msg = str(ex).strip('\n ')
-        err_msg = f"failed to start geckodriver: {ex_msg}"!
+        err_msg = f"failed to start geckodriver: {ex_msg}"
         have, _path = have_local_geckodriver()
         if not have:
             err_msg += f"\n    consider {SCRIPT_NAME} --install-geckodriver"
@@ -2815,6 +2818,9 @@ def setup(ctx: ScrContext, special_args_occured: bool = False) -> None:
     if ctx.tor_browser_dir:
         if not ctx.selenium_variant.enabled():
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
+    elif ctx.selenium_headless:
+        if not ctx.selenium_variant.enabled():
+            ctx.selenium_variant = SeleniumVariant.default()
     load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
@@ -4436,8 +4442,17 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
         if apply_mc_arg(ctx, "dfsch", ["forced_document_scheme"], arg):
             continue
 
-        if apply_mc_arg(ctx, "selstrat", ["selenium_strategy"], arg, lambda v, arg: parse_variant_arg(v, selenium_strats_dict, arg)): continue
-        if apply_mc_arg(ctx, "seldl", ["selenium_download_strategy"], arg, lambda v, arg: parse_variant_arg(v, selenium_download_strategies_dict, arg)): continue
+        if apply_mc_arg(
+            ctx, "selstrat", ["selenium_strategy"], arg,
+            lambda v, arg: parse_variant_arg(v, selenium_strats_dict, arg)
+        ): continue
+        if apply_mc_arg(
+            ctx, "seldl", ["selenium_download_strategy"], arg,
+            lambda v, arg: parse_variant_arg(
+                v, selenium_download_strategies_dict, arg)
+        ): continue
+        if apply_mc_arg(ctx, "selh", ["selenium_headless"], arg, parse_bool_arg, True):
+            continue
         # misc args
         if apply_doc_arg(ctx, "url", DocumentType.URL, arg):
             continue
