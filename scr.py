@@ -1205,7 +1205,7 @@ class DownloadStatusReport:
     expected_size: Optional[int] = None
     downloaded_size: int = 0
     download_begin_time: datetime.datetime
-    download_end_time: datetime.datetime = None
+    download_end_time: Optional[datetime.datetime] = None
     updates: deque[tuple[datetime.datetime, int]]
     download_finished: bool = False
     download_manager: 'DownloadManager'
@@ -1779,7 +1779,7 @@ class StatusReportLine:
     downloaded_size: int
     speed_calculatable: bool
     download_begin: datetime.datetime
-    download_end: datetime.datetime
+    download_end: Optional[datetime.datetime]
     speed_frame_time_begin: datetime.datetime
     speed_frame_time_end: datetime.datetime
     speed_frame_size_begin: int
@@ -1939,6 +1939,7 @@ class DownloadManager:
                 rl.expected_size_str, rl.expected_size_u_str = "???", "B"
 
             if rl.finished:
+                assert rl.download_end
                 rl.speed_frame_size_begin = 0
                 rl.speed_frame_time_begin = rl.download_begin
                 rl.speed_frame_size_end = rl.downloaded_size
