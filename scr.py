@@ -4321,7 +4321,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
                 path = geckodriver_autoinstaller.install(cwd=True)
                 os.symlink(path, target)
                 log(ctx, Verbosity.INFO, f"installed geckodriver at {path}")
-            except (RuntimeError, urllib.error.URLError) as ex:
+            except (RuntimeError, urllib.error.URLError, FileNotFoundError) as ex:
                 raise ScrSetupError(
                     f"failed to install geckodriver: '{str(ex)}'"
                 )
