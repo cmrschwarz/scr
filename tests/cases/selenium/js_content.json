@@ -2,7 +2,8 @@
     "args": [
         "rfile=./tests/res/js_content.html",
         "cx=//p/text()",
-        "sel=c"
+        "sel=c",
+        "selh"
     ],
     "ec": 0,
     "tags": [

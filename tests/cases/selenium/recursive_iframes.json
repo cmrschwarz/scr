@@ -2,7 +2,8 @@
     "args": [
         "file=./tests/res/iframe_tree.html",
         "cx=//title/text()",
-        "sel=c"
+        "sel=c",
+        "selh"
     ],
     "tags": [
         "selenium",

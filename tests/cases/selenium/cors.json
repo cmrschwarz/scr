@@ -6,7 +6,8 @@
         "cl=t",
         "cpf={c}",
         "seldl0=e",
-        "seldl1=f"
+        "seldl1=f",
+        "selh"
     ],
     "ec": 1,
     "stdout": "cors\n",

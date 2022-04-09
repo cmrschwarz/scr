@@ -1,6 +1,8 @@
 {
     "args": [
-        "repl"
+        "repl",
+        "selh",
+        "sel=d"
     ],
     "tags": [
         "repl",

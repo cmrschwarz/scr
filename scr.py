@@ -2388,6 +2388,8 @@ def selenium_build_firefox_options(
     ctx: ScrContext
 ) -> selenium.webdriver.FirefoxOptions:
     ff_options = selenium.webdriver.FirefoxOptions()
+    if ctx.selenium_headless:
+        ff_options.headless = True
     if ctx.user_agent is not None:
         ff_options.set_preference("general.useragent.override", ctx.user_agent)
         if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -2470,6 +2472,8 @@ def setup_selenium_chrome(ctx: ScrContext) -> None:
     # allow usage of bundled chromedriver
     add_script_dir_to_path()
     options = selenium.webdriver.ChromeOptions()
+    if ctx.selenium_headless:
+        options.headless = True
     options.add_argument("--incognito")
     if ctx.user_agent != None:
         options.add_argument(f"user-agent={ctx.user_agent}")
@@ -2813,14 +2817,14 @@ def get_random_user_agent() -> UserAgent:
 
 def setup(ctx: ScrContext, special_args_occured: bool = False) -> None:
     global DEFAULT_CPF
-    ctx.apply_defaults(ScrContext())
 
     if ctx.tor_browser_dir:
-        if not ctx.selenium_variant.enabled():
+        if ctx.selenium_variant is None:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
     elif ctx.selenium_headless:
-        if not ctx.selenium_variant.enabled():
+        if ctx.selenium_variant is None:
             ctx.selenium_variant = SeleniumVariant.default()
+    ctx.apply_defaults(ScrContext())
     load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
@@ -4451,8 +4455,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
             lambda v, arg: parse_variant_arg(
                 v, selenium_download_strategies_dict, arg)
         ): continue
-        if apply_mc_arg(ctx, "selh", ["selenium_headless"], arg, parse_bool_arg, True):
-            continue
+
         # misc args
         if apply_doc_arg(ctx, "url", DocumentType.URL, arg):
             continue
@@ -4470,7 +4473,8 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
                 v, selenium_variants_dict, arg, SeleniumVariant.FIREFOX
             ),
             True
-        ):
+        ): continue
+        if apply_ctx_arg(ctx, "selh", "selenium_headless", arg, parse_bool_arg, True):
             continue
         if apply_ctx_arg(ctx, "selkeep", "selenium_keep_alive", arg, parse_bool_arg, True):
             continue
