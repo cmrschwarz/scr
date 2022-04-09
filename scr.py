@@ -3218,11 +3218,11 @@ def normalize_link(
 def get_ci_di_context(cm: ContentMatch) -> str:
     if cm.mc.has_document_matching:
         if cm.mc.content.multimatch:
-            di_ci_context = f" (di = {cm.di}, ci = {cm.ci})"
+            di_ci_context = f" (di={cm.di}, ci={cm.ci})"
         else:
-            di_ci_context = f" (di = {cm.di})"
+            di_ci_context = f" (di={cm.di})"
     elif cm.mc.content.multimatch:
-        di_ci_context = f" (ci = {cm.ci})"
+        di_ci_context = f" (ci={cm.ci})"
     else:
         di_ci_context = f""
     return di_ci_context
