@@ -1572,9 +1572,17 @@ class DownloadJob:
         if self.cm.mc.content_raw:
             self.content = self.cm.clm.result
             self.content_format = ContentFormat.STRING
+            if not self.gen_fallback_filename():
+                return False
         else:
             if not self.cm.mc.need_content:
                 self.content_format = ContentFormat.UNNEEDED
+                # even if we don't need the content, somebody might want the filename
+                # although we don't use Content-Disposition deduction here,
+                # which is debatable because it is somewhat inconsistent
+                # especially for data urls, this is quite terrible
+                if not self.gen_fallback_filename():
+                    return False
             else:
                 if self.cm.mc.ctx.selenium_variant.enabled():
                     if not self.selenium_download():

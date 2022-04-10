@@ -3,9 +3,8 @@
         "rfile=../tests/res/data_url.html",
         "cx=//@src",
         "cl",
-        "csf={fn}"
+        "cpf={fn}\n"
     ],
-    "output_files": {
-        "dl_001.dat": "data_url"
-    }
+    // see the comment in fetch_content about this
+    "stdout": ",data_url\n"
 }
