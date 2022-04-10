@@ -204,10 +204,13 @@ class DocumentType(Enum):
     FILE = 2
     RFILE = 3
     CONTENT_MATCH = 4
+    CONTENT_FILE = 999  # special type for the document as content optimization
 
     def derived_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.URL
+        if self == DocumentType.CONTENT_FILE:
+            return DocumentType.FILE
         return self
 
     def url_handling_type(self) -> 'DocumentType':
@@ -548,6 +551,9 @@ class Locator(ConfigDataClass):
     def is_active(self) -> bool:
         return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_script])
 
+    def parses_documents(self) -> bool:
+        return any(x is not None for x in [self.xpath, self.regex, self.js_script])
+
     def setup_xpath(self, mc: 'MatchChain') -> None:
         if self.xpath is None:
             return
@@ -846,6 +852,7 @@ class MatchChain(ConfigDataClass):
     # TODO: this should include if this is the target of any doc=...
     has_document_matching: bool = False
     has_content_matching: bool = False
+    parses_documents = False  # used for the document as content optimization
     has_interactive_matching: bool = False
     need_content: bool = False
     need_label: bool = False
@@ -1141,6 +1148,14 @@ class PrintOutputManager:
             if id != self.active_id:
                 self.printing_buffers[id] = []
         return id
+
+    def try_reaquire_main_thread_print_access(self) -> bool:
+        with self.lock:
+            if self.dl_ids != self.active_id:
+                return False
+            self.main_thread_id = self.dl_ids
+            self.dl_ids += 1
+        return True
 
     def declare_done(self, id: int) -> None:
         new_active_id = None
@@ -1763,7 +1778,8 @@ class DownloadJob:
 
             if self.content_stream is not None:
                 while True:
-                    buf = self.content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+                    buf = self.content_stream.read(
+                        DEFAULT_RESPONSE_BUFFER_SIZE)
                     self.check_abort()
                     if buf is None:
                         continue
@@ -2069,28 +2085,35 @@ class DownloadManager:
         return report
 
     def wait_until_jobs_done(self) -> None:
-        if not self.enable_status_reports:
+        if not self.pending_jobs:
+            return
+        may_print = False
+        if self.pom:
+            may_print = self.pom.try_reaquire_main_thread_print_access()
+        if not self.enable_status_reports or not may_print:
             results = concurrent.futures.wait(self.pending_jobs)
             for x in results.done:
                 x.result()
             self.pending_jobs.clear()
-
+        self.pom.request_print_access()
         committed_report_line_count = 0
         report_lines: list[StatusReportLine] = []
         while True:
             results = concurrent.futures.wait(
                 self.pending_jobs,
-                timeout=0 if not committed_report_line_count else DOWNLOAD_STATUS_REFRESH_INTERVAL
+                timeout=0 if not committed_report_line_count
+                else DOWNLOAD_STATUS_REFRESH_INTERVAL
             )
             for x in results.done:
                 x.result()
             self.pending_jobs = results.not_done
-            if not self.pending_jobs:
-                # otherwise print one more report so everything is displayed as done
-                if not committed_report_line_count:
-                    break
             self.load_status_report_lines(report_lines)
             if len(report_lines) == 0:
+                if not self.pending_jobs:
+                    # this happens when we got main thread print access
+                    # but everybody is already done and never downloaded anything
+                    # we don't want any progress reports here
+                    break
                 continue
             self.stringify_status_report_lines(report_lines)
             report = ""
@@ -2714,15 +2737,24 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext, special_args_occured: boo
     locators = [mc.content, mc.label, mc.document]
     for l in locators:
         l.setup(mc)
+        if l.parses_documents():
+            mc.parses_documents = True
 
-    mc.has_xpath_matching = any(l.xpath is not None for l in locators)
-    mc.has_label_matching = mc.label.is_active()
-    mc.has_content_xpaths = mc.labels_inside_content is not None and mc.label.xpath is not None
-    mc.has_document_matching = mc.document.is_active()
-    mc.has_content_matching = mc.has_label_matching or mc.content.is_active()
-    mc.has_interactive_matching = mc.label.interactive or mc.content.interactive
+    if any(l.xpath is not None for l in locators):
+        mc.has_xpath_matching = True
+    if mc.label.is_active():
+        mc.has_label_matching = True
+    if mc.labels_inside_content is not None and mc.label.xpath is not None:
+        mc.has_content_xpaths = True
+    if mc.document.is_active():
+        mc.has_document_matching = True
+        mc.parses_documents = True
+    if mc.label.interactive or mc.content.interactive:
+        mc.has_interactive_matching = True
 
-    if mc.content_print_format or mc.content_save_format:
+    if mc.has_label_matching or mc.content.is_active():
+        mc.has_content_matching = True
+    elif mc.content_print_format or mc.content_save_format:
         mc.has_content_matching = True
 
     if mc.has_content_matching and mc.content_print_format is None and mc.content_save_format is None:
@@ -2802,6 +2834,11 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext, special_args_occured: boo
             raise ScrSetupError(
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
             )
+    if not mc.content_raw:
+        mc.parses_documents = True
+    if not mc.parses_documents:
+        # prepare chain to be used in the document -> content link optimization
+        mc.content_raw = False
 
 
 def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]]]:
@@ -3258,6 +3295,8 @@ def normalize_link(
     ctx: ScrContext, mc: Optional[MatchChain], src_doc: Document,
     doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
+    if src_doc.document_type == DocumentType.CONTENT_FILE:
+        return link, link_parsed
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == DocumentType.FILE:
         if not link_parsed.scheme:
@@ -3465,8 +3504,15 @@ def handle_document_match(mc: MatchChain, doc: Document) -> InteractiveResult:
 
 
 def gen_content_matches(
-    mc: MatchChain, doc: Document, last_doc_path: str
+    mc: MatchChain, doc: Document, last_doc_path: str, doc_as_content: bool
 ) -> tuple[list[ContentMatch], int]:
+    if doc_as_content:
+        dummy_llm = None
+        if mc.has_label_matching:
+            dummy_llm = LocatorMatch()
+        dummy_clm = LocatorMatch()
+        dummy_clm.result = doc.path
+        return [ContentMatch(dummy_clm, dummy_llm, mc, doc)], 0
     text = cast(str, doc.text)
     content_matches: list[ContentMatch] = []
     content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
@@ -3525,6 +3571,7 @@ def gen_content_matches(
 
 
 def gen_document_matches(mc: MatchChain, doc: Document, last_doc_path: str) -> list[Document]:
+
     document_matches = []
     document_lms = mc.document.match_xpath(
         cast(str, doc.text), doc.xml, doc.path, False
@@ -3670,10 +3717,10 @@ def match_chain_was_satisfied(mc: MatchChain) -> tuple[bool, bool]:
     return satisfied, interactive
 
 
-def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str) -> None:
+def handle_match_chain(mc: MatchChain, doc: Document, last_doc_path: str, doc_as_content: bool) -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc, last_doc_path
+            mc, doc, last_doc_path, doc_as_content
         )
     else:
         content_matches = []
@@ -3789,20 +3836,27 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
         last_doc_path = doc.path
         unsatisfied_chains = 0
         have_xpath_matching = 0
+        doc_as_content_opt_possible = True
         for mc in doc.match_chains:
             if mc.need_document_matches(False) or mc.need_content_matches():
+                if mc.parses_documents:
+                    doc_as_content_opt_possible = False
                 unsatisfied_chains += 1
                 mc.satisfied = False
                 if mc.has_xpath_matching:
                     have_xpath_matching += 1
-
+        if doc_as_content_opt_possible:
+            if doc.document_type in [DocumentType.RFILE, DocumentType.FILE]:
+                # we need the derived type of this to be FILE
+                doc.document_type = DocumentType.CONTENT_FILE
         if unsatisfied_chains == 0:
             if not ctx.selenium_variant.enabled() or (doc is ctx.reused_doc and not ctx.changed_selenium):
                 continue
 
         try_number = 0
         try:
-            fetch_doc(ctx, doc)
+            if not doc_as_content_opt_possible:
+                fetch_doc(ctx, doc)
         except SeleniumWebDriverException as ex:
             if selenium_has_died(ctx):
                 report_selenium_died(ctx)
@@ -3850,7 +3904,8 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                     if mc.satisfied:
                         continue
                     mc.js_executed = False
-                    handle_match_chain(mc, doc, last_doc_path)
+                    handle_match_chain(mc, doc, last_doc_path,
+                                       doc_as_content_opt_possible)
                     satisfied, interactive = match_chain_was_satisfied(mc)
                     if satisfied:
                         log(

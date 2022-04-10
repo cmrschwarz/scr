@@ -1,6 +1,7 @@
 {
     "args": [
         "url=../tests/res/basic.html",
+        "cr=.", //to not trigger doc as content optimization
         "cpf={c}"
     ],
     "ec": 1,
