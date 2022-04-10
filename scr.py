@@ -2034,7 +2034,9 @@ class DownloadManager:
                 (rl.download_end - rl.download_begin).total_seconds()
             )
 
-    def append_status_report_lines_to_string(self, report_lines: list[StatusReportLine], report: str) -> str:
+    def append_status_report_line_strings(
+        self, report_lines: list[StatusReportLine], report: list[str]
+    ) -> None:
         def field_len_max(field_name: str) -> int:
             return max(map(lambda rl: len(rl.__dict__[field_name]), report_lines))
 
@@ -2081,8 +2083,7 @@ class DownloadManager:
                 rl.last_line_length = lll
             else:
                 rl.last_line_length = len(line)
-            report += line + "\n"
-        return report
+            report.append(line)
 
     def wait_until_jobs_done(self) -> None:
         if not self.pending_jobs:
@@ -2116,12 +2117,26 @@ class DownloadManager:
                     break
                 continue
             self.stringify_status_report_lines(report_lines)
+            report_line_strings: list[str] = []
+            self.append_status_report_line_strings(
+                report_lines, report_line_strings
+            )
+
             report = ""
             if committed_report_line_count:
-                report += f"\x1B[{committed_report_line_count}A"
-            report = self.append_status_report_lines_to_string(
-                report_lines, report)
+                report += f"\x1B[{committed_report_line_count}F"
+
+            max_cols = os.get_terminal_size().columns
+            if max_cols < 5:
+                # don't bother
+                continue
+
             committed_report_line_count = len(report_lines)
+            for l in report_line_strings:
+                if len(l) < max_cols:
+                    report += l + " " * (max_cols - len(l)) + "\n"
+                else:
+                    report += l[0:max_cols-3] + "...\n"
             sys.stdout.write(report)
             if not self.pending_jobs:
                 break
