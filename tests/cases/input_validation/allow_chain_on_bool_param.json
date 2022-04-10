@@ -1,6 +1,6 @@
 {
     "args": [
-        "file=./tests/res/a.txt.html",
+        "file=../tests/res/a.txt.html",
         "cx=//@src",
         "cl0"
     ],

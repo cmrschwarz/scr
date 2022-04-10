@@ -1,6 +1,6 @@
 {
     "args": [
-        "file=./tests/res/iframe_tree.html",
+        "file=../tests/res/iframe_tree.html",
         "v=info",
         "dx=//iframe/@src",
         "cx=//title/text()",
@@ -15,11 +15,11 @@
         "iframe_tree_r"
     ],
     "stderr": [
-        " [INFO]: reading file 'tests/res/iframe_tree.html'",
-        " [INFO]: reading file 'tests/res/iframe_tree_l.html'",
-        " [INFO]: reading file 'tests/res/iframe_tree_l1.html'",
-        " [INFO]: reading file 'tests/res/iframe_tree_l2.html'",
-        " [INFO]: reading file 'tests/res/iframe_tree_l3.html'",
-        " [INFO]: reading file 'tests/res/iframe_tree_r.html'"
+        " [INFO]: reading file '../tests/res/iframe_tree.html'",
+        " [INFO]: reading file '../tests/res/iframe_tree_l.html'",
+        " [INFO]: reading file '../tests/res/iframe_tree_l1.html'",
+        " [INFO]: reading file '../tests/res/iframe_tree_l2.html'",
+        " [INFO]: reading file '../tests/res/iframe_tree_l3.html'",
+        " [INFO]: reading file '../tests/res/iframe_tree_r.html'"
     ]
 }

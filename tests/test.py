@@ -31,6 +31,7 @@ class TestOptions:
     script_dir_abs: str
     script_dir_name: str
     test_output_dir: str
+    test_dummy_dir: str
     fail_early: bool = False
 
     def __init__(self) -> None:
@@ -59,7 +60,7 @@ def timed_exec(func: Callable[[], T]) -> tuple[T, str]:
     return res, time_notice
 
 
-def execute_test(command: str, args: list[str], stdin: str, cwd: Optional[str] = None) -> tuple[int, str, str]:
+def execute_test(command: str, args: list[str], stdin: str, cwd: str) -> tuple[int, str, str]:
     proc = subprocess.Popen(
         [command] + args,
         stdin=subprocess.PIPE,
@@ -122,16 +123,11 @@ def run_test(name: str, to: TestOptions) -> TestResult:
     output_files = tc.get("output_files", {})
     for ofn in output_files.keys():
         output_files[ofn] = join_lines(output_files[ofn])
-    cwd: Optional[str] = None
     if output_files:
         cwd = os.path.join(to.test_output_dir, f"{xhash(name)}")
         os.mkdir(cwd)
-        # so ./tests/res/... links still work with the changed cwd
-        os.symlink(
-            to.script_dir_abs,
-            os.path.join(cwd, to.script_dir_name),
-            True
-        )
+    else:
+        cwd = to.test_dummy_dir
 
     if to.parallelism < 2:
         msg_inprogress = f"{ANSI_YELLOW}RUNNING {name}{ANSI_CLEAR}"
@@ -247,7 +243,20 @@ def main() -> int:
         os.path.realpath(os.path.join(to.script_dir, ".."))
     )
 
+    # create temp dir for test output
     to.test_output_dir = tempfile.mkdtemp(prefix="scr_test_")
+
+    # so ../tests/res/... links still work with the changed cwd
+    os.symlink(
+        to.script_dir_abs,
+        os.path.join(to.test_output_dir, to.script_dir_name),
+        True
+    )
+
+    # dummy dir for tests that don't create files
+    to.test_dummy_dir = os.path.join(to.test_output_dir, "dummy")
+    os.mkdir(to.test_dummy_dir)
+
     try:
         # prepend the scr folder to the PATH so the tests can use it
         os.environ["PATH"] = (to.scr_main_dir + ":" + os.environ["PATH"])

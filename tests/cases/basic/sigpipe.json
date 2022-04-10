@@ -2,7 +2,7 @@
     "command": "bash",
     "args": [
         "-c",
-        "scr.py file=tests/res/foo+bar+baz.html 'cx=//li/text()' | head -n 1"
+        "scr.py file=../tests/res/foo+bar+baz.html 'cx=//li/text()' | head -n 1"
     ],
     "stdout": "foo\n"
 }

@@ -1,14 +1,13 @@
 {
     "args": [
-        "file=./tests/res/a.txt.html",
-        "rfile=./tests/res/file_url.html",
+        "file=../tests/res/a.txt.html",
+        "rfile=../tests/res/file_url.html",
         "cl=1",
         "cx=//@src",
         "cpf={c}",
         "seldl0=i",
         "seldl1=e",
-        "seldl2=f",
-        "selh"
+        "seldl2=f"
     ],
     "tags": [
         "selenium",

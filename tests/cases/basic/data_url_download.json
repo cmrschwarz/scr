@@ -1,0 +1,12 @@
+{
+    "args": [
+        "rfile=../tests/res/data_url.html",
+        "cx=//@src",
+        "cl",
+        "csf={fn}"
+    ],
+    "stdout": "",
+    "output_files": {
+        "dl_001.dat": "data_url"
+    }
+}

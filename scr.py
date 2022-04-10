@@ -77,6 +77,7 @@ DOWNLOAD_STATUS_LOG_ELEMENTS_MAX = 50
 DOWNLOAD_STATUS_LOG_MAX_AGE = 10
 DOWNLOAD_STATUS_NAME_LENGTH = 80
 DOWNLOAD_STATUS_BAR_LENGTH = 30
+URL_FILENAME_MAX_LEN = 256
 DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.2
 DEFAULT_TRUNCATION_LENGTH = 200
 DEFAULT_RESPONSE_BUFFER_SIZE = 32768
@@ -1302,18 +1303,19 @@ class DownloadJob:
     def request_status_report(self, download_manager: 'DownloadManager') -> None:
         self.status_report = DownloadStatusReport(download_manager)
 
-    def gen_fallback_filename(self) -> bool:
-        if not self.cm.mc.need_filename or self.filename is not None:
+    def gen_fallback_filename(self, dont_use_url: bool = False) -> bool:
+        if self.filename is not None or not self.cm.mc.need_filename:
             return True
-        path = cast(urllib.parse.ParseResult, self.cm.url_parsed).path
-        self.filename = sanitize_filename(urllib.parse.unquote(path))
-        if self.filename is not None:
-            return True
+        if not dont_use_url:
+            path = cast(urllib.parse.ParseResult, self.cm.url_parsed).path
+            self.filename = sanitize_filename(urllib.parse.unquote(path))
+            if self.filename is not None and len(self.filename) < URL_FILENAME_MAX_LEN:
+                return True
         try:
             self.filename = gen_final_content_format(
                 cast(str, self.cm.mc.filename_default_format), self.cm, None
             ).decode("utf-8", errors="surrogateescape")
-            return False
+            return True
         except UnicodeDecodeError:
             log(
                 self.cm.mc.ctx, Verbosity.ERROR,
@@ -1547,17 +1549,21 @@ class DownloadJob:
             self.cm.doc.document_type == DocumentType.FILE
             and cast(urllib.parse.ParseResult, self.cm.url_parsed).scheme in ["", "file"]
         ):
-            return self.selenium_download_from_local_file()
-
-        if self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
-            return self.selenium_download_external()
-
-        if self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
-            return self.selenium_download_internal()
-
-        assert self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
-
-        return self.selenium_download_fetch()
+            if not self.selenium_download_from_local_file():
+                return False
+        elif self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.EXTERNAL:
+            if not self.selenium_download_external():
+                return False
+        elif self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.INTERNAL:
+            if not self.selenium_download_internal():
+                return False
+        else:
+            assert self.cm.mc.selenium_download_strategy == SeleniumDownloadStrategy.FETCH
+            if not self.selenium_download_fetch():
+                return False
+        if not self.gen_fallback_filename():
+            return False
+        return True
 
     def fetch_content(self) -> bool:
         if self.content_format is not None:
@@ -1580,6 +1586,8 @@ class DownloadJob:
                         self.content_format = ContentFormat.BYTES
                         if self.status_report:
                             self.status_report.expected_size = len(data)
+                        if not self.gen_fallback_filename(dont_use_url=True):
+                            return False
                     elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
                         self.content = self.cm.clm.result
                         self.content_format = ContentFormat.FILE
@@ -1589,12 +1597,16 @@ class DownloadJob:
                                     self.content)
                             except IOError:
                                 pass
+                        if not self.gen_fallback_filename():
+                            return False
                     else:
                         try:
                             res = request_raw(
                                 self.cm.mc.ctx, self.cm.clm.result,
-                                cast(urllib.parse.ParseResult,
-                                     self.cm.url_parsed),
+                                cast(
+                                    urllib.parse.ParseResult,
+                                    self.cm.url_parsed
+                                ),
                                 stream=True
                             )
                             self.content = ResponseStreamWrapper(res)
@@ -1604,13 +1616,13 @@ class DownloadJob:
                                     request_try_get_filesize(res)
                                 )
                             self.content_format = ContentFormat.STREAM
+                            if not self.gen_fallback_filename():
+                                return False
                         except requests.exceptions.RequestException as ex:
                             fe = request_exception_to_scr_fetch_error(ex)
                             log(self.cm.mc.ctx, Verbosity.ERROR,
                                 f"{self.context}: failed to download '{truncate(self.cm.clm.result)}': {str(fe)}")
                             return False
-        if not self.gen_fallback_filename():
-            return False
         return True
 
     def setup_save_file(self) -> bool:

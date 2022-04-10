@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=./tests/res/js_content.html",
+        "rfile=../tests/res/js_content.html",
         "cx=//p/text()",
         "sel=c",
         "selh"
