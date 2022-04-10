@@ -1,13 +1,20 @@
-/v0*
-geckodriver
-/geckodriver.log
-/cookies.txt
 /.vscode
-/.mypy_cache
-/tmp
-/*.tmp
-/scr.egg-info
-/build
-/dist
+
+# python
 *.pyc
 __pycache__
+.pytest_cache
+.mypy_cache
+
+# setuptools
+*.egg-info
+/build
+/dist
+
+# scr trying to install geckodriver
+geckodriver
+geckodriver.log
+
+# scr dev stuff
+/tmp
+*.tmp

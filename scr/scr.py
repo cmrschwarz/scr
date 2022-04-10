@@ -2456,7 +2456,9 @@ def get_script_dir() -> str:
 
 
 def add_script_dir_to_path() -> None:
-    os.environ["PATH"] = get_script_dir() + ":" + os.environ["PATH"]
+    # we add this to the end because we want any geckodrivers
+    # that the user installed to be preferred over our one
+    os.environ["PATH"] = os.environ["PATH"] + get_script_dir()
 
 
 def truncate(
@@ -4443,7 +4445,7 @@ def match_traditional_cli_arg(arg: str, true_opt_name: str, aliases: set[str]) -
     return None
 
 
-def print_version():
+def print_version() -> None:
     print(f"{SCRIPT_NAME} {VERSION}")
 
 
@@ -4645,7 +4647,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
     return special_args_occured
 
 
-def run_scr() -> int:
+def run_scr(args: list[str]) -> int:
     ctx = ScrContext(blank=True)
     if len(sys.argv) < 2:
         log_raw(
@@ -4655,7 +4657,7 @@ def run_scr() -> int:
         return 1
 
     try:
-        special_args_occured = parse_args(ctx, sys.argv[1:])
+        special_args_occured = parse_args(ctx, args[1:])
         setup(ctx, special_args_occured)
     except ScrSetupError as ex:
         log_raw(Verbosity.ERROR, str(ex))
@@ -4683,7 +4685,7 @@ def main() -> None:
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
-        exit(run_scr())
+        exit(run_scr(sys.argv))
     except BrokenPipeError:
         abort_on_broken_pipe()
     except KeyboardInterrupt:

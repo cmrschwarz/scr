@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from multiprocessing import Pool, cpu_count
+from typing import Any, Union, TypeVar, Callable, Optional, cast
+from enum import Enum
 import os
 import json5
 import glob
@@ -8,9 +11,7 @@ import time
 import subprocess
 import shutil
 import tempfile
-from enum import Enum
-from typing import Any, Union, TypeVar, Callable, Optional, cast
-from multiprocessing import Pool, cpu_count
+import scr
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
@@ -22,7 +23,7 @@ DASH_BAR = "-" * 80
 T = TypeVar('T')
 
 
-class TestOptions:
+class TOptions:  # can't name this TestOptions because of pytest...
     tags_need: list[str]
     tags_avoid: list[str]
     parallelism: int = cpu_count()
@@ -37,6 +38,12 @@ class TestOptions:
     def __init__(self) -> None:
         self.tags_need = []
         self.tags_avoid = []
+
+
+class TResult(Enum):
+    SUCCESS = 0,
+    FAILED = 1,
+    SKIPPED = 2
 
 
 def get_cmd_string(tc: dict[str, Any]) -> str:
@@ -81,19 +88,13 @@ def join_lines(lines: Union[list[str], str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-class TestResult(Enum):
-    SUCCESS = 0,
-    FAILED = 1,
-    SKIPPED = 2
-
-
-def run_test(name: str, to: TestOptions) -> TestResult:
+def run_test(name: str, to: TOptions) -> TResult:
     with open(name, "r") as f:
         try:
             tc = json5.load(f)
         except ValueError as ex:
             print(f"{ANSI_RED}JSON PARSE ERROR in {name}: {str(ex)}{ANSI_CLEAR}")
-            return TestResult.FAILED
+            return TResult.FAILED
     tags = tc.get("tags", [])
     tags.append(name)
     discard = False
@@ -112,7 +113,7 @@ def run_test(name: str, to: TestOptions) -> TestResult:
                     break
     if discard:
         # print(f"{ANSI_YELLOW}SKIPPED {name}{ANSI_CLEAR}")
-        return TestResult.SKIPPED
+        return TResult.SKIPPED
 
     ec = tc.get("ec", 0)
     command = tc.get("command", "scr.py")
@@ -188,18 +189,18 @@ def run_test(name: str, to: TestOptions) -> TestResult:
             msg = "\r" + msg
     msg += "\n"
     sys.stdout.write(msg)
-    return TestResult.SUCCESS if success else TestResult.FAILED
+    return TResult.SUCCESS if success else TResult.FAILED
 
 
-def run_test_wrapper(args: tuple[str, TestOptions]) -> TestResult:
+def run_test_wrapper(args: tuple[str, TOptions]) -> TResult:
     return run_test(*args)
 
 
-def run_tests(to: TestOptions) -> dict[TestResult, int]:
+def run_tests(to: TOptions) -> dict[TResult, int]:
     results = {
-        TestResult.SKIPPED: 0,
-        TestResult.FAILED: 0,
-        TestResult.SUCCESS: 0
+        TResult.SKIPPED: 0,
+        TResult.FAILED: 0,
+        TResult.SUCCESS: 0
     }
 
     tests = glob.glob(f"{to.script_dir}/cases/**/*.json", recursive=True)
@@ -207,7 +208,7 @@ def run_tests(to: TestOptions) -> dict[TestResult, int]:
         for name in tests:
             res = run_test(name, to)
             results[res] += 1
-            if to.fail_early and res == TestResult.FAILED:
+            if to.fail_early and res == TResult.FAILED:
                 break
         return results
 
@@ -226,20 +227,20 @@ def xhash(input: Any = None) -> str:
     return hex(hash(input))[3:]
 
 
-def main() -> int:
-    to = TestOptions()
+# can't be named test_run because of pytest...
+def test_cli() -> int:
+    to = TOptions()
     to.script_dir_abs = os.path.dirname(
         os.path.abspath(os.path.realpath(__file__))
     )
+    to.script_dir = os.path.relpath(to.script_dir_abs)
+    to.script_dir_name = os.path.basename(to.script_dir)
 
     # cd into parent of scriptdir
     os.chdir(os.path.join(to.script_dir_abs, ".."))
 
-    to.script_dir = os.path.relpath(to.script_dir_abs)
-    to.script_dir_name = os.path.basename(to.script_dir)
-
     to.scr_main_dir = os.path.abspath(
-        os.path.realpath(os.path.join(to.script_dir, ".."))
+        os.path.realpath(os.path.dirname(scr.__file__))
     )
 
     # create temp dir for test output
@@ -287,24 +288,27 @@ def main() -> int:
     finally:
         shutil.rmtree(to.test_output_dir)
 
-    if results[TestResult.SKIPPED]:
-        skip_notice = f", {results[TestResult.SKIPPED]} test(s) skipped"
+    if results[TResult.SKIPPED]:
+        skip_notice = f", {results[TResult.SKIPPED]} test(s) skipped"
     else:
         skip_notice = ""
 
-    if results[TestResult.FAILED]:
-        print(
-            f"{ANSI_RED}{results[TestResult.FAILED]} test(s) failed, {results[TestResult.SUCCESS]} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
-        return 1
+    if results[TResult.FAILED]:
+        msg = f"{ANSI_RED}{results[TResult.FAILED]} test(s) failed, {results[TResult.SUCCESS]} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]"
+        print(msg)
+        # so pytest can report this
+        raise ValueError(msg)
     else:
         print(
-            f"{ANSI_GREEN}{results[TestResult.SUCCESS]} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
+            f"{ANSI_GREEN}{results[TResult.SUCCESS]} test(s) passed{skip_notice}{ANSI_CLEAR} [{exec_time_str}]")
         return 0
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        sys.exit(test_cli())
+    except ValueError as ae:
+        exit(1)
     except KeyboardInterrupt:
         print("")
         pass
