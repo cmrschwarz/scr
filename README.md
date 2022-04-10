@@ -3,12 +3,12 @@
 Command-line Utility for Web Scraping
 
 ## Core Features
-* Matches web content using XPath-, Regex- and Python Format Expressions 
+* Extract web content based on XPath-, Regex-, (Javascript-), and Python Format Expressions 
 * Crawls through complex graphs of webpages using expressive match chains and forwarding rules
 * Selenium support, explicitly also with the Tor Browser
 * REPL mode for building up complex commands
 * **dd** style Command-line Interface
-* Multithreaded Downloads
+* Multithreaded Downloads with optional progress output on the console
 * Interactive modes for rejecting false matches, adjusting filenames etc. 
 
 
@@ -75,14 +75,15 @@ package for your distribution.
 ## Options List
 ```
 scr [OPTIONS]
-    Extract content from urls or files by specifying content matching chains
-    (xpath -> regex -> python format string).
+
+    Matching chains are evaluated in the following order, skipping unspecified steps:
+    xpath -> regex -> (javascript) -> python format string
 
     Content to Write out:
         cx=<xpath>           xpath for content matching
         cr=<regex>           regex for content matching
-        cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
         cjs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
+        cf=<format string>   content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
         cmm=<bool>           allow multiple content matches in one document instead of picking the first (defaults to true)
         cimin=<number>       initial content index, each successful match gets one index
         cimax=<number>       max content index, matching stops here
@@ -103,8 +104,8 @@ scr [OPTIONS]
     Labels to give each matched content (mostly useful for the filename in csf):
         lx=<xpath>          xpath for label matching
         lr=<regex>          regex for label matching
+        ljs=<js string>     javascript to execute on the page, format args are available as js variables (selenium only)
         lf=<format string>  label format string
-        ljs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         lic=<bool>          match for the label within the content match instead of the hole document
         las=<bool>          allow slashes in labels
         lmm=<bool>          allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -115,8 +116,8 @@ scr [OPTIONS]
     Further documents to scan referenced in already found ones:
         dx=<xpath>          xpath for document matching
         dr=<regex>          regex for document matching
-        df=<format string>  document format string
         djs=<js string>     javascript to execute on the page, format args are available as js variables (selenium only)
+        df=<format string>  document format string
         dimin=<number>      initial document index, each successful match gets one index
         dimax=<number>      max document index, matching stops here
         dmm=<bool>          allow multiple document matches in one document instead of picking the first
