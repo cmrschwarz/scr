@@ -2455,10 +2455,18 @@ def get_script_dir() -> str:
     return os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 
 
-def add_script_dir_to_path() -> None:
-    # we add this to the end because we want any geckodrivers
-    # that the user installed to be preferred over our one
-    os.environ["PATH"] = os.environ["PATH"] + get_script_dir()
+def get_selenium_drivers_dir() -> str:
+    return os.path.join(get_script_dir(), "selenium_drivers")
+
+
+def add_selenium_drivers_dir_to_path() -> None:
+    # we add this to the end because we want any geckodrivers etc.
+    # that the user installed to be preferred over our ones
+    path = os.environ["PATH"]
+    drivers_dir = get_selenium_drivers_dir()
+    if path.endswith(":" + drivers_dir):
+        return
+    os.environ["PATH"] += ":" + drivers_dir
 
 
 def truncate(
@@ -2512,9 +2520,8 @@ def selenium_build_firefox_options(
 
 
 def setup_selenium_tor(ctx: ScrContext) -> None:
-    # use bundled geckodriver if available
     cwd = os.getcwd()
-    add_script_dir_to_path()
+    add_selenium_drivers_dir_to_path()
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
         if tb_env_var in os.environ:
@@ -2533,14 +2540,13 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
 
 
 def have_local_geckodriver() -> tuple[bool, str]:
-    sd = get_script_dir()
+    sd = get_selenium_drivers_dir()
     target = os.path.join(sd, "geckodriver")
     return os.path.exists(target), target
 
 
 def setup_selenium_firefox(ctx: ScrContext) -> None:
-    # use bundled geckodriver if available
-    add_script_dir_to_path()
+    add_selenium_drivers_dir_to_path()
     try:
         ctx.selenium_driver = selenium.webdriver.Firefox(
             options=selenium_build_firefox_options(ctx),
@@ -2558,8 +2564,7 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
 
 
 def setup_selenium_chrome(ctx: ScrContext) -> None:
-    # allow usage of bundled chromedriver
-    add_script_dir_to_path()
+    add_selenium_drivers_dir_to_path()
     options = selenium.webdriver.ChromeOptions()
     if ctx.selenium_headless:
         options.headless = True
@@ -4471,10 +4476,15 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
                     )
                     continue
                 cwd = os.getcwd()
-                os.chdir(get_script_dir())
+                driver_dir = os.path.join(
+                    get_selenium_drivers_dir(), "firefox")
+                if not os.path.exists(driver_dir):
+                    os.makedirs(driver_dir)
+                os.chdir(driver_dir)
                 path = geckodriver_autoinstaller.install(cwd=True)
                 os.chdir(cwd)
-                os.symlink(path, target)
+                if not present:
+                    os.symlink(path, target)
                 log(ctx, Verbosity.INFO, f"installed geckodriver at {path}")
             except (RuntimeError, urllib.error.URLError, FileNotFoundError) as ex:
                 raise ScrSetupError(
