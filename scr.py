@@ -3916,6 +3916,7 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                 except SeleniumWebDriverException as ex:
                     if selenium_has_died(ctx):
                         report_selenium_died(ctx)
+                        break
                     else:
                         log(ctx, Verbosity.WARN,
                             f"selenium failed to fetch page source: {str(ex)}")
