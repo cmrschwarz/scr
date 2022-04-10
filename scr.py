@@ -1737,6 +1737,8 @@ class DownloadJob:
             self.check_abort()
 
             if self.content_stream is None:
+                if self.status_report and self.content:
+                    self.status_report.submit_update(len(cast(Union[str, bytes], self.content)))
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
