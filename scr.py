@@ -1411,6 +1411,10 @@ class DownloadJob:
                 self.content = ResponseStreamWrapper(req)
                 self.content_format = ContentFormat.STREAM
                 self.filename = request_try_get_filename(req)
+                if self.status_report:
+                    self.status_report.expected_size = (
+                        request_try_get_filesize(req)
+                    )
                 return True
             except requests.exceptions.RequestException as ex:
                 raise request_exception_to_scr_fetch_error(ex)
@@ -1738,7 +1742,8 @@ class DownloadJob:
 
             if self.content_stream is None:
                 if self.status_report and self.content:
-                    self.status_report.submit_update(len(cast(Union[str, bytes], self.content)))
+                    self.status_report.submit_update(
+                        len(cast(Union[str, bytes], self.content)))
                 for of in self.output_formatters:
                     res = of.advance()
                     assert res == False
@@ -1758,10 +1763,10 @@ class DownloadJob:
 
             if self.content_stream is not None:
                 while True:
-                    buf = self.content_stream.read(
-                        DEFAULT_RESPONSE_BUFFER_SIZE
-                    )
+                    buf = self.content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
                     self.check_abort()
+                    if buf is None:
+                        continue
                     if self.status_report:
                         self.status_report.submit_update(len(buf))
                     advance_output_formatters(self.output_formatters, buf)
@@ -1952,7 +1957,7 @@ class DownloadManager:
                 tip = ">" if rl.downloaded_size != rl.expected_size else "="
                 rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
             elif rl.finished:
-                rl.bar_str = "[" + "*" * (DOWNLOAD_STATUS_BAR_LENGTH - 2) + "]"
+                rl.bar_str = "[" + "*" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
             else:
                 left = rl.star_pos - 1
                 right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
@@ -1991,7 +1996,7 @@ class DownloadManager:
                 handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
                 if handled_size == 0:
                     speed = 0.0
-                    rl.eta_str, rl.eta_u_str = "???", "?"
+                    rl.eta_str, rl.eta_u_str = "???", " "
                 else:
                     speed = float(handled_size) / duration
                     if rl.expected_size and rl.expected_size > rl.downloaded_size:
@@ -2001,12 +2006,12 @@ class DownloadManager:
                     elif rl.finished:
                         rl.eta_str, rl.eta_u_str = "---", "-"
                     else:
-                        rl.eta_str, rl.eta_u_str = "???", "?"
+                        rl.eta_str, rl.eta_u_str = "???", " "
                 rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
                 rl.speed_u_str += "/s"
             else:
                 rl.speed_frame_time_end = now
-                rl.eta_str, rl.eta_u_str = "???", "?"
+                rl.eta_str, rl.eta_u_str = "???", " "
                 rl.speed_str, rl.speed_u_str = "???", "B/s"
 
             rl.total_time_str, rl.total_time_u_str = get_timespan_string(
@@ -2046,7 +2051,7 @@ class DownloadManager:
             line += lpad(rl.expected_size_str, expected_size_lm) + " "
             line += rpad(rl.expected_size_u_str, expected_size_u_lm) + " "
 
-            line += "eta: "
+            line += "eta "
             line += lpad(rl.eta_str, eta_lm)
             line += " " + rpad(rl.eta_u_str, eta_u_lm) + " "
 
