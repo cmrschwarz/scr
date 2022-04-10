@@ -7,7 +7,7 @@ import multiprocessing
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, BinaryIO, TextIO, Union, cast
 import mimetypes
 import shutil
-from io import BytesIO, SEEK_SET
+from io import BytesIO
 import binascii
 import threading
 import shlex
@@ -64,7 +64,7 @@ V = TypeVar("V")
 # because for python, sys.argv[0] does not reflect what the user typed anyways,
 # we just use this fixed value for --help etc.
 SCRIPT_NAME = "scr"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 
@@ -4443,6 +4443,10 @@ def match_traditional_cli_arg(arg: str, true_opt_name: str, aliases: set[str]) -
     return None
 
 
+def print_version():
+    print(f"{SCRIPT_NAME} {VERSION}")
+
+
 def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
     special_args_occured = False
     for arg in args:
@@ -4451,7 +4455,7 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
             special_args_occured = True
             continue
         if match_traditional_cli_arg(arg, "version", {"-v", "--version"}):
-            print(f"scr {VERSION}")
+            print_version()
             special_args_occured = True
             continue
         if match_traditional_cli_arg(arg, "install-geckodriver", {"--install-geckodriver"}):
