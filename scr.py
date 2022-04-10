@@ -3512,7 +3512,17 @@ def gen_content_matches(
             dummy_llm = LocatorMatch()
         dummy_clm = LocatorMatch()
         dummy_clm.result = doc.path
-        return [ContentMatch(dummy_clm, dummy_llm, mc, doc)], 0
+        dummy_doc = doc
+        if doc.document_type.derived_type() == DocumentType.FILE:
+            # - we need normalize url to not change relative pathes
+            # - we also need the derived type FILE even for rfiles
+            # - we can't just change the document_type because this messes
+            #   with last_doc for the repl
+            dummy_doc = Document(
+                DocumentType.CONTENT_FILE, path=doc.path, src_mc=doc.src_mc,
+                locator_match=doc.locator_match, path_parsed=doc.path_parsed
+            )
+        return [ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
     text = cast(str, doc.text)
     content_matches: list[ContentMatch] = []
     content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
@@ -3836,7 +3846,7 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
         last_doc_path = doc.path
         unsatisfied_chains = 0
         have_xpath_matching = 0
-        doc_as_content_opt_possible = True
+        doc_as_content_opt_possible = not ctx.selenium_variant.enabled()
         for mc in doc.match_chains:
             if mc.need_document_matches(False) or mc.need_content_matches():
                 if mc.parses_documents:
@@ -3845,10 +3855,6 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
                 mc.satisfied = False
                 if mc.has_xpath_matching:
                     have_xpath_matching += 1
-        if doc_as_content_opt_possible:
-            if doc.document_type in [DocumentType.RFILE, DocumentType.FILE]:
-                # we need the derived type of this to be FILE
-                doc.document_type = DocumentType.CONTENT_FILE
         if unsatisfied_chains == 0:
             if not ctx.selenium_variant.enabled() or (doc is ctx.reused_doc and not ctx.changed_selenium):
                 continue
