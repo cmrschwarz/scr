@@ -153,8 +153,9 @@ def run_test(name: str, to: TestOptions) -> TestResult:
         success = True
 
     if success and output_files:
+        dirpath = cast(str, cwd)
         for fn, fv in output_files.items():
-            fp = os.path.join(cast(str, cwd), fn)
+            fp = os.path.join(dirpath, fn)
             try:
                 with open(fp, "r") as f:
                     content = f.read()
@@ -163,7 +164,14 @@ def run_test(name: str, to: TestOptions) -> TestResult:
                     success = False
                     break
             except FileNotFoundError:
-                reason = f"output file missing: {fn}\n{get_cmd_string(tc)}"
+                output_files = ", ".join(
+                    [
+                        os.path.relpath(f, cwd)
+                        for f in glob.glob(dirpath + "/**")
+                        if f != os.path.join(dirpath, to.script_dir_name)
+                    ]
+                )
+                reason = f"output file missing: '{fn}', present are: [{output_files}]\n{get_cmd_string(tc)}"
                 success = False
                 break
     msg = ""
@@ -187,8 +195,10 @@ def run_test(name: str, to: TestOptions) -> TestResult:
     sys.stdout.write(msg)
     return TestResult.SUCCESS if success else TestResult.FAILED
 
+
 def run_test_wrapper(args: tuple[str, TestOptions]) -> TestResult:
     return run_test(*args)
+
 
 def run_tests(to: TestOptions) -> dict[TestResult, int]:
     results = {
