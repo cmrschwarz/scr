@@ -2420,6 +2420,11 @@ def help(err: bool = False) -> None:
             lf1,3-5=foo     sets "lf" to "foo" for chains 1, 3, 4 and 5.
             lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
+    Miscellaneous:
+        help                prints this help
+        install-geckodriver installs geckodriver (the firefox driver for selenium) in the directory of this script 
+        version             print version information
+
     Global Options:
         timeout=<seconds>   seconds before a web request timeouts (default {DEFAULT_TIMEOUT_SECONDS})
         bfs=<bool>          traverse the matched documents in breadth first order instead of depth first
@@ -2436,6 +2441,7 @@ def help(err: bool = False) -> None:
         mt=<int>            maximum threads for background downloads, 0 to disable. defaults to cpu core count
         repl=<bool>         accept commands in a read eval print loop
         exit=<bool>         exit the repl (with the result of the current command)
+
         """.strip()
     if err:
         sys.stderr.write(text + "\n")
@@ -2544,7 +2550,8 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
         err_msg = f"failed to start geckodriver: {ex_msg}"
         have, _path = have_local_geckodriver()
         if not have:
-            err_msg += f"\n    consider {SCRIPT_NAME} --install-geckodriver"
+            # this is slightly hacky, but i like the way it looks
+            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} --install-geckodriver'"
         raise ScrSetupError(err_msg)
 
 
@@ -4456,7 +4463,10 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> bool:
                         f"a file is already present in {target}"
                     )
                     continue
+                cwd = os.getcwd()
+                os.chdir(get_script_dir())
                 path = geckodriver_autoinstaller.install(cwd=True)
+                os.chdir(cwd)
                 os.symlink(path, target)
                 log(ctx, Verbosity.INFO, f"installed geckodriver at {path}")
             except (RuntimeError, urllib.error.URLError, FileNotFoundError) as ex:

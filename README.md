@@ -187,6 +187,11 @@ scr [OPTIONS]
             lf1,3-5=foo     sets "lf" to "foo" for chains 1, 3, 4 and 5.
             lf2-^4=bar      sets "lf" to "bar" for all chains larger than or equal to 2, except chain 4
 
+    Miscellaneous:
+        help                prints this help
+        install-geckodriver installs geckodriver (the firefox driver for selenium) in the directory of this script 
+        version             print version information
+
     Global Options:
         timeout=<seconds>   seconds before a web request timeouts (default 30)
         bfs=<bool>          traverse the matched documents in breadth first order instead of depth first
