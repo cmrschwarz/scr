@@ -229,20 +229,20 @@ def xhash(input: Any = None) -> str:
 # can't be named test_run because of pytest...
 def test_cli() -> int:
     to = TOptions()
+
+    # semi hardcode this to avoid importing scr which causes trouble
+    # for using this as a single file scripts
+    # cd into to scr root dir of scriptdir so errors are clickable :)
+    os.chdir("../../")
+    to.scr_main_dir = os.path.abspath(
+        os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+    )
+
     to.script_dir_abs = os.path.dirname(
         os.path.abspath(os.path.realpath(__file__))
     )
     to.script_dir = os.path.relpath(to.script_dir_abs)
     to.script_dir_name = os.path.basename(to.script_dir)
-
-    # cd into parent of scriptdir
-    os.chdir(os.path.join(to.script_dir_abs, ".."))
-
-    # semi hardcode this to avoid importing scr which causes trouble
-    # for using this as a single file scripts
-    to.scr_main_dir = os.path.abspath(
-        os.path.realpath(os.path.join(to.script_dir_abs, "../scr"))
-    )
 
     # create temp dir for test output
     to.test_output_dir = tempfile.mkdtemp(prefix="scr_test_")
