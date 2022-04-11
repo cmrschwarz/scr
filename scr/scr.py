@@ -4007,6 +4007,7 @@ def process_document_queue(ctx: ScrContext) -> Optional[Document]:
 
 def finalize(ctx: ScrContext) -> None:
     if ctx.dl_manager:
+        success = False
         try:
             ctx.dl_manager.pom.main_thread_done()
             success = True
