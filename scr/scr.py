@@ -4495,9 +4495,13 @@ def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> str:
     )
 
 
+def is_selenium_driver_present(path: str):
+    return os.path.getsize(path) != 0
+
+
 def try_get_local_selenium_driver_path(variant: SeleniumVariant) -> Optional[str]:
     path = get_local_selenium_driver_executable_path(variant)
-    if os.path.getsize(path) != 0:
+    if is_selenium_driver_present(path):
         return path
     return None
 
@@ -4519,13 +4523,16 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
             "unable to install webdriver for '{selenium_variants_display_dict[variant]}'"
         )
     driver_dir = get_selenium_drivers_dir()
-    have_local = try_get_local_selenium_driver_path(variant) is not None
+    local_driver_path = get_local_selenium_driver_executable_path(variant)
+    have_local = is_selenium_driver_present(local_driver_path)
     if have_local and not update:
         log(
             ctx, Verbosity.INFO,
             f"existing {selenium_variants_display_dict[variant]} driver found"
         )
         return
+    success = False
+
     try:
         selenium_driver_updater.DriverUpdater.install(
             path=driver_dir, driver_name=driver_name,
@@ -4534,9 +4541,10 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
             upgrade=True,
             info_messages=False
         )
+        success = True
         log(
             ctx, Verbosity.INFO,
-            f"{selenium_variants_display_dict[variant]} driver " 
+            f"{selenium_variants_display_dict[variant]} driver "
             + ("updated" if have_local else "installed")
         )
     except (selenium_driver_updater.util.exceptions.Error) as ex:
@@ -4544,6 +4552,10 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
             ctx, Verbosity.ERROR,
             f"failed to fetch {selenium_variants_display_dict[variant]} driver: {str(ex)}"
         )
+    finally:
+        # we should not have to do this, this is working around a bug in the library
+        if not success:
+            open(local_driver_path, "w").close()
 
 
 def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant):
