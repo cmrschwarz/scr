@@ -26,6 +26,7 @@ import re
 import math
 import concurrent.futures
 import os
+import glob
 from string import Formatter
 import readline
 import urllib.parse
@@ -2435,7 +2436,7 @@ def help(err: bool = False) -> None:
 
     Miscellaneous:
         help                prints this help
-        install-geckodriver installs geckodriver (the firefox driver for selenium) in the directory of this script 
+        install-geckodriver installs geckodriver (the firefox driver for selenium) in the directory of this script
         version             print version information
 
     Global Options:
@@ -4479,24 +4480,36 @@ def print_version() -> None:
     print(f"{SCRIPT_NAME} {VERSION}")
 
 
-def get_selenium_driver_executable_basename(variant: SeleniumVariant) -> str:
+def get_selenium_driver_executable_basename(variant: SeleniumVariant) -> Optional[str]:
     #windows = (os.name == 'nt')
     return {
         SeleniumVariant.CHROME: "chromedriver",
         SeleniumVariant.FIREFOX: "geckodriver",
-        SeleniumVariant.TORBROWSER: "geckodriver"
+        SeleniumVariant.TORBROWSER: "geckodriver",
+        SeleniumVariant.DISABLED: None
     }[variant]  # + (".exe" if windows else "")
 
 
-def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> str:
+def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> Optional[str]:
+    basename = get_selenium_driver_executable_basename(variant)
+    if basename is None:
+        return None
     return os.path.join(
         get_selenium_drivers_dir(),
-        get_selenium_driver_executable_basename(variant)
+        basename
     )
 
 
-def is_selenium_driver_present(path: str):
-    return os.path.getsize(path) != 0
+def touch_file(path: str) -> None:
+    open(path, "ab").close()
+
+
+def is_selenium_driver_present(path: str) -> bool:
+    try:
+        return os.path.getsize(path) != 0
+    except FileNotFoundError:
+        touch_file(path)
+        return False
 
 
 def try_get_local_selenium_driver_path(variant: SeleniumVariant) -> Optional[str]:
@@ -4510,7 +4523,10 @@ def get_preferred_selenium_driver_path(variant: SeleniumVariant) -> str:
     path = try_get_local_selenium_driver_path(variant)
     if path is not None:
         return path
-    return get_selenium_driver_executable_basename(variant)
+    basename = get_selenium_driver_executable_basename(variant)
+    # this function makes no sense for DISABLED
+    assert basename is not None
+    return basename
 
 
 def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: bool) -> None:
@@ -4523,7 +4539,8 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
             "unable to install webdriver for '{selenium_variants_display_dict[variant]}'"
         )
     driver_dir = get_selenium_drivers_dir()
-    local_driver_path = get_local_selenium_driver_executable_path(variant)
+    local_driver_path = cast(
+        str, get_local_selenium_driver_executable_path(variant))
     have_local = is_selenium_driver_present(local_driver_path)
     if have_local and not update:
         log(
@@ -4534,6 +4551,11 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
     success = False
 
     try:
+        log(
+            ctx, Verbosity.INFO,
+            ("updating" if have_local else "installing") +
+            f" {selenium_variants_display_dict[variant]} driver ..."
+        )
         selenium_driver_updater.DriverUpdater.install(
             path=driver_dir, driver_name=driver_name,
             check_driver_is_up_to_date=have_local,
@@ -4556,13 +4578,37 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
         # we should not have to do this, this is working around a bug in the library
         if not success:
             open(local_driver_path, "w").close()
+        cleanup_selenium_installation_artifacts(ctx)
 
 
-def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant):
+def cleanup_selenium_installation_artifacts(ctx: ScrContext) -> None:
+    # clean up remains from potentially failed installs
+    present_files = [
+        os.path.realpath(p)
+        for p in glob.glob(get_selenium_drivers_dir() + "/**")
+    ]
+    variant_files = {
+        get_local_selenium_driver_executable_path(v)
+        for v in SeleniumVariant if v is not None
+    }
+    cleanup = False
+    for pf in present_files:
+        if not pf in variant_files:
+            os.remove(pf)
+            cleanup = True
+    if cleanup:
+        log(
+            ctx, Verbosity.INFO,
+            f"cleaned up artifacts from previous installations"
+        )
+
+
+def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant) -> None:
+    cleanup_selenium_installation_artifacts(ctx)
     path = try_get_local_selenium_driver_path(variant)
     if path is None:
         log(
-            ctx, Verbosity.ERROR,
+            ctx, Verbosity.WARN,
             f"no {selenium_variants_display_dict[variant]} driver installed"
         )
         return
@@ -4573,7 +4619,7 @@ def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant):
     )
 
 
-def parse_selenium_variants(value: str, arg: str):
+def parse_selenium_variants(value: str, arg: str) -> Optional[SeleniumVariant]:
     return parse_variant_arg(value, selenium_variants_dict, arg)
 
 
