@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import functools
-from lib2to3.pgen2 import driver
 import subprocess
 import selenium.webdriver
 from abc import ABC, abstractmethod
@@ -2529,7 +2528,7 @@ def selenium_build_firefox_options(
 
 def setup_selenium_tor(ctx: ScrContext) -> None:
     cwd = os.getcwd()
-    driver_executable = get_preferred_selenium_driver_executable(
+    driver_executable = get_preferred_selenium_driver_path(
         SeleniumVariant.TORBROWSER
     )
     if ctx.tor_browser_dir is None:
@@ -2551,7 +2550,7 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
 
 
 def setup_selenium_firefox(ctx: ScrContext) -> None:
-    driver_executable = get_preferred_selenium_driver_executable(
+    driver_executable = get_preferred_selenium_driver_path(
         SeleniumVariant.FIREFOX
     )
     try:
@@ -2573,7 +2572,7 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
 
 
 def setup_selenium_chrome(ctx: ScrContext) -> None:
-    driver_executable = get_preferred_selenium_driver_executable(
+    driver_executable = get_preferred_selenium_driver_path(
         SeleniumVariant.CHROME
     )
     options = selenium.webdriver.ChromeOptions()

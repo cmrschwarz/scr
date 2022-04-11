@@ -11,7 +11,6 @@ import time
 import subprocess
 import shutil
 import tempfile
-import scr
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
@@ -239,8 +238,10 @@ def test_cli() -> int:
     # cd into parent of scriptdir
     os.chdir(os.path.join(to.script_dir_abs, ".."))
 
+    # semi hardcode this to avoid importing scr which causes trouble
+    # for using this as a single file scripts
     to.scr_main_dir = os.path.abspath(
-        os.path.realpath(os.path.dirname(scr.__file__))
+        os.path.realpath(os.path.join(to.script_dir_abs, "../scr"))
     )
 
     # create temp dir for test output
