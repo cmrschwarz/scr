@@ -11,13 +11,6 @@ __pycache__
 /build
 /dist
 
-# scr trying to install geckodriver
-geckodriver
-geckodriver.log
-
-# selenium driver autoinstalls
-/scr/selenium_drivers
-
 # scr dev stuff
 /tmp
 *.tmp

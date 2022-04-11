@@ -44,6 +44,7 @@ import selenium.common.exceptions
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
 from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
 import selenium_driver_updater
+import selenium_driver_updater.util.exceptions
 # this is of course not really a selenium exception,
 # but selenium throws it arbitrarily, just like SeleniumWebDriverException,
 # and that is the only way in which we use it
@@ -2469,25 +2470,11 @@ def get_script_dir() -> str:
 
 
 def get_selenium_drivers_dir() -> str:
+    script_dir = get_script_dir()
+    debug_path = os.path.join(script_dir, "selenium_drivers_debug")
+    if os.path.exists(debug_path):
+        return debug_path
     return os.path.join(get_script_dir(), "selenium_drivers")
-
-
-def ensure_selenium_drivers_dir_exists() -> str:
-    drivers_dir = get_selenium_drivers_dir()
-    if not os.path.exists(drivers_dir):
-        os.mkdir(drivers_dir)
-    return drivers_dir
-
-
-def add_selenium_drivers_dir_to_path() -> None:
-    # we add this to the end because we want any geckodrivers etc.
-    # that the user installed to be preferred over our ones
-    drivers_dir = get_selenium_drivers_dir()
-    path = os.environ["PATH"]
-    if path.endswith(":" + drivers_dir):
-        return
-    ensure_selenium_drivers_dir_exists()
-    os.environ["PATH"] += ":" + drivers_dir
 
 
 def truncate(
@@ -2542,7 +2529,9 @@ def selenium_build_firefox_options(
 
 def setup_selenium_tor(ctx: ScrContext) -> None:
     cwd = os.getcwd()
-    add_selenium_drivers_dir_to_path()
+    driver_executable = get_preferred_selenium_driver_executable(
+        SeleniumVariant.TORBROWSER
+    )
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
         if tb_env_var in os.environ:
@@ -2552,6 +2541,7 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
     try:
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path,
+            executable_path=driver_executable,
             options=selenium_build_firefox_options(ctx)
         )
 
@@ -2560,32 +2550,32 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
-def have_local_geckodriver() -> tuple[bool, str]:
-    sd = get_selenium_drivers_dir()
-    target = os.path.join(sd, "geckodriver")
-    return os.path.exists(target), target
-
-
 def setup_selenium_firefox(ctx: ScrContext) -> None:
-    add_selenium_drivers_dir_to_path()
+    driver_executable = get_preferred_selenium_driver_executable(
+        SeleniumVariant.FIREFOX
+    )
     try:
         ctx.selenium_driver = selenium.webdriver.Firefox(
             options=selenium_build_firefox_options(ctx),
-            service=SeleniumFirefoxService(
-                log_path=ctx.selenium_log_path),  # type: ignore
+            service=SeleniumFirefoxService(  # type: ignore
+                log_path=ctx.selenium_log_path,
+                executable_path=driver_executable
+            )
         )
     except SeleniumWebDriverException as ex:
         ex_msg = str(ex).strip('\n ')
         err_msg = f"failed to start geckodriver: {ex_msg}"
-        have, _path = have_local_geckodriver()
-        if not have:
+
+        if try_get_local_selenium_driver_path(SeleniumVariant.FIREFOX) is None:
             # this is slightly hacky, but i like the way it looks
-            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} --install-geckodriver'"
+            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=firefox'"
         raise ScrSetupError(err_msg)
 
 
 def setup_selenium_chrome(ctx: ScrContext) -> None:
-    add_selenium_drivers_dir_to_path()
+    driver_executable = get_preferred_selenium_driver_executable(
+        SeleniumVariant.CHROME
+    )
     options = selenium.webdriver.ChromeOptions()
     if ctx.selenium_headless:
         options.headless = True
@@ -2604,8 +2594,10 @@ def setup_selenium_chrome(ctx: ScrContext) -> None:
     try:
         ctx.selenium_driver = selenium.webdriver.Chrome(
             options=options,
-            service=SeleniumChromeService(
-                log_path=ctx.selenium_log_path)  # type: ignore
+            service=SeleniumChromeService(  # type: ignore
+                log_path=ctx.selenium_log_path,
+                executable_path=driver_executable
+            )
         )
     except SeleniumWebDriverException as ex:
         raise ScrSetupError(f"failed to start chromedriver: {str(ex)}")
@@ -4487,20 +4479,34 @@ def print_version() -> None:
     print(f"{SCRIPT_NAME} {VERSION}")
 
 
-def get_selenium_driver_executable_name(variant: SeleniumVariant) -> str:
-    windows = (os.name == 'nt')
+def get_selenium_driver_executable_basename(variant: SeleniumVariant) -> str:
+    #windows = (os.name == 'nt')
     return {
         SeleniumVariant.CHROME: "chromedriver",
         SeleniumVariant.FIREFOX: "geckodriver",
         SeleniumVariant.TORBROWSER: "geckodriver"
-    }[variant] + (".exe" if windows else "")
+    }[variant]  # + (".exe" if windows else "")
 
 
-def get_builtin_selenium_driver_executable_path(variant: SeleniumVariant) -> str:
+def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> str:
     return os.path.join(
         get_selenium_drivers_dir(),
-        get_selenium_driver_executable_name(variant)
+        get_selenium_driver_executable_basename(variant)
     )
+
+
+def try_get_local_selenium_driver_path(variant: SeleniumVariant) -> Optional[str]:
+    path = get_local_selenium_driver_executable_path(variant)
+    if os.path.getsize(path) != 0:
+        return path
+    return None
+
+
+def get_preferred_selenium_driver_path(variant: SeleniumVariant) -> str:
+    path = try_get_local_selenium_driver_path(variant)
+    if path is not None:
+        return path
+    return get_selenium_driver_executable_basename(variant)
 
 
 def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: bool) -> None:
@@ -4510,28 +4516,28 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
         driver_name = selenium_driver_updater.DriverUpdater.geckodriver
     else:
         raise ScrSetupError(
-            "unable to install webdriver for '{selenium_variants_display_dict[variant]}'")
+            "unable to install webdriver for '{selenium_variants_display_dict[variant]}'"
+        )
     driver_dir = get_selenium_drivers_dir()
-    driver_exe_name = get_selenium_driver_executable_name(variant)
-    driver_exe_path = os.path.join(driver_dir, driver_exe_name)
-
-    is_dummy_file = os.path.getsize(driver_exe_path) == 0
+    have_local = try_get_local_selenium_driver_path(variant) is not None
+    if have_local and not update:
+        log(
+            ctx, Verbosity.ERROR,
+            f"existing {selenium_variants_display_dict[variant]} driver found"
+        )
+        return
     try:
         selenium_driver_updater.DriverUpdater.install(
             path=driver_dir, driver_name=driver_name,
-            check_driver_is_up_to_date=not is_dummy_file and update,
+            check_driver_is_up_to_date=have_local,
             enable_library_update_check=False,
-            upgrade=update or is_dummy_file
+            upgrade=True,
+            info_messages=True
         )
-    except (ValueError, requests.exceptions.RequestException) as ex:
-        ex_mangled: Union[
-            ValueError, requests.exceptions.RequestException, ScrFetchError
-        ] = ex
-        if isinstance(ex, requests.exceptions.RequestException):
-            ex_mangled = request_exception_to_scr_fetch_error(ex)
+    except (selenium_driver_updater.util.exceptions.Error) as ex:
         log(
             ctx, Verbosity.ERROR,
-            f"failed to fetch {selenium_variants_display_dict[variant]} driver: {str(ex_mangled)}"
+            f"failed to fetch {selenium_variants_display_dict[variant]} driver: {str(ex)}"
         )
 
 
