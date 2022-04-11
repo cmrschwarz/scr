@@ -4514,6 +4514,8 @@ def is_selenium_driver_present(path: str) -> bool:
 
 def try_get_local_selenium_driver_path(variant: SeleniumVariant) -> Optional[str]:
     path = get_local_selenium_driver_executable_path(variant)
+    if path is None:
+        return None
     if is_selenium_driver_present(path):
         return path
     return None
@@ -4540,7 +4542,8 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
         )
     driver_dir = get_selenium_drivers_dir()
     local_driver_path = cast(
-        str, get_local_selenium_driver_executable_path(variant))
+        str, get_local_selenium_driver_executable_path(variant)
+    )
     have_local = is_selenium_driver_present(local_driver_path)
     if have_local and not update:
         log(
@@ -4609,7 +4612,7 @@ def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant) -> None
     if path is None:
         log(
             ctx, Verbosity.WARN,
-            f"no {selenium_variants_display_dict[variant]} driver installed"
+            f"no {selenium_variants_display_dict[variant]} driver (local to {SCRIPT_NAME}) installed"
         )
         return
     open(path, 'w').close()
