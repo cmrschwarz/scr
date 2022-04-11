@@ -4522,7 +4522,7 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
     have_local = try_get_local_selenium_driver_path(variant) is not None
     if have_local and not update:
         log(
-            ctx, Verbosity.ERROR,
+            ctx, Verbosity.INFO,
             f"existing {selenium_variants_display_dict[variant]} driver found"
         )
         return
@@ -4532,7 +4532,12 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
             check_driver_is_up_to_date=have_local,
             enable_library_update_check=False,
             upgrade=True,
-            info_messages=True
+            info_messages=False
+        )
+        log(
+            ctx, Verbosity.INFO,
+            f"{selenium_variants_display_dict[variant]} driver " 
+            + ("updated" if have_local else "installed")
         )
     except (selenium_driver_updater.util.exceptions.Error) as ex:
         log(
@@ -4541,23 +4546,38 @@ def install_selenium_driver(ctx: ScrContext, variant: SeleniumVariant, update: b
         )
 
 
+def uninstall_selenium_driver(ctx: ScrContext, variant: SeleniumVariant):
+    path = try_get_local_selenium_driver_path(variant)
+    if path is None:
+        log(
+            ctx, Verbosity.ERROR,
+            f"no {selenium_variants_display_dict[variant]} driver installed"
+        )
+        return
+    open(path, 'w').close()
+    log(
+        ctx, Verbosity.INFO,
+        f"{selenium_variants_display_dict[variant]} driver uninstalled"
+    )
+
+
+def parse_selenium_variants(value: str, arg: str):
+    return parse_variant_arg(value, selenium_variants_dict, arg)
+
+
 def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
     for arg in args:
         if match_traditional_cli_arg(arg, "help", {"-h", "--help"}):
             help()
-            special_args_occured = True
+            ctx.special_args_occured = True
             continue
         if match_traditional_cli_arg(arg, "version", {"-v", "--version"}):
             print_version()
-            special_args_occured = True
+            ctx.special_args_occured = True
             continue
 
         driver_install = parse_plain_arg(
-            "selinstall",
-            arg,
-            lambda v, arg: parse_variant_arg(
-                v, selenium_variants_dict, arg
-            )
+            "selinstall", arg, parse_selenium_variants
         )
         if driver_install is not None:
             install_selenium_driver(ctx, driver_install, False)
@@ -4565,14 +4585,18 @@ def parse_args(ctx: ScrContext, args: Iterable[str]) -> None:
             continue
 
         driver_update = parse_plain_arg(
-            "selupdate",
-            arg,
-            lambda v, arg: parse_variant_arg(
-                v, selenium_variants_dict, arg
-            )
+            "selupdate", arg, parse_selenium_variants
         )
         if driver_update is not None:
             install_selenium_driver(ctx, driver_update, True)
+            ctx.special_args_occured = True
+            continue
+
+        driver_uninstall = parse_plain_arg(
+            "seluninstall", arg, parse_selenium_variants
+        )
+        if driver_uninstall is not None:
+            uninstall_selenium_driver(ctx, driver_uninstall)
             ctx.special_args_occured = True
             continue
 
