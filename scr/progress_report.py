@@ -23,15 +23,17 @@ def get_byte_size_string(size: Union[int, float]) -> tuple[str, str]:
     units = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
     unit = int(math.log(size, 1024))
     if unit >= len(units):
-        unit = len(units) - 1
+        unit = len(units)
     return f"{float(size)/2**(10 * unit):.2f}", f"{units[unit - 1]}iB"
 
 
 def get_timespan_string(ts: float) -> tuple[str, str]:
-    if ts < 60:
+    if round(ts * 10) < 600:
         return f"{ts:.1f}", "s"
+    if round(ts) == 60:
+        return "01:00", "m"
     if ts < 3600:
-        return f"{int(ts / 60):02}:{int(ts % 60):02}", "m"
+        return f"{int(ts / 60):02}:{round(ts % 60):02}", "m"
     return f"{int(ts / 3600):02}:{int((ts % 3600) / 60):02}:{int(ts % 60):02}", "h"
 
 
