@@ -1,6 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+cd "$(dirname "$(readlink -f "$0")")/.."
 pip install -e .
 rm -rf ./dist/*
 python3 -m build

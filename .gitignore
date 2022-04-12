@@ -6,6 +6,10 @@ __pycache__
 .pytest_cache
 .mypy_cache
 
+# pytest-cov
+cov.xml
+.coverage*
+
 # setuptools
 *.egg-info
 /build
