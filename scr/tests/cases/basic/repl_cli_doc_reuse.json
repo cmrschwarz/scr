@@ -1,7 +1,7 @@
 {
     "args": [
         "repl",
-        "rfile=../tests/res/foo+bar+baz.html",
+        "rfile=./res/foo+bar+baz.html",
         "cx=//ul/li/text()"
     ],
     "tags": [

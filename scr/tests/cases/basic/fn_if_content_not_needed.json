@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=../tests/res/data_url.html",
+        "rfile=./res/data_url.html",
         "cx=//@src",
         "cl",
         "cpf={fn}\n"

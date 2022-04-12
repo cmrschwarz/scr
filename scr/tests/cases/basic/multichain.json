@@ -1,12 +1,12 @@
 {
     "args": [
-        "file0=../tests/res/a.txt.html",
+        "file0=./res/a.txt.html",
         "dx0=//@src",
         "doc0=1",
         "cx0=//@id",
         "cr1=a",
         "cpf1={cr}\n",
-        "file2=../tests/res/b.txt",
+        "file2=./res/b.txt",
         "cr2=b",
         "cpf2={c}\n"
     ],

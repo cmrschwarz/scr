@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=../tests/res/foo+bar+baz.html",
+        "rfile=./res/foo+bar+baz.html",
         "cx= //ul/li/text()"
     ],
     "stdout": "foo\nbar\nbaz\n"

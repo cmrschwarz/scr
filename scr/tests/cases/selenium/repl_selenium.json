@@ -9,17 +9,17 @@
         "selenium"
     ],
     "stdin": [
-        "file=../tests/res/a.txt cpf={c}",
-        "file=../tests/res/js_content.html",
+        "file=./res/a.txt cpf={c}",
+        "file=./res/js_content.html",
         "'cx=//p/text()'",
         "sel=f",
         "'cx=//p/text()'",
-        "file=../tests/res/b.txt cpf={c} cx=//pre/text()", //firefox is weird and wraps this
-        "file=../tests/res/js_content.html",
+        "file=./res/b.txt cpf={c} cx=//pre/text()", //firefox is weird and wraps this
+        "file=./res/js_content.html",
         "'cx=//p/text()'",
         "sel=d",
         "'cx=//p/text()'",
-        "file=../tests/res/a.txt cpf={c}",
+        "file=./res/a.txt cpf={c}",
         "cpf='c\\n'",
         "exit"
     ],

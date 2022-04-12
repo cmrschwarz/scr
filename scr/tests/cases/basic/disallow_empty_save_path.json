@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=../tests/res/a.txt",
+        "rfile=./res/a.txt",
         "cr=.*",
         "csf="
     ],

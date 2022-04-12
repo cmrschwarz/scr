@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=../tests/res/cors.html",
+        "rfile=./res/cors.html",
         "cx=//embed/@src",
         "sel=c",
         "cl=t",
@@ -16,5 +16,5 @@
         "firefox",
         "need-cmrs.io"
     ],
-    "stderr": "[ERROR]: ../tests/res/cors.html (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n"
+    "stderr": "[ERROR]: ./res/cors.html (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n"
 }

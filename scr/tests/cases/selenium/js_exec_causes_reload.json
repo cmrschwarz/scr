@@ -1,7 +1,7 @@
 {
     "args": [
         "sel=f",
-        "file=../tests/res/a.txt.html",
+        "file=./res/a.txt.html",
         "cx0=//@id",
         "cr0=[^\\.]+$",
         "cjs0=const a = document.createElement('a');a.id=cr; a.text = cx; document.body.appendChild(a); return 'hello from js';",

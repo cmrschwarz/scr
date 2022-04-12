@@ -128,13 +128,6 @@ class OutputFormatter:
         return False
 
 
-def abort_on_broken_pipe() -> None:
-    # Python flushes standard streams on exit; redirect remaining output
-    # to devnull to avoid another BrokenPipeError at shutdown
-    os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-    sys.exit(1)
-
-
 def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> None:
     current.update({
         k: v for k, v in updates.items() if v is not None
@@ -1456,7 +1449,8 @@ def handle_interactive_chains(
 
     if not rlist:
         rlist, _, _ = select.select(
-            [sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
+            [sys.stdin], [], [], ctx.selenium_poll_frequency_secs
+        )
     result = None
     if rlist:
         result = parse_prompt_option(
@@ -1858,11 +1852,11 @@ def resolve_repl_defaults(
         last_doc.xml = None
 
 
-def run_repl(initial_ctx: ScrContext) -> int:
+def run_repl(initial_ctx: ScrContext, args: list[str]) -> int:
     try:
         # run with initial args
         readline.set_auto_history(False)
-        readline.add_history(shlex.join(sys.argv[1:]))
+        readline.add_history(shlex.join(args[1:]))
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
         ctx: Optional[ScrContext] = initial_ctx
@@ -1927,7 +1921,7 @@ def run_repl(initial_ctx: ScrContext) -> int:
 
 def run_scr(args: list[str]) -> int:
     ctx = ScrContext(blank=True)
-    if len(sys.argv) < 2:
+    if len(args) < 2:
         log_raw(
             Verbosity.ERROR,
             f"missing command line options. Consider {SCRIPT_NAME} --help"
@@ -1941,7 +1935,7 @@ def run_scr(args: list[str]) -> int:
         log_raw(Verbosity.ERROR, str(ex))
         return 1
     if ctx.repl:
-        ec = run_repl(ctx)
+        ec = run_repl(ctx, args)
     else:
         success = False
         try:
@@ -1963,9 +1957,12 @@ def main() -> None:
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
-        exit(run_scr(sys.argv))
+        sys.exit(run_scr(sys.argv))
     except BrokenPipeError:
-        abort_on_broken_pipe()
+        # Python flushes standard streams on exit; redirect remaining output
+        # to devnull to avoid another BrokenPipeError at shutdown
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(1)
 

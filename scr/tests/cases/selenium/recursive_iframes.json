@@ -1,6 +1,6 @@
 {
     "args": [
-        "file=../tests/res/iframe_tree.html",
+        "file=./res/iframe_tree.html",
         "cx=//title/text()",
         "sel=c",
         "selh"

@@ -1,8 +1,8 @@
 {
     "args": [
-        "file=../tests/res/data_url.txt",
-        "file=../tests/res/data_url_base64.txt",
-        "file=../tests/res/data url with space.txt",
+        "file=./res/data_url.txt",
+        "file=./res/data_url_base64.txt",
+        "file=./res/data url with space.txt",
         "cr=^.+$",
         "cl=1"
     ],

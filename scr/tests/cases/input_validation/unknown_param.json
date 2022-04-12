@@ -1,6 +1,6 @@
 {
     "args": [
-        "rfile=../tests/res/empty.html",
+        "rfile=./res/empty.html",
         "cxx=3"
     ],
     "ec": 1,

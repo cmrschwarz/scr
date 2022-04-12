@@ -1,16 +1,16 @@
 {
     "args": [
-        "file=../tests/res/iframe_tree.html",
+        "file=./res/iframe_tree.html",
         "dx=//iframe/@src",
         "cpf={dl}\\n",
         "bfs=1"
     ],
     "stdout": [
-        "../tests/res/iframe_tree.html",
-        "../tests/res/iframe_tree_l.html",
-        "../tests/res/iframe_tree_r.html",
-        "../tests/res/iframe_tree_l1.html",
-        "../tests/res/iframe_tree_l2.html",
-        "../tests/res/iframe_tree_l3.html"
+        "./res/iframe_tree.html",
+        "./res/iframe_tree_l.html",
+        "./res/iframe_tree_r.html",
+        "./res/iframe_tree_l1.html",
+        "./res/iframe_tree_l2.html",
+        "./res/iframe_tree_l3.html"
     ]
 }
