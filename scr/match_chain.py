@@ -1,7 +1,7 @@
 from typing import Optional, Union
 from .definitions import *
 from .config_data_class import ConfigDataClass
-from . import document, locator, content_match, scr_context
+from . import locator, content_match, scr_context, document
 
 
 class MatchChain(ConfigDataClass):
@@ -48,11 +48,11 @@ class MatchChain(ConfigDataClass):
     )
 
     # subconfig members
-    content: 'locator.Locator'
-    label: 'locator.Locator'
-    document: 'locator.Locator'
+    loc_content: 'locator.Locator'
+    loc_label: 'locator.Locator'
+    loc_document: 'locator.Locator'
 
-    _subconfig_slots_ = ['content', 'label', 'document']
+    _subconfig_slots_ = ['loc_content', 'loc_label', 'loc_document']
 
     # non config members
     chain_id: int
@@ -85,9 +85,9 @@ class MatchChain(ConfigDataClass):
         self.chain_id = chain_id
         self.document_output_chains = []
 
-        self.content = locator.Locator("content", blank)
-        self.label = locator.Locator("label", blank)
-        self.document = locator.Locator("document", blank)
+        self.loc_content = locator.Locator("content", blank)
+        self.loc_label = locator.Locator("label", blank)
+        self.loc_document = locator.Locator("document", blank)
 
         self.content_matches = []
         self.document_matches = []
@@ -97,15 +97,15 @@ class MatchChain(ConfigDataClass):
     def gen_dummy_document(self) -> 'document.Document':
         d = document.Document(
             DocumentType.FILE, "", None,
-            locator_match=self.document.gen_dummy_locator_match()
+            locator_match=self.loc_document.gen_dummy_locator_match()
         )
         d.encoding = ""
         return d
 
     def gen_dummy_content_match(self) -> 'content_match.ContentMatch':
-        clm = self.content.gen_dummy_locator_match()
+        clm = self.loc_content.gen_dummy_locator_match()
         if self.has_label_matching:
-            llm = self.label.gen_dummy_locator_match()
+            llm = self.loc_label.gen_dummy_locator_match()
         elif self.label_default_format:
             llm = locator.LocatorMatch()
             llm.fres = ""
@@ -114,7 +114,7 @@ class MatchChain(ConfigDataClass):
 
         dcm = content_match.ContentMatch(
             clm, llm, self, self.gen_dummy_document())
-        if self.content.multimatch:
+        if self.loc_content.multimatch:
             dcm.ci = 0
         if self.has_document_matching:
             dcm.di = 0

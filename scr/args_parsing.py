@@ -523,19 +523,19 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
 
         # content args
-        if apply_mc_arg(ctx, "cx", ["content", "xpath"], arg):
+        if apply_mc_arg(ctx, "cx", ["loc_content", "xpath"], arg):
             continue
-        if apply_mc_arg(ctx, "cr", ["content", "regex"], arg):
+        if apply_mc_arg(ctx, "cr", ["loc_content", "regex"], arg):
             continue
-        if apply_mc_arg(ctx, "cf", ["content", "format"], arg):
+        if apply_mc_arg(ctx, "cf", ["loc_content", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "cjs", ["content", "js_script"], arg):
+        if apply_mc_arg(ctx, "cjs", ["loc_content", "js_script"], arg):
             continue
-        if apply_mc_arg(ctx, "cmm", ["content", "multimatch"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "cmm", ["loc_content", "multimatch"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "cin", ["content", "interactive"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "cin", ["loc_content", "interactive"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
+        if apply_mc_arg(ctx, "cfc", ["loc_content"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
 
         if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg):
@@ -566,17 +566,17 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
 
         # label args
-        if apply_mc_arg(ctx, "lx", ["label", "xpath"], arg):
+        if apply_mc_arg(ctx, "lx", ["loc_label", "xpath"], arg):
             continue
-        if apply_mc_arg(ctx, "lr", ["label", "regex"], arg):
+        if apply_mc_arg(ctx, "lr", ["loc_label", "regex"], arg):
             continue
-        if apply_mc_arg(ctx, "lf", ["label", "format"], arg):
+        if apply_mc_arg(ctx, "lf", ["loc_label", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "ljs", ["label", "js_script"], arg):
+        if apply_mc_arg(ctx, "ljs", ["loc_label", "js_script"], arg):
             continue
-        if apply_mc_arg(ctx, "lmm", ["label", "multimatch"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "lmm", ["loc_label", "multimatch"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "lin", ["label", "interactive"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "lin", ["loc_label", "interactive"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "las", ["allow_slashes_in_labels"], arg, parse_bool_arg, True):
             continue
@@ -590,19 +590,19 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
 
         # document args
-        if apply_mc_arg(ctx, "dx", ["document", "xpath"], arg):
+        if apply_mc_arg(ctx, "dx", ["loc_document", "xpath"], arg):
             continue
-        if apply_mc_arg(ctx, "dr", ["document", "regex"], arg):
+        if apply_mc_arg(ctx, "dr", ["loc_document", "regex"], arg):
             continue
-        if apply_mc_arg(ctx, "df", ["document", "format"], arg):
+        if apply_mc_arg(ctx, "df", ["loc_document", "format"], arg):
             continue
-        if apply_mc_arg(ctx, "djs", ["document", "js_script"], arg):
+        if apply_mc_arg(ctx, "djs", ["loc_document", "js_script"], arg):
             continue
         if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
-        if apply_mc_arg(ctx, "dmm", ["document", "multimatch"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "dmm", ["loc_document", "multimatch"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "din", ["document", "interactive"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "din", ["loc_document", "interactive"], arg, parse_bool_arg, True):
             continue
 
         if apply_mc_arg(ctx, "dimin", ["dimin"], arg, parse_int_arg):

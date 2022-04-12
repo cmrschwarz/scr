@@ -521,7 +521,7 @@ def gen_default_format(mc: 'match_chain.MatchChain') -> str:
     cidigits = max(len(str(mc.dimin)), len(str(mc.dimax)))
     if mc.ci_continuous:
         form += f"{{ci:0{cidigits}}}"
-    elif mc.content.multimatch:
+    elif mc.loc_content.multimatch:
         if mc.has_document_matching:
             form += f"{{di:0{didigits}}}_{{ci:0{cidigits}}}"
         else:
@@ -552,7 +552,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.save_path_interactive and mc.content_save_format is not None:
         mc.content_save_format = ""
 
-    locators = [mc.content, mc.label, mc.document]
+    locators = [mc.loc_content, mc.loc_label, mc.loc_document]
     for l in locators:
         l.setup(mc)
         if l.parses_documents():
@@ -560,17 +560,17 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
 
     if any(l.xpath is not None for l in locators):
         mc.has_xpath_matching = True
-    if mc.label.is_active():
+    if mc.loc_label.is_active():
         mc.has_label_matching = True
-    if mc.labels_inside_content is not None and mc.label.xpath is not None:
+    if mc.labels_inside_content is not None and mc.loc_label.xpath is not None:
         mc.has_content_xpaths = True
-    if mc.document.is_active():
+    if mc.loc_document.is_active():
         mc.has_document_matching = True
         mc.parses_documents = True
-    if mc.label.interactive or mc.content.interactive:
+    if mc.loc_label.interactive or mc.loc_content.interactive:
         mc.has_interactive_matching = True
 
-    if mc.has_label_matching or mc.content.is_active():
+    if mc.has_label_matching or mc.loc_content.is_active():
         mc.has_content_matching = True
     elif mc.content_print_format or mc.content_save_format:
         mc.has_content_matching = True
@@ -1102,11 +1102,11 @@ def gen_final_content_format(format_str: str, cm: 'content_match.ContentMatch', 
 
 def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
     if cm.mc.has_document_matching:
-        if cm.mc.content.multimatch:
+        if cm.mc.loc_content.multimatch:
             di_ci_context = f" (di={cm.di}, ci={cm.ci})"
         else:
             di_ci_context = f" (di={cm.di})"
-    elif cm.mc.content.multimatch:
+    elif cm.mc.loc_content.multimatch:
         di_ci_context = f" (ci={cm.ci})"
     else:
         di_ci_context = f""
@@ -1116,7 +1116,7 @@ def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
 def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
-    cm.mc.content.apply_format_for_content_match(cm, cm.clm)
+    cm.mc.loc_content.apply_format_for_content_match(cm, cm.clm)
     cm.mc.ci += 1
 
     if cm.llm is None:
@@ -1127,7 +1127,7 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
             )
             cm.llm.result = cm.llm.fres
     else:
-        cm.mc.label.apply_format_for_content_match(cm, cm.llm)
+        cm.mc.loc_label.apply_format_for_content_match(cm, cm.llm)
 
     di_ci_context = get_ci_di_context(cm)
 
@@ -1151,7 +1151,7 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
                 cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.clm.result, cm.url_parsed
             )
         content_type = "content match" if cm.mc.content_raw else "content link"
-        if cm.mc.content.interactive:
+        if cm.mc.loc_content.interactive:
             prompt_options = [
                 (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
                 (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
@@ -1195,7 +1195,7 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
                         cm.clm.result = cm.clm.result[:i]
                         break
         break
-    if cm.mc.label.interactive:
+    if cm.mc.loc_label.interactive:
         assert cm.llm is not None
         while True:
             if not cm.mc.is_valid_label(cm.clm.result):
@@ -1251,7 +1251,7 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
 
 
 def handle_document_match(mc: 'match_chain.MatchChain', doc: 'document.Document') -> InteractiveResult:
-    if not mc.document.interactive:
+    if not mc.loc_document.interactive:
         return InteractiveResult.ACCEPT
     while True:
         res = prompt(
@@ -1293,37 +1293,37 @@ def gen_content_matches(
         return [content_match.ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
     text = cast(str, doc.text)
     content_matches: list[content_match.ContentMatch] = []
-    content_lms_xp: list[locator.LocatorMatch] = mc.content.match_xpath(
+    content_lms_xp: list[locator.LocatorMatch] = mc.loc_content.match_xpath(
         text, doc.xml, doc.path, mc.has_content_xpaths
     )
     label_lms: list[locator.LocatorMatch] = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        label_lms = mc.label.match_xpath(text, doc.xml, doc.path, False)
-        label_lms = mc.label.apply_regex_matches(label_lms)
-        label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
+        label_lms = mc.loc_label.match_xpath(text, doc.xml, doc.path, False)
+        label_lms = mc.loc_label.apply_regex_matches(label_lms)
+        label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
     match_index = 0
     labels_none_for_n = 0
     for clm_xp in content_lms_xp:
-        if mc.labels_inside_content and mc.label.xpath:
-            label_lms = mc.label.match_xpath(
+        if mc.labels_inside_content and mc.loc_label.xpath:
+            label_lms = mc.loc_label.match_xpath(
                 clm_xp.result, clm_xp.xmatch_xml, doc.path, False
             )
             # in case we have label xpath matching, the label regex matching
             # will be done on the LABEL xpath result, not the content one
             # even for lic = y
-            label_lms = mc.label.apply_regex_matches(label_lms)
-            label_lms = mc.label.apply_js_matches(doc, mc, label_lms)
+            label_lms = mc.loc_label.apply_regex_matches(label_lms)
+            label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
 
-        content_lms = mc.content.apply_regex_matches([clm_xp])
-        content_lms = mc.content.apply_js_matches(doc, mc, content_lms)
+        content_lms = mc.loc_content.apply_regex_matches([clm_xp])
+        content_lms = mc.loc_content.apply_js_matches(doc, mc, content_lms)
         for clm in content_lms:
             llm: Optional[locator.LocatorMatch] = None
             if mc.labels_inside_content:
-                if not mc.label.xpath:
+                if not mc.loc_label.xpath:
                     llm = locator.LocatorMatch()
                     llm.result = clm.result
-                    label_lms = mc.label.apply_regex_matches([llm], False)
-                    label_lms = mc.label.apply_js_matches(
+                    label_lms = mc.loc_label.apply_regex_matches([llm], False)
+                    label_lms = mc.loc_label.apply_js_matches(
                         doc, mc, label_lms, False
                     )
                 if len(label_lms) == 0:
@@ -1333,7 +1333,7 @@ def gen_content_matches(
                 else:
                     llm = label_lms[0]
             else:
-                if not mc.label.multimatch and len(label_lms) > 0:
+                if not mc.loc_label.multimatch and len(label_lms) > 0:
                     llm = label_lms[0]
                 elif match_index < len(label_lms):
                     llm = label_lms[match_index]
@@ -1352,11 +1352,11 @@ def gen_content_matches(
 def gen_document_matches(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str) -> list['document.Document']:
 
     document_matches = []
-    document_lms = mc.document.match_xpath(
+    document_lms = mc.loc_document.match_xpath(
         cast(str, doc.text), doc.xml, doc.path, False
     )
-    document_lms = mc.document.apply_regex_matches(document_lms)
-    document_lms = mc.document.apply_js_matches(doc, mc, document_lms)
+    document_lms = mc.loc_document.apply_regex_matches(document_lms)
+    document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms)
     for dlm in document_lms:
         ndoc = document.Document(
             doc.document_type.derived_type(),
@@ -1366,7 +1366,7 @@ def gen_document_matches(mc: 'match_chain.MatchChain', doc: 'document.Document',
             None,
             dlm
         )
-        mc.document.apply_format_for_document_match(ndoc, mc, dlm)
+        mc.loc_document.apply_format_for_document_match(ndoc, mc, dlm)
         ndoc.path, ndoc.path_parsed = normalize_link(
             mc.ctx, mc, doc, last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
