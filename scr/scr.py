@@ -48,13 +48,10 @@ import urllib.request
 
 from .input_sequences import *
 from .definitions import *
-from .download_job import DownloadManager, PrintOutputStream, DownloadJob, MinimalInputStream
-from .locator import LocatorMatch
-from .selenium_driver_download import get_preferred_selenium_driver_path, try_get_local_selenium_driver_path
-from .content_match import ContentMatch
-from .match_chain import MatchChain
-from .scr_context import ScrContext
-from . import document, utils, config_data_class, args_parsing, utils
+from . import (
+    document, utils, config_data_class, args_parsing, utils, download_job,
+    locator, selenium_driver_download, content_match, match_chain, scr_context
+)
 
 
 class OutputFormatter:
@@ -62,14 +59,14 @@ class OutputFormatter:
     _args_list: list[Any]
     _format_parts: list[tuple[str, Union[str, None],
                               Union[str, None], Union[str, None]]]
-    _out_stream: Union[BinaryIO, 'PrintOutputStream']
+    _out_stream: Union[BinaryIO, 'download_job.PrintOutputStream']
     _found_stream: bool = False
     _input_buffer_sizes: int
 
     def __init__(
-        self, format_str: str, cm: ContentMatch,
-        out_stream: Union[BinaryIO, 'PrintOutputStream'],
-        content: Union[str, bytes, MinimalInputStream, BinaryIO, None],
+        self, format_str: str, cm: 'content_match.ContentMatch',
+        out_stream: Union[BinaryIO, 'download_job.PrintOutputStream'],
+        content: Union[str, bytes, 'download_job.MinimalInputStream', BinaryIO, None],
         filename: Optional[str]
     ) -> None:
         self._args_dict = content_match_build_format_args(
@@ -134,7 +131,7 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
     })
 
 
-def apply_general_format_args(doc: document.Document, mc: MatchChain, args_dict: dict[str, Any], ci: Optional[int]) -> None:
+def apply_general_format_args(doc: 'document.Document', mc: 'match_chain.MatchChain', args_dict: dict[str, Any], ci: Optional[int]) -> None:
     dict_update_unless_none(args_dict, {
         "cenc": doc.encoding,
         "cesc": mc.content_escape_sequence,
@@ -145,7 +142,7 @@ def apply_general_format_args(doc: document.Document, mc: MatchChain, args_dict:
     })
 
 
-def apply_locator_match_format_args(locator_name: str, lm: LocatorMatch, args_dict: dict[str, Any]) -> None:
+def apply_locator_match_format_args(locator_name: str, lm: 'locator.LocatorMatch', args_dict: dict[str, Any]) -> None:
     p = locator_name[0]
     dict_update_unless_none(args_dict, {
         f"{p}x": lm.xmatch,
@@ -174,7 +171,7 @@ def apply_filename_format_args(filename: Optional[str], args_dict: dict[str, Any
 
 
 def content_match_build_format_args(
-    cm: ContentMatch,
+    cm: 'content_match.ContentMatch',
     content: Any = None,
     filename: Optional[str] = None
 ) -> dict[str, Any]:
@@ -191,7 +188,7 @@ def content_match_build_format_args(
     ]
     # remove None regex matches (and type cast this to make mypy happy)
     locator_matches = cast(
-        list[tuple[str, LocatorMatch]],
+        list[tuple[str, 'locator.LocatorMatch']],
         list(filter(lambda plm: plm[1] is not None, potential_locator_matches))
     )
 
@@ -259,7 +256,7 @@ def unescape_string(txt: str) -> str:
     return txt
 
 
-def log(ctx: ScrContext, verbosity: Verbosity, msg: str) -> None:
+def log(ctx: 'scr_context.ScrContext', verbosity: Verbosity, msg: str) -> None:
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
     if ctx.verbosity is None or ctx.verbosity >= verbosity:
@@ -267,7 +264,7 @@ def log(ctx: ScrContext, verbosity: Verbosity, msg: str) -> None:
 
 
 def selenium_build_firefox_options(
-    ctx: ScrContext
+    ctx: 'scr_context.ScrContext'
 ) -> selenium.webdriver.FirefoxOptions:
     ff_options = selenium.webdriver.FirefoxOptions()
     if ctx.selenium_headless:
@@ -305,9 +302,9 @@ def selenium_build_firefox_options(
     return ff_options
 
 
-def setup_selenium_tor(ctx: ScrContext) -> None:
+def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
     cwd = os.getcwd()
-    driver_executable = get_preferred_selenium_driver_path(
+    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
         SeleniumVariant.TORBROWSER
     )
     if ctx.tor_browser_dir is None:
@@ -328,8 +325,8 @@ def setup_selenium_tor(ctx: ScrContext) -> None:
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
-def setup_selenium_firefox(ctx: ScrContext) -> None:
-    driver_executable = get_preferred_selenium_driver_path(
+def setup_selenium_firefox(ctx: 'scr_context.ScrContext') -> None:
+    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
         SeleniumVariant.FIREFOX
     )
     try:
@@ -344,14 +341,14 @@ def setup_selenium_firefox(ctx: ScrContext) -> None:
         ex_msg = str(ex).strip('\n ')
         err_msg = f"failed to start geckodriver: {ex_msg}"
 
-        if try_get_local_selenium_driver_path(SeleniumVariant.FIREFOX) is None:
+        if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.FIREFOX) is None:
             # this is slightly hacky, but i like the way it looks
             err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=firefox'"
         raise ScrSetupError(err_msg)
 
 
-def setup_selenium_chrome(ctx: ScrContext) -> None:
-    driver_executable = get_preferred_selenium_driver_path(
+def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
+    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
         SeleniumVariant.CHROME
     )
     options = selenium.webdriver.ChromeOptions()
@@ -381,7 +378,7 @@ def setup_selenium_chrome(ctx: ScrContext) -> None:
         raise ScrSetupError(f"failed to start chromedriver: {str(ex)}")
 
 
-def selenium_add_cookies_through_get(ctx: ScrContext) -> None:
+def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
     # ctx.selenium_driver.set_page_load_timeout(0.01)
     assert ctx.selenium_driver is not None
     for domain, cookies in ctx.cookie_dict.items():
@@ -417,13 +414,13 @@ def prevent_selenium_sigint() -> None:
     selenium.webdriver.common.service.Service.start = selenium_start_wrapper  # type: ignore
 
 
-def selenium_exec_script(ctx: ScrContext, script: str, *args: Any) -> Any:
+def selenium_exec_script(ctx: 'scr_context.ScrContext', script: str, *args: Any) -> Any:
     assert ctx.selenium_driver is not None
     # execute_script is not annotated -> we have to eat the type error
     return ctx.selenium_driver.execute_script(script, *args)  # type: ignore
 
 
-def setup_selenium(ctx: ScrContext) -> None:
+def setup_selenium(ctx: 'scr_context.ScrContext') -> None:
     if ctx.repl:
         prevent_selenium_sigint()
     if ctx.selenium_variant == SeleniumVariant.TORBROWSER:
@@ -480,7 +477,8 @@ def format_strings_args_occurence(
 
 
 def validate_format(
-    conf: config_data_class.ConfigDataClass, attrib_path: list[str], dummy_cm: ContentMatch,
+    conf: config_data_class.ConfigDataClass, attrib_path: list[str],
+    dummy_cm: 'content_match.ContentMatch',
     unescape: bool, has_content: bool = False, has_filename: bool = False
 ) -> None:
     try:
@@ -512,7 +510,7 @@ def validate_format(
 # we need ctx because mc.ctx is stil None before we apply_defaults
 
 
-def gen_default_format(mc: MatchChain) -> str:
+def gen_default_format(mc: 'match_chain.MatchChain') -> str:
     form = "dl_"
     # if max was not set it is 'inf' which has length 3 which is a fine default
     mcc = len(mc.ctx.match_chains)
@@ -534,7 +532,7 @@ def gen_default_format(mc: MatchChain) -> str:
     return form
 
 
-def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
+def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> None:
 
     mc.apply_defaults(ctx.defaults_mc)
     mc.ci = mc.cimin
@@ -661,7 +659,7 @@ def setup_match_chain(mc: MatchChain, ctx: ScrContext) -> None:
         mc.content_raw = False
 
 
-def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]]]:
+def load_selenium_cookies(ctx: 'scr_context.ScrContext') -> dict[str, dict[str, dict[str, Any]]]:
     assert ctx.selenium_driver is not None
     # the selenium function isn't type annotated properly
     cookies: list[dict[str, Any]
@@ -674,7 +672,7 @@ def load_selenium_cookies(ctx: ScrContext) -> dict[str, dict[str, dict[str, Any]
     return cookie_dict
 
 
-def load_cookie_jar(ctx: ScrContext) -> None:
+def load_cookie_jar(ctx: 'scr_context.ScrContext') -> None:
     if ctx.cookie_file is None:
         return
     try:
@@ -718,7 +716,7 @@ def get_random_user_agent() -> UserAgent:
     ).get_random_user_agent()
 
 
-def setup(ctx: ScrContext) -> None:
+def setup(ctx: 'scr_context.ScrContext') -> None:
     global DEFAULT_CPF
 
     if ctx.tor_browser_dir:
@@ -727,7 +725,7 @@ def setup(ctx: ScrContext) -> None:
     elif ctx.selenium_headless:
         if ctx.selenium_variant is None:
             ctx.selenium_variant = SeleniumVariant.default()
-    ctx.apply_defaults(ScrContext())
+    ctx.apply_defaults(scr_context.ScrContext())
     load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
@@ -780,7 +778,7 @@ def setup(ctx: ScrContext) -> None:
         setup_selenium(ctx)
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
-        ctx.dl_manager = DownloadManager(
+        ctx.dl_manager = download_job.DownloadManager(
             ctx, ctx.max_download_threads, sys.stdout.isatty()
         )
     if ctx.dl_manager is not None:
@@ -820,7 +818,7 @@ def prompt_yes_no(prompt_text: str, default: Optional[bool] = None) -> Optional[
     return prompt(prompt_text, [(True, YES_INDICATING_STRINGS), (False, NO_INDICATING_STRINGS)], default)
 
 
-def selenium_get_url(ctx: ScrContext) -> Optional[str]:
+def selenium_get_url(ctx: 'scr_context.ScrContext') -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
         return cast(str, ctx.selenium_driver.current_url)
@@ -829,7 +827,7 @@ def selenium_get_url(ctx: ScrContext) -> Optional[str]:
         return None
 
 
-def selenium_has_died(ctx: ScrContext) -> bool:
+def selenium_has_died(ctx: 'scr_context.ScrContext') -> bool:
     assert ctx.selenium_driver is not None
     try:
         # throws an exception if the session died
@@ -839,7 +837,7 @@ def selenium_has_died(ctx: ScrContext) -> bool:
 
 
 def gen_dl_temp_name(
-    ctx: ScrContext, final_filepath: Optional[str]
+    ctx: 'scr_context.ScrContext', final_filepath: Optional[str]
 ) -> tuple[str, str]:
     assert ctx.downloads_temp_dir is not None
     dl_index = ctx.download_tmp_index
@@ -853,7 +851,7 @@ def gen_dl_temp_name(
     return tmp_path, tmp_filename
 
 
-def fetch_file(ctx: ScrContext, path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
+def fetch_file(ctx: 'scr_context.ScrContext', path: str, stream: bool = False) -> Union[bytes, BinaryIO]:
     try:
         f = open(path, "rb")
         if stream:
@@ -868,7 +866,7 @@ def fetch_file(ctx: ScrContext, path: str, stream: bool = False) -> Union[bytes,
         raise ScrFetchError(utils.truncate(str(ex))) from ex
 
 
-def try_read_data_url(cm: ContentMatch) -> Optional[bytes]:
+def try_read_data_url(cm: 'content_match.ContentMatch') -> Optional[bytes]:
     assert cm.url_parsed is not None
     if cm.url_parsed.scheme == "data":
         res = urllib.request.urlopen(
@@ -894,7 +892,7 @@ def request_exception_to_scr_fetch_error(ex: requests.exceptions.RequestExceptio
 
 
 def request_raw(
-    ctx: ScrContext, path: str, path_parsed: urllib.parse.ParseResult,
+    ctx: 'scr_context.ScrContext', path: str, path_parsed: urllib.parse.ParseResult,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
     proxies: Optional[dict[str, Optional[str]]] = None, stream: bool = False
 ) -> requests.Response:
@@ -953,11 +951,11 @@ def request_try_get_filesize(res: requests.Response) -> Optional[int]:
 
 
 def requests_dl(
-    ctx: ScrContext, path: str,
+    ctx: 'scr_context.ScrContext', path: str,
     path_parsed: urllib.parse.ParseResult,
 
 
-) -> tuple[Union[MinimalInputStream, bytes, None], Optional[str]]:
+) -> tuple[Union['download_job.MinimalInputStream', bytes, None], Optional[str]]:
     try:
         req = request_raw(ctx, path, path_parsed)
         data = req.content
@@ -968,16 +966,16 @@ def requests_dl(
         raise request_exception_to_scr_fetch_error(ex)
 
 
-def report_selenium_died(ctx: ScrContext, is_err: bool = True) -> None:
+def report_selenium_died(ctx: 'scr_context.ScrContext', is_err: bool = True) -> None:
     log(ctx, Verbosity.ERROR if is_err else Verbosity.WARN,
         "the selenium instance was closed unexpectedly")
 
 
-def report_selenium_error(ctx: ScrContext, ex: Exception) -> None:
+def report_selenium_error(ctx: 'scr_context.ScrContext', ex: Exception) -> None:
     log(ctx, Verbosity.ERROR, f"critical selenium error: {str(ex)}")
 
 
-def selenium_get_full_page_source(ctx: ScrContext) -> tuple[str, lxml.html.HtmlElement]:
+def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     doc_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
@@ -1037,7 +1035,7 @@ def selenium_get_full_page_source(ctx: ScrContext) -> tuple[str, lxml.html.HtmlE
         drv.switch_to.default_content()
 
 
-def fetch_doc(ctx: ScrContext, doc: document.Document) -> None:
+def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
     if ctx.selenium_variant.enabled():
         if doc is not ctx.reused_doc or ctx.changed_selenium:
             log(
@@ -1092,7 +1090,7 @@ def fetch_doc(ctx: ScrContext, doc: document.Document) -> None:
     return
 
 
-def gen_final_content_format(format_str: str, cm: ContentMatch, filename: Optional[str] = None) -> bytes:
+def gen_final_content_format(format_str: str, cm: 'content_match.ContentMatch', filename: Optional[str] = None) -> bytes:
     with BytesIO(b"") as buf:
         of = OutputFormatter(format_str, cm, buf, None, filename)
         while of.advance():
@@ -1102,7 +1100,7 @@ def gen_final_content_format(format_str: str, cm: ContentMatch, filename: Option
     return res
 
 
-def get_ci_di_context(cm: ContentMatch) -> str:
+def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
     if cm.mc.has_document_matching:
         if cm.mc.content.multimatch:
             di_ci_context = f" (di={cm.di}, ci={cm.ci})"
@@ -1115,7 +1113,7 @@ def get_ci_di_context(cm: ContentMatch) -> str:
     return di_ci_context
 
 
-def handle_content_match(cm: ContentMatch) -> InteractiveResult:
+def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.content.apply_format_for_content_match(cm, cm.clm)
@@ -1123,7 +1121,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
 
     if cm.llm is None:
         if cm.mc.need_label:
-            cm.llm = LocatorMatch()
+            cm.llm = locator.LocatorMatch()
             cm.llm.fres = cast(str, cm.mc.label_default_format).format(
                 **content_match_build_format_args(cm)
             )
@@ -1235,7 +1233,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
                     return res
             cm.llm.result = input("enter new label: ")
 
-    job = DownloadJob(cm)
+    job = download_job.DownloadJob(cm)
     if cm.mc.save_path_interactive:
         res = job.handle_save_path()
         if res != InteractiveResult.ACCEPT:
@@ -1252,7 +1250,7 @@ def handle_content_match(cm: ContentMatch) -> InteractiveResult:
     return InteractiveResult.ACCEPT
 
 
-def handle_document_match(mc: MatchChain, doc: document.Document) -> InteractiveResult:
+def handle_document_match(mc: 'match_chain.MatchChain', doc: 'document.Document') -> InteractiveResult:
     if not mc.document.interactive:
         return InteractiveResult.ACCEPT
     while True:
@@ -1274,13 +1272,13 @@ def handle_document_match(mc: MatchChain, doc: document.Document) -> Interactive
 
 
 def gen_content_matches(
-    mc: MatchChain, doc: document.Document, last_doc_path: str, doc_as_content: bool
-) -> tuple[list[ContentMatch], int]:
+    mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str, doc_as_content: bool
+) -> tuple[list['content_match.ContentMatch'], int]:
     if doc_as_content:
         dummy_llm = None
         if mc.has_label_matching:
-            dummy_llm = LocatorMatch()
-        dummy_clm = LocatorMatch()
+            dummy_llm = locator.LocatorMatch()
+        dummy_clm = locator.LocatorMatch()
         dummy_clm.result = doc.path
         dummy_doc = doc
         if doc.document_type.derived_type() == DocumentType.FILE:
@@ -1292,13 +1290,13 @@ def gen_content_matches(
                 DocumentType.CONTENT_FILE, path=doc.path, src_mc=doc.src_mc,
                 locator_match=doc.locator_match, path_parsed=doc.path_parsed
             )
-        return [ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
+        return [content_match.ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
     text = cast(str, doc.text)
-    content_matches: list[ContentMatch] = []
-    content_lms_xp: list[LocatorMatch] = mc.content.match_xpath(
+    content_matches: list[content_match.ContentMatch] = []
+    content_lms_xp: list[locator.LocatorMatch] = mc.content.match_xpath(
         text, doc.xml, doc.path, mc.has_content_xpaths
     )
-    label_lms: list[LocatorMatch] = []
+    label_lms: list[locator.LocatorMatch] = []
     if mc.has_label_matching and not mc.labels_inside_content:
         label_lms = mc.label.match_xpath(text, doc.xml, doc.path, False)
         label_lms = mc.label.apply_regex_matches(label_lms)
@@ -1319,10 +1317,10 @@ def gen_content_matches(
         content_lms = mc.content.apply_regex_matches([clm_xp])
         content_lms = mc.content.apply_js_matches(doc, mc, content_lms)
         for clm in content_lms:
-            llm: Optional[LocatorMatch] = None
+            llm: Optional[locator.LocatorMatch] = None
             if mc.labels_inside_content:
                 if not mc.label.xpath:
-                    llm = LocatorMatch()
+                    llm = locator.LocatorMatch()
                     llm.result = clm.result
                     label_lms = mc.label.apply_regex_matches([llm], False)
                     label_lms = mc.label.apply_js_matches(
@@ -1345,12 +1343,13 @@ def gen_content_matches(
                 else:
                     llm = None
 
-            content_matches.append(ContentMatch(clm, llm, mc, doc))
+            content_matches.append(
+                content_match.ContentMatch(clm, llm, mc, doc))
         match_index += 1
     return content_matches, labels_none_for_n
 
 
-def gen_document_matches(mc: MatchChain, doc: document.Document, last_doc_path: str) -> list[document.Document]:
+def gen_document_matches(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str) -> list['document.Document']:
 
     document_matches = []
     document_lms = mc.document.match_xpath(
@@ -1377,7 +1376,7 @@ def gen_document_matches(mc: MatchChain, doc: document.Document, last_doc_path: 
     return document_matches
 
 
-def make_padding(ctx: ScrContext, count_number: int) -> tuple[str, str]:
+def make_padding(ctx: 'scr_context.ScrContext', count_number: int) -> tuple[str, str]:
     content_count_pad_len = (
         ctx.selenium_content_count_pad_length
         - min(len(str(count_number)), ctx.selenium_content_count_pad_length)
@@ -1388,9 +1387,9 @@ def make_padding(ctx: ScrContext, count_number: int) -> tuple[str, str]:
 
 
 def handle_interactive_chains(
-    ctx: ScrContext,
-    interactive_chains: list[MatchChain],
-    doc: document.Document,
+    ctx: 'scr_context.ScrContext',
+    interactive_chains: list['match_chain.MatchChain'],
+    doc: 'document.Document',
     last_doc_path: str,
     try_number: int, last_msg: str
 ) -> tuple[Optional[InteractiveResult], str]:
@@ -1477,7 +1476,7 @@ def handle_interactive_chains(
     return result, msg
 
 
-def match_chain_was_satisfied(mc: MatchChain) -> tuple[bool, bool]:
+def match_chain_was_satisfied(mc: 'match_chain.MatchChain') -> tuple[bool, bool]:
     satisfied = False
     interactive = False
     if not mc.ctx.selenium_variant.enabled() or mc.selenium_strategy is SeleniumStrategy.PLAIN:
@@ -1498,7 +1497,7 @@ def match_chain_was_satisfied(mc: MatchChain) -> tuple[bool, bool]:
     return satisfied, interactive
 
 
-def handle_match_chain(mc: MatchChain, doc: document.Document, last_doc_path: str, doc_as_content: bool) -> None:
+def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str, doc_as_content: bool) -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
             mc, doc, last_doc_path, doc_as_content
@@ -1529,9 +1528,9 @@ def handle_match_chain(mc: MatchChain, doc: document.Document, last_doc_path: st
 
 
 def accept_for_match_chain(
-    mc: MatchChain, doc: document.Document,
+    mc: 'match_chain.MatchChain', doc: 'document.Document',
     content_skip_doc: bool, documents_skip_doc: bool,
-    new_docs: list[document.Document]
+    new_docs: list['document.Document']
 ) -> tuple[bool, bool]:
     if not mc.ci_continuous:
         mc.ci = mc.cimin
@@ -1574,7 +1573,7 @@ def accept_for_match_chain(
 
 
 def normalize_link(
-    ctx: ScrContext, mc: Optional[MatchChain],
+    ctx: 'scr_context.ScrContext', mc: Optional['match_chain.MatchChain'],
     src_doc: 'document.Document',
     doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
@@ -1615,7 +1614,7 @@ def normalize_link(
     return link_parsed.geturl(), link_parsed
 
 
-def parse_xml(ctx: ScrContext, doc: document.Document) -> None:
+def parse_xml(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
     try:
         text = cast(str, doc.text)
         src_bytes = text.encode(cast(str, doc.encoding),
@@ -1635,7 +1634,7 @@ def parse_xml(ctx: ScrContext, doc: document.Document) -> None:
             f"{doc.path}: failed to parse as xml: {str(ex)}")
 
 
-def process_document_queue(ctx: ScrContext) -> Optional[document.Document]:
+def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.Document']:
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
@@ -1760,7 +1759,7 @@ def process_document_queue(ctx: ScrContext) -> Optional[document.Document]:
     return doc
 
 
-def finalize(ctx: ScrContext) -> None:
+def finalize(ctx: 'scr_context.ScrContext') -> None:
     if ctx.dl_manager:
         success = False
         try:
@@ -1788,7 +1787,7 @@ def finalize(ctx: ScrContext) -> None:
 
 
 def resolve_repl_defaults(
-    ctx_new: ScrContext, ctx: ScrContext, last_doc: Optional[document.Document]
+    ctx_new: 'scr_context.ScrContext', ctx: 'scr_context.ScrContext', last_doc: Optional['document.Document']
 ) -> None:
     if ctx_new.user_agent_random and not ctx_new.user_agent:
         ctx.user_agent = None
@@ -1852,14 +1851,14 @@ def resolve_repl_defaults(
         last_doc.xml = None
 
 
-def run_repl(initial_ctx: ScrContext, args: list[str]) -> int:
+def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
     try:
         # run with initial args
         readline.set_auto_history(False)
         readline.add_history(shlex.join(args[1:]))
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
-        ctx: Optional[ScrContext] = initial_ctx
+        ctx: Optional['scr_context.ScrContext'] = initial_ctx
         success = False
         while True:
             try:
@@ -1892,7 +1891,7 @@ def run_repl(initial_ctx: ScrContext, args: list[str]) -> int:
                 if not len(args):
                     continue
 
-                ctx_new = ScrContext(blank=True)
+                ctx_new = scr_context.ScrContext(blank=True)
                 try:
                     args_parsing.parse_args(ctx_new, args)
                 except ScrSetupError as ex:
@@ -1920,7 +1919,7 @@ def run_repl(initial_ctx: ScrContext, args: list[str]) -> int:
 
 
 def run_scr(args: list[str]) -> int:
-    ctx = ScrContext(blank=True)
+    ctx = scr_context.ScrContext(blank=True)
     if len(args) < 2:
         log_raw(
             Verbosity.ERROR,

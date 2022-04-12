@@ -10,8 +10,7 @@ from selenium.common.exceptions import WebDriverException as SeleniumWebDriverEx
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
-from . import progress_report, match_chain, content_match, scr, utils
-from .scr_context import ScrContext
+from . import progress_report, match_chain, content_match, scr, utils, scr_context
 from collections import OrderedDict
 import threading
 import concurrent.futures
@@ -781,16 +780,16 @@ class DownloadJob:
 
 
 class DownloadManager:
-    ctx: ScrContext
+    ctx: 'scr_context.ScrContext'
     max_threads: int
     pending_jobs: set[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
     status_report_lock: threading.Lock
-    download_status_reports: list[progress_report.DownloadStatusReport]
+    download_status_reports: list['progress_report.DownloadStatusReport']
     enable_status_reports: bool
 
-    def __init__(self, ctx: ScrContext, max_threads: int, enable_status_reports: bool) -> None:
+    def __init__(self, ctx: 'scr_context.ScrContext', max_threads: int, enable_status_reports: bool) -> None:
         self.ctx = ctx
         self.pending_jobs = set()
         self.executor = concurrent.futures.ThreadPoolExecutor(

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import os
-import py.path
-from .. import scr
+from ... import scr
 import io
 from typing import Any, Union
 from enum import Enum
@@ -40,7 +39,7 @@ def join_lines(lines: Union[list[str], str]) -> str:
         for f in glob.glob(f"{os.path.dirname(__file__)}/cases/**/*.json")
     ]
 )
-def test_integration(test_description_json_file: str, tmpdir: py.path.local, capsys: Any, monkeypatch: Any) -> None:
+def test_integration(test_description_json_file: str, tmpdir: Any, capsys: Any, monkeypatch: Any) -> None:
     with open(os.path.join(os.path.dirname(__file__), test_description_json_file), "r") as f:
         tc = json5.load(f)
     expected_exit_code = tc.get("ec", 0)

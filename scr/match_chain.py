@@ -1,7 +1,7 @@
 from typing import Optional, Union
 from .definitions import *
-from . import document, locator, content_match, scr_context
 from .config_data_class import ConfigDataClass
+from . import document, locator, content_match, scr_context
 
 
 class MatchChain(ConfigDataClass):
@@ -48,9 +48,9 @@ class MatchChain(ConfigDataClass):
     )
 
     # subconfig members
-    content: locator.Locator
-    label: locator.Locator
-    document: locator.Locator
+    content: 'locator.Locator'
+    label: 'locator.Locator'
+    document: 'locator.Locator'
 
     _subconfig_slots_ = ['content', 'label', 'document']
 
@@ -71,10 +71,10 @@ class MatchChain(ConfigDataClass):
     need_label: bool = False
     need_filename: bool = False
     need_output_multipass: bool = False
-    content_matches: list[content_match.ContentMatch]
-    document_matches: list[document.Document]
-    handled_content_matches: set[content_match.ContentMatch]
-    handled_document_matches: set[document.Document]
+    content_matches: list['content_match.ContentMatch']
+    document_matches: list['document.Document']
+    handled_content_matches: set['content_match.ContentMatch']
+    handled_document_matches: set['document.Document']
     satisfied: bool = True
     labels_none_for_n: int = 0
 
