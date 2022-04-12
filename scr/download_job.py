@@ -845,7 +845,8 @@ class DownloadManager:
                     break
                 continue
             committed_report_line_count = progress_report.print_status_report(
-                report_lines, committed_report_line_count)
+                report_lines, committed_report_line_count
+            )
             if not self.pending_jobs:
                 break
 

@@ -13,6 +13,7 @@ DOWNLOAD_STATUS_LOG_MAX_AGE = 10
 DOWNLOAD_STATUS_NAME_LENGTH = 80
 DOWNLOAD_STATUS_BAR_LENGTH = 30
 DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.2
+DOWNLOAD_STATUS_KEEP_FINISHED = True
 
 
 def get_byte_size_string(size: Union[int, float]) -> tuple[str, str]:
@@ -140,7 +141,9 @@ def load_status_report_lines(dsr_list: list[DownloadStatusReport], report_lines:
     # when we have more reports than report lines,
     # we remove the oldest finished report
     # if none are finished, we get more report lines
-    if len(dsr_list) > len(report_lines):
+    if DOWNLOAD_STATUS_KEEP_FINISHED:
+        dsr_list.sort(key=lambda dsr: not dsr.download_finished)
+    elif len(dsr_list) > len(report_lines):
         i = 0
         while i < len(dsr_list):
             if dsr_list[i].download_finished:
@@ -149,9 +152,8 @@ def load_status_report_lines(dsr_list: list[DownloadStatusReport], report_lines:
                     break
             else:
                 i += 1
-        else:
-            for i in range(len(dsr_list) - len(report_lines)):
-                report_lines.append(StatusReportLine())
+    for i in range(len(dsr_list) - len(report_lines)):
+        report_lines.append(StatusReportLine())
     for i in range(len(report_lines)):
         rl = report_lines[i]
         dsr = dsr_list[i]
