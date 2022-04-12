@@ -86,7 +86,10 @@ def run_scr(
         raise ValueError(
             f"wrong stdout:\n{received_expected_strs(cap.out, stdout)}"
         )
-    assert ec == exit_code
+    if ec != exit_code:
+        raise ValueError(
+            f"wrong exit code: expected {ec}, received {exit_code}"
+        )
     expected_files = sorted(output_files.keys())
     received_files = sorted({*os.listdir(env.tmpdir)} - env.special_files)
     if expected_files != received_files:
