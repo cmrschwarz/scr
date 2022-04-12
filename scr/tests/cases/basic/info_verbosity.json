@@ -15,11 +15,11 @@
         "iframe_tree_r"
     ],
     "stderr": [
-        " [INFO]: reading file './res/iframe_tree.html'",
-        " [INFO]: reading file './res/iframe_tree_l.html'",
-        " [INFO]: reading file './res/iframe_tree_l1.html'",
-        " [INFO]: reading file './res/iframe_tree_l2.html'",
-        " [INFO]: reading file './res/iframe_tree_l3.html'",
-        " [INFO]: reading file './res/iframe_tree_r.html'"
+        " [INFO]: reading file 'res/iframe_tree.html'",
+        " [INFO]: reading file 'res/iframe_tree_l.html'",
+        " [INFO]: reading file 'res/iframe_tree_l1.html'",
+        " [INFO]: reading file 'res/iframe_tree_l2.html'",
+        " [INFO]: reading file 'res/iframe_tree_l3.html'",
+        " [INFO]: reading file 'res/iframe_tree_r.html'"
     ]
 }

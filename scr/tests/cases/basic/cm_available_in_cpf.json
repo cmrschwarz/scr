@@ -6,6 +6,6 @@
         "cpf={cm}\\n"
     ],
     "stdout": [
-        "./res/a.txt"
+        "res/a.txt"
     ]
 }

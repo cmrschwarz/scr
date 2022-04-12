@@ -5,11 +5,11 @@
         "cpf={dl}\\n"
     ],
     "stdout": [
-        "./res/iframe_tree.html",
-        "./res/iframe_tree_l.html",
-        "./res/iframe_tree_l1.html",
-        "./res/iframe_tree_l2.html",
-        "./res/iframe_tree_l3.html",
-        "./res/iframe_tree_r.html"
+        "res/iframe_tree.html",
+        "res/iframe_tree_l.html",
+        "res/iframe_tree_l1.html",
+        "res/iframe_tree_l2.html",
+        "res/iframe_tree_l3.html",
+        "res/iframe_tree_r.html"
     ]
 }

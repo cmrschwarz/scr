@@ -35,10 +35,13 @@ def join_lines(lines: Union[list[str], str]) -> str:
 
 @pytest.mark.parametrize(
     "test_description_json_file",
-    [*glob.glob(f"{os.path.dirname(__file__)}/cases/**/*.json")]
+    [
+        os.path.relpath(f, os.path.dirname(__file__))
+        for f in glob.glob(f"{os.path.dirname(__file__)}/cases/**/*.json")
+    ]
 )
 def test_integration(test_description_json_file: str, tmpdir: py.path.local, capsys: Any, monkeypatch: Any) -> None:
-    with open(test_description_json_file, "r") as f:
+    with open(os.path.join(os.path.dirname(__file__), test_description_json_file), "r") as f:
         tc = json5.load(f)
     expected_exit_code = tc.get("ec", 0)
     args = tc.get("args", [])
@@ -77,7 +80,7 @@ def test_integration(test_description_json_file: str, tmpdir: py.path.local, cap
     if stderr != expected_stderr:
         reason = f"wrong stderr:\n{stderr}{DASH_BAR}"
     elif stdout != expected_stdout:
-        reason = f"wrong stdout:\n\n{stdout}{DASH_BAR}"
+        reason = f"wrong stdout:\n{stdout}{DASH_BAR}"
     elif expected_exit_code != exit_code:
         reason = f"wrong exitcode: {exit_code} (expected {expected_exit_code})"
     else:
@@ -106,4 +109,4 @@ def test_integration(test_description_json_file: str, tmpdir: py.path.local, cap
                 break
     if not success:
         raise ValueError(
-            f"{test_description_json_file}:\n{get_cmd_string(args)}\n{reason}")
+            f"{test_description_json_file}\n{test_description_json_file}\n{get_cmd_string(args)}\n{reason}")
