@@ -1,2 +1,2 @@
-import scr
+from . import scr
 scr.main()

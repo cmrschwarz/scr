@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-from multiprocessing import Pool, cpu_count
+import sys
+import os
+from .. import scr
+
+import tempfile
+import shutil
+import subprocess
+import time
+
+from multiprocessing import Pool, cpu_count, Process
 from typing import Any, Union, TypeVar, Callable, Optional, cast
 from enum import Enum
-import os
 import json5
 import glob
 import shellescape
-import sys
-import time
-import subprocess
-import shutil
-import tempfile
+
 
 ANSI_RED = "\033[0;31m"
 ANSI_GREEN = "\033[0;32m"
@@ -67,8 +71,9 @@ def timed_exec(func: Callable[[], T]) -> tuple[T, str]:
 
 
 def execute_test(command: str, args: list[str], stdin: str, cwd: str) -> tuple[int, str, str]:
+    sys.path.insert(1, os.path.join(os.path.dirname(scr.__file__), ".."))
     proc = subprocess.Popen(
-        [command] + args,
+        ["python3", "-m", "scr"] + args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -229,14 +234,7 @@ def xhash(input: Any = None) -> str:
 # can't be named test_run because of pytest...
 def test_cli() -> int:
     to = TOptions()
-
-    # semi hardcode this to avoid importing scr which causes trouble
-    # for using this as a single file scripts
-    # cd into to scr root dir of scriptdir so errors are clickable :)
-    os.chdir("../../")
-    to.scr_main_dir = os.path.abspath(
-        os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
-    )
+    to.scr_main_dir = os.path.dirname(scr.__file__)
 
     to.script_dir_abs = os.path.dirname(
         os.path.abspath(os.path.realpath(__file__))
