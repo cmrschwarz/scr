@@ -1,7 +1,0 @@
-{
-    "args": [
-        "rfile=./res/foo+bar+baz.html",
-        "cx= //ul/li/text()"
-    ],
-    "stdout": "foo\nbar\nbaz\n"
-}

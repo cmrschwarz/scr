@@ -46,8 +46,8 @@ import tempfile
 import warnings
 import urllib.request
 
-from .input_sequences import *
 from .definitions import *
+from .input_sequences import *
 from . import (
     document, utils, config_data_class, args_parsing, utils, download_job,
     locator, selenium_driver_download, content_match, match_chain, scr_context

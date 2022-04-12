@@ -1,9 +1,0 @@
-{
-    "args": [
-        "url=./res/basic.html",
-        "cr=.", //to not trigger doc as content optimization
-        "cpf={c}"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: Failed to fetch https:///./res/basic.html: invalid url\n"
-}

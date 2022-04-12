@@ -39,7 +39,15 @@ def join_lines(lines: Union[list[str], str]) -> str:
         for f in glob.glob(f"{os.path.dirname(__file__)}/cases/**/*.json")
     ]
 )
-def test_integration(test_description_json_file: str, tmpdir: Any, capsys: Any, monkeypatch: Any) -> None:
+def test_integration_json(
+    test_description_json_file: str, tmpdir: Any,
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tmpdir = str(tmpdir)
+    # we have one json file per test in /cases/** that describes input and expected
+    # output (stout, err, exit code) for a scr command line invocation
+    # this is for reusing legacy tests and slightly questionable,
+    # but on the other hand allows us to copy paste failing test args into vscode launch.json
     with open(os.path.join(os.path.dirname(__file__), test_description_json_file), "r") as f:
         tc = json5.load(f)
     expected_exit_code = tc.get("ec", 0)
@@ -58,7 +66,7 @@ def test_integration(test_description_json_file: str, tmpdir: Any, capsys: Any, 
     os.chdir(tmpdir)
 
     if stdin:
-        stdin_file_path = str(tmpdir.join("_pytest_stdin"))
+        stdin_file_path = str(os.path.join(tmpdir, "_pytest_stdin"))
         stdin_mode = "w+"
     else:
         stdin_file_path = os.devnull

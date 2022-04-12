@@ -1,8 +1,0 @@
-{
-    "args": [
-        "rfile=./res/a.txt",
-        "cr=.*",
-        "cpf="
-    ],
-    "stdout": ""
-}

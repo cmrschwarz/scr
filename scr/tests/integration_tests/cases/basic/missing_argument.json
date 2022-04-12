@@ -1,7 +1,0 @@
-{
-    "args": [
-        "v"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: missing '=' and value for option 'v'\n"
-}
