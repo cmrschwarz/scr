@@ -1,7 +1,0 @@
-{
-    "args": [
-        "csf0-2={c}"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: unavailable key '{c}' in csf0-2={c}\n"
-}

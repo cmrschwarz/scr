@@ -1,7 +1,0 @@
-{
-    "args": [
-        "cpf=\\uf"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: invalid escape code \\uf in cpf=\\uf\n"
-}

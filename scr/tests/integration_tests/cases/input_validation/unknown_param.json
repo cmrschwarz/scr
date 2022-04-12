@@ -1,8 +1,0 @@
-{
-    "args": [
-        "rfile=./res/empty.html",
-        "cxx=3"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: unrecognized option: 'cxx=3'\n"
-}

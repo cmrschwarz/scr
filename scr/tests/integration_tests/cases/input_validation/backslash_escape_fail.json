@@ -1,7 +1,0 @@
-{
-    "args": [
-        "cpf=\\"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: unterminated escape sequence '\\' in cpf=\\\n"
-}

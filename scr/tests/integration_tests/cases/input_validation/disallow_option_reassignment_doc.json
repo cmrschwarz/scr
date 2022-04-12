@@ -1,8 +1,0 @@
-{
-    "args": [
-        "doc=1-4",
-        "doc=1"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: doc specified twice in: 'doc=1-4' and 'doc=1'\n"
-}

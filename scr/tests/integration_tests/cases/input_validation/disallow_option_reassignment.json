@@ -1,8 +1,0 @@
-{
-    "args": [
-        "cx3=//foo",
-        "cx1-=//bar"
-    ],
-    "ec": 1,
-    "stderr": "[ERROR]: cx3 specified twice in: 'cx3=//foo' and 'cx1-=//bar'\n"
-}

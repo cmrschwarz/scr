@@ -104,20 +104,6 @@ def test_double_content_print_file_from_url(cli_env: CliEnv) -> None:
             "cx=//@src",
             "cpf={c}:::{c}"
         ],
-        stdout="a\n:::a\n",
-    )
-
-
-@pytest.mark.httpbin
-def test_double_content_print_file_from_url(cli_env: CliEnv) -> None:
-    run_scr(
-        cli_env,
-        args=[
-            "rfile=./res/file_url.html",
-            "cl=1",
-            "cx=//@src",
-            "cpf={c}:::{c}"
-        ],
         stdout="file_url\n:::file_url\n",
     )
 
