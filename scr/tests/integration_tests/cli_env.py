@@ -52,8 +52,8 @@ def cli_env(tmpdir: Any, capsys: pytest.CaptureFixture[str], monkeypatch: pytest
     cli_env.close()
 
 
-def received_expected_strs(got: str, expected: str) -> str:
-    return f"{'-' * 36}received{'-' * 36}\n{got}{'-' * 36}expected{'-' * 36}\n{expected}{'-' * 80}"
+def received_expected_strs(received: str, expected: str) -> str:
+    return f"{'-' * 36}received{'-' * 36}\n{received}{'-' * 36}expected{'-' * 36}\n{expected}{'-' * 80}"
 
 
 def join_lines(lines: Union[list[str], str]) -> str:

@@ -153,7 +153,7 @@ def test_repl_selenium(cli_env: CliEnv) -> None:
 
 @pytest.mark.selenium
 @pytest.mark.httpbin
-def test_repl_selenium(cli_env: CliEnv) -> None:
+def test_selenium_download_chrome(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
@@ -162,24 +162,27 @@ def test_repl_selenium(cli_env: CliEnv) -> None:
             "cl=1",
             "cx=//@src",
             "cpf={c}",
-            "seldl0=i",
-            "seldl1=e",
-            "seldl2=f"
+            "seldl0=e",
+            "seldl1=f",
+            "seldl2=i",
+            "sel=c",
+            "selh"
         ],
+        ec=1,
         stdout=[
             "a",
             "a",
             "a",
             "file_url",
             "file_url",
-            "file_url"
-        ]
+        ],
+        stderr="[ERROR]: http://httpbin.org/base64/ZmlsZV91cmwK (ci=1): failed to download: seldl=internal does not work across origins\n"
     )
 
 
 @pytest.mark.selenium
 @pytest.mark.httpbin
-def test_repl_selenium(cli_env: CliEnv) -> None:
+def test_selenium_download_firefox(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
@@ -188,16 +191,19 @@ def test_repl_selenium(cli_env: CliEnv) -> None:
             "cl=1",
             "cx=//@src",
             "cpf={c}",
-            "seldl0=i",
-            "seldl1=e",
-            "seldl2=f"
+            "seldl0=e",
+            "seldl1=f",
+            "seldl2=i",
+            "sel=f",
+            "selh"
         ],
+        ec=1,
         stdout=[
             "a",
             "a",
             "a",
             "file_url",
             "file_url",
-            "file_url"
-        ]
+        ],
+        stderr="[ERROR]: http://httpbin.org/base64/ZmlsZV91cmwK (ci=1): failed to download: seldl=internal does not work across origins\n"
     )
