@@ -1,5 +1,6 @@
 from .cli_env import cli_env, CliEnv, run_scr
 import pytest
+from os.path import normpath
 
 
 @pytest.mark.selenium
@@ -34,7 +35,7 @@ def test_cors(cli_env: CliEnv) -> None:
         ],
         ec=1,
         stdout="cors\n",
-        stderr="[ERROR]: ../res/cors.html (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n",
+        stderr=f"[ERROR]: {normpath('../res/cors.html')} (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n",
     )
 
 

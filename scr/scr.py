@@ -1450,21 +1450,19 @@ def handle_interactive_chains(
     else:
         msg_full = None
 
+    user_answered = False
     rlist: list[TextIO] = []
     if try_number > 1:
-        rlist, _, _ = select.select(
-            [sys.stdin], [], [], ctx.selenium_poll_frequency_secs)
+        user_answered = utils.stdin_has_content(ctx.selenium_poll_frequency_secs)
 
-    if not rlist and msg_full:
+    if not user_answered and msg_full:
         sys.stdout.write(msg_full)
         sys.stdout.flush()
 
-    if not rlist:
-        rlist, _, _ = select.select(
-            [sys.stdin], [], [], ctx.selenium_poll_frequency_secs
-        )
+    if not user_answered:
+        user_answered = utils.stdin_has_content(ctx.selenium_poll_frequency_secs)
     result = None
-    if rlist:
+    if user_answered:
         result = parse_prompt_option(
             sys.stdin.readline(),
             [

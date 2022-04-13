@@ -6,3 +6,4 @@ pyrfc6266
 requests
 selenium-driver-updater
 pyreadline3
+pywin32>=1.0;sys_platform == 'win32'
