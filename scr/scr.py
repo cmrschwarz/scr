@@ -1062,6 +1062,13 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
                 ScrFetchError("selenium timeout")
+            except SeleniumWebDriverException as ex:
+                try:
+                    if doc.document_type == document.DocumentType.URL and os.path.exists(doc.path_parsed.path):
+                        raise ScrFetchError(f"not found, possibly file misrepresented, as url")
+                except IOError:
+                    pass
+                raise ex
         log(
             ctx, Verbosity.INFO,
             f"reloading selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
