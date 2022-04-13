@@ -52,7 +52,7 @@ def test_dedup(cli_env: CliEnv) -> None:
         ],
         stdin="y\n",
         stdout=[
-            "../res/foo+bar+foo.html: use page with potentially   < 2 >   contents [Yes/skip]? foo",
+            f"{normpath('../res/foo+bar+foo.html')}: use page with potentially   < 2 >   contents [Yes/skip]? foo",
             "bar"
         ]
     )
