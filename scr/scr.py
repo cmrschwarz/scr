@@ -20,7 +20,6 @@ import select
 import re
 import os
 from string import Formatter
-import readline
 import urllib.parse
 from random_user_agent.user_agent import UserAgent
 import pyparsing.exceptions
@@ -52,6 +51,13 @@ from . import (
     document, utils, config_data_class, args_parsing, utils, download_job,
     locator, selenium_driver_download, content_match, match_chain, scr_context
 )
+
+if utils.is_windows():
+    from pyreadline3 import Readline
+    readline: Readline = Readline()
+else:
+    import readline as rl
+    readline = rl
 
 
 class OutputFormatter:

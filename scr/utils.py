@@ -27,3 +27,7 @@ def empty_string_to_none(string: Optional[str]) -> Optional[str]:
     if string == "":
         return None
     return string
+
+
+def is_windows() -> bool:
+    return os.name == "nt"

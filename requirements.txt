@@ -5,3 +5,4 @@ random_user_agent
 pyrfc6266
 requests
 selenium-driver-updater
+pyreadline3
