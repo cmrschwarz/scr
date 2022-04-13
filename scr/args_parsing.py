@@ -414,7 +414,8 @@ def apply_doc_arg(
     path, path_parsed = scr.normalize_link(
         ctx,
         None,
-        document.Document(doctype.url_handling_type(), "", None),
+        doctype.url_handling_type(),
+        None,
         None,
         path,
         urllib.parse.urlparse(path)

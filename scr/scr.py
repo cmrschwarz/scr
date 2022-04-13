@@ -24,6 +24,7 @@ import urllib.parse
 from random_user_agent.user_agent import UserAgent
 import pyparsing.exceptions
 from tbselenium.tbdriver import TorBrowserDriver
+import pathlib
 import selenium
 import selenium.webdriver.common.by
 from http.cookiejar import MozillaCookieJar
@@ -1066,7 +1067,10 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
                 ScrFetchError("selenium timeout")
             except SeleniumWebDriverException as ex:
                 try:
-                    if doc.document_type == document.DocumentType.URL and os.path.exists(doc.path_parsed.path):
+                    if (
+                        doc.document_type == document.DocumentType.URL
+                        and os.path.exists(doc.path_parsed.path)
+                    ):
                         raise ScrFetchError(f"not found, possibly file misrepresented, as url")
                 except IOError:
                     pass
@@ -1135,7 +1139,7 @@ def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
     return di_ci_context
 
 
-def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
+def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Optional[str]) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.loc_content.apply_format_for_content_match(cm, cm.clm)
@@ -1161,16 +1165,9 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
     while True:
         if not cm.mc.content_raw:
             cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
-            if not cm.mc.ctx.selenium_variant.enabled():
-                doc_url = cm.doc.path
-            else:
-                sel_url = selenium_get_url(cm.mc.ctx)
-                if sel_url is None:
-                    return InteractiveResult.ERROR
-                doc_url = sel_url
-
             cm.clm.result, cm.url_parsed = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc, doc_url, cm.clm.result, cm.url_parsed
+                cm.mc.ctx, cm.mc, cm.doc.document_type, cm.doc.path_parsed,
+                last_doc_path, cm.clm.result, cm.url_parsed
             )
         content_type = "content match" if cm.mc.content_raw else "content link"
         if cm.mc.loc_content.interactive:
@@ -1371,8 +1368,10 @@ def gen_content_matches(
     return content_matches, labels_none_for_n
 
 
-def gen_document_matches(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str) -> list['document.Document']:
-
+def gen_document_matches(
+    mc: 'match_chain.MatchChain', doc: 'document.Document',
+    last_doc_path: str
+) -> list['document.Document']:
     document_matches = []
     document_lms = mc.loc_document.match_xpath(
         cast(str, doc.text), doc.xml, doc.path, False
@@ -1390,7 +1389,8 @@ def gen_document_matches(mc: 'match_chain.MatchChain', doc: 'document.Document',
         )
         mc.loc_document.apply_format_for_document_match(ndoc, mc, dlm)
         ndoc.path, ndoc.path_parsed = normalize_link(
-            mc.ctx, mc, doc, last_doc_path, dlm.result,
+            mc.ctx, mc, doc.document_type, doc.path_parsed,
+            last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
         )
         document_matches.append(ndoc)
@@ -1549,6 +1549,7 @@ def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document', l
 
 def accept_for_match_chain(
     mc: 'match_chain.MatchChain', doc: 'document.Document',
+    last_doc_path: Optional[str],
     content_skip_doc: bool, documents_skip_doc: bool,
     new_docs: list['document.Document']
 ) -> tuple[bool, bool]:
@@ -1559,7 +1560,7 @@ def accept_for_match_chain(
             if not mc.has_label_matching or cm.llm is not None:
                 if mc.ci > mc.cimax:
                     break
-                res = handle_content_match(cm)
+                res = handle_content_match(cm, last_doc_path)
                 if res == InteractiveResult.SKIP_CHAIN:
                     break
                 if res == InteractiveResult.SKIP_DOC:
@@ -1594,37 +1595,49 @@ def accept_for_match_chain(
 
 def normalize_link(
     ctx: 'scr_context.ScrContext', mc: Optional['match_chain.MatchChain'],
-    src_doc: 'document.Document',
-    doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
+    src_doc_type: 'document.DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
+    last_doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
-    if src_doc.document_type == document.DocumentType.CONTENT_FILE:
+    if src_doc_type == document.DocumentType.CONTENT_FILE:
         return link, link_parsed
-    doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
-    if src_doc.document_type == document.DocumentType.FILE:
+    if last_doc_path is not None:
+        doc_url_parsed = urllib.parse.urlparse(last_doc_path)
+    elif src_doc_path is not None:
+        doc_url_parsed = src_doc_path
+    else:
+        doc_url_parsed = None
+    if src_doc_type.derived_type() == document.DocumentType.FILE:
         if not link_parsed.scheme:
             handle_windows_paths: bool = False
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
                     if ctx.selenium_variant.enabled():
+                        assert last_doc_path is not None and src_doc_path is not None
                         handle_windows_paths = (
                             bool(utils.is_windows())
                             and bool(doc_url_parsed.scheme == "file")
                         )
                         if handle_windows_paths:
-                            base = utils.remove_file_scheme_from_url(cast(str, doc_path))
+                            base = utils.remove_file_scheme_from_url(last_doc_path)
                         # attempt to preserve short, relative paths were possible
-                        if os.path.abspath(base) == os.path.abspath(src_doc.path):
-                            base = src_doc.path
+                        if os.path.abspath(base) == os.path.abspath(src_doc_path.path):
+                            base = src_doc_path.path
+                    link = os.path.normpath(os.path.join(os.path.dirname(base), link))
                 else:
-                    base = src_doc.path
-                link = os.path.normpath(os.path.join(os.path.dirname(base), link))
+                    link = os.path.normpath(link)
+
                 if handle_windows_paths:
                     link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
                 return link, urllib.parse.urlparse(link)
         return link, link_parsed
-    if doc_url_parsed and link_parsed.netloc == "" and src_doc.document_type == document.DocumentType.URL:
-        link_parsed = link_parsed._replace(netloc=doc_url_parsed.netloc)
+    assert src_doc_type.derived_type() == document.DocumentType.URL
+    if doc_url_parsed and link_parsed.netloc == "" and link_parsed.scheme == "":
+        lnk_ppp = pathlib.PurePosixPath(link)
+        if not lnk_ppp.is_absolute() and doc_url_parsed.path:
+            du_ppp = pathlib.PurePosixPath(doc_url_parsed.path)
+            lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
+        link_parsed = link_parsed._replace(netloc=doc_url_parsed.netloc, scheme=doc_url_parsed.scheme, path=str(lnk_ppp))
 
     # for urls like 'google.com' urllib makes this a path instead of a netloc
     if link_parsed.netloc == "" and not doc_url_parsed and link_parsed.scheme == "" and link_parsed.path != "" and link[0] not in [".", "/"]:
@@ -1778,7 +1791,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
                 # ignore skipped chains
                 continue
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
-                mc, doc, content_skip_doc, doc_skip_doc, new_docs
+                mc, doc, last_doc_path, content_skip_doc, doc_skip_doc, new_docs
             )
         if mc.ctx.documents_bfs:
             mc.ctx.docs.extend(new_docs)
