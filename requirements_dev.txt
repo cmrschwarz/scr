@@ -1,0 +1,12 @@
+shellescape
+json5
+twine
+build
+mypy
+tox
+pytest
+pytest-parallel
+pytest-cov
+flake8
+
+-r requirements.txt
