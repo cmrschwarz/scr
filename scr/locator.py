@@ -106,9 +106,11 @@ class Locator(ConfigDataClass):
         if self.xpath is None:
             return
         try:
-            xp = lxml.etree.XPath(self.xpath)
-            xp.evaluate(lxml.html.HtmlElement("<div>test</div>"))
-        except (lxml.etree.XPathSyntaxError, lxml.etree.XPathEvalError):
+            xp = lxml.etree.XPath(cast(str, self.xpath))
+            xp.evaluate(  # type: ignore
+                lxml.html.fromstring("<div>test</div>")
+            )
+        except (lxml.etree.XPathError):
             # don't use the XPathSyntaxError message because they are spectacularily bad
             # e.g. XPath("/div/text(") -> XPathSyntaxError("Missing closing CURLY BRACE")
             raise ScrSetupError(
@@ -166,7 +168,7 @@ class Locator(ConfigDataClass):
         self.js_script = js_prelude + self.js_script
 
     def setup(self, mc: 'match_chain.MatchChain') -> None:
-        self.xpath = utils.empty_string_to_none(self.xpath)
+        self.xpath = utils.empty_string_to_none(cast(str, self.xpath))
         assert self.regex is None or type(self.regex) is str
         self.regex = utils.empty_string_to_none(self.regex)
         self.format = utils.empty_string_to_none(self.format)
@@ -179,7 +181,7 @@ class Locator(ConfigDataClass):
     def match_xpath(
         self,
         src_text: str,
-        src_xml: lxml.html.HtmlElement,
+        src_xml: Optional[lxml.html.HtmlElement],
         doc_path: str,
         store_xml: bool = False
     ) -> list[LocatorMatch]:
@@ -187,9 +189,10 @@ class Locator(ConfigDataClass):
             lm = LocatorMatch()
             lm.result = src_text
             return [lm]
+        assert src_xml is not None
         try:
             xp = cast(lxml.etree.XPath, self.xpath)
-            if type(src_xml) == lxml.etree._ElementUnicodeResult:
+            if type(src_xml) == lxml.etree._ElementUnicodeResult:  # type: ignore
                 # since lxml doesn't allow us to evaluate xpaths on these,
                 # but we need it for lic, we hack in support for it by
                 # generating a derived xpath that gets the expected results while
@@ -200,8 +203,8 @@ class Locator(ConfigDataClass):
                 fixed_xpath += xp.path
                 xpath_matches = src_xml.getparent().xpath(fixed_xpath)
             else:
-                xpath_matches = (xp.evaluate(src_xml))
-        except lxml.etree.XPathEvalError as ex:
+                xpath_matches = (xp.evaluate(src_xml))  # type: ignore
+        except lxml.etree.XPathError as ex:
             raise ScrMatchError(
                 f"xpath matching failed for: '{self.xpath}' in {doc_path}"
             )
@@ -221,7 +224,7 @@ class Locator(ConfigDataClass):
         res = []
         for xm in xpath_matches:
             lm = LocatorMatch()
-            if type(xm) == lxml.etree._ElementUnicodeResult:
+            if type(xm) == lxml.etree._ElementUnicodeResult:  # type: ignore
                 lm.xmatch = str(xm)
                 if store_xml:
                     lm.xmatch_xml = xm
@@ -231,7 +234,7 @@ class Locator(ConfigDataClass):
                     lm.xmatch = lm.result
                     if store_xml:
                         lm.xmatch_xml = xm
-                except (lxml.LxmlError, UnicodeEncodeError) as ex1:
+                except (lxml.etree.LxmlError, UnicodeEncodeError) as ex1:
                     raise ScrMatchError(
                         f"{doc_path}: xpath match encoding failed: {str(ex1)}"
                     )

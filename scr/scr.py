@@ -991,7 +991,7 @@ def report_selenium_error(ctx: 'scr_context.ScrContext', ex: Exception) -> None:
 def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
-    doc_xml: lxml.html.HtmlElement = lxml.html.fromstring(text)
+    doc_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
     iframes_xml_all_sources: list[lxml.html.HtmlElement] = doc_xml.xpath(
         "//iframe"
     )
@@ -1003,7 +1003,7 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
             SeleniumWebElement, int, lxml.html.HtmlElement
         ]] = []
         while True:
-            iframes_by_source: dict[str, lxml.html.HtmlElement] = {}
+            iframes_by_source: dict[str, list[lxml.html.HtmlElement]] = {}
             for iframe in reversed(iframes_xml_all_sources):
                 iframe_src = iframe.attrib["src"]
                 iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
@@ -1037,13 +1037,15 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
             log(ctx, Verbosity.DEBUG,
                 f"expanding iframe {curr_xml.attrib['src']}")
             depth = depth_new
-            iframe_xml = lxml.html.fromstring(drv.page_source)
+            iframe_xml = cast(
+                lxml.html.HtmlElement, lxml.html.fromstring(drv.page_source)
+            )
             curr_xml.append(iframe_xml)
             curr_xml = iframe_xml
             lxml.etree.XPath
             iframes_xml_all_sources = iframe_xml.xpath(".//iframe")
 
-        return lxml.html.tostring(doc_xml), doc_xml
+        return cast(str, lxml.html.tostring(doc_xml)), doc_xml
     finally:
         drv.switch_to.default_content()
 
@@ -1600,7 +1602,7 @@ def normalize_link(
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == document.DocumentType.FILE:
         if not link_parsed.scheme:
-            handle_windows_paths = False
+            handle_windows_paths: bool = False
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
@@ -1611,9 +1613,9 @@ def normalize_link(
                         # once we do that, urllib thinks that C: is a scheme,
                         # so we have to include file://
                         handle_windows_paths = (
-                            utils.is_windows()
-                            and doc_url_parsed.scheme == "file"
-                            and re.match("/[A-Za-z]:/", base[0:4])
+                            bool(utils.is_windows())
+                            and bool(doc_url_parsed.scheme == "file")
+                            and bool(re.match("/[A-Za-z]:/", base[0:4]))
                         )
                         if handle_windows_paths:
                             base = base[1:]  # remove the leading / from /C:/...
@@ -1652,14 +1654,14 @@ def parse_xml(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
         src_bytes = text.encode(cast(str, doc.encoding),
                                 errors="surrogateescape")
         if text.strip() == "":
-            src_xml = lxml.etree.Element("html")
+            src_xml = lxml.html.Element("html")
         elif doc.forced_encoding:
-            src_xml = lxml.html.fromstring(
+            src_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(
                 src_bytes,
                 parser=lxml.html.HTMLParser(encoding=doc.encoding)
-            )
+            ))
         else:
-            src_xml = lxml.html.fromstring(src_bytes)
+            src_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(src_bytes))
         doc.xml = src_xml
     except (lxml.etree.LxmlError, UnicodeEncodeError, UnicodeDecodeError) as ex:
         log(ctx, Verbosity.ERROR,
