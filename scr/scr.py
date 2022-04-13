@@ -310,8 +310,8 @@ def selenium_build_firefox_options(
 
 def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
     cwd = os.getcwd()
-    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
-        SeleniumVariant.TORBROWSER
+    selenium_driver_download.put_local_selenium_driver_in_path(
+        ctx, SeleniumVariant.FIREFOX
     )
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
@@ -322,7 +322,6 @@ def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
     try:
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path,
-            executable_path=driver_executable,
             options=selenium_build_firefox_options(ctx)
         )
 
@@ -332,20 +331,18 @@ def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
 
 
 def setup_selenium_firefox(ctx: 'scr_context.ScrContext') -> None:
-    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
-        SeleniumVariant.FIREFOX
+    selenium_driver_download.put_local_selenium_driver_in_path(
+        ctx, SeleniumVariant.FIREFOX
     )
     try:
         ctx.selenium_driver = selenium.webdriver.Firefox(
             options=selenium_build_firefox_options(ctx),
             service=SeleniumFirefoxService(  # type: ignore
-                log_path=ctx.selenium_log_path,
-                executable_path=driver_executable
+                log_path=ctx.selenium_log_path
             )
         )
-    except SeleniumWebDriverException as ex:
-        ex_msg = str(ex).strip('\n ')
-        err_msg = f"failed to start geckodriver: {ex_msg}"
+    except (SeleniumWebDriverException, OSError) as ex:
+        err_msg = f"failed to start geckodriver: {utils.truncate(str(ex))}"
 
         if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.FIREFOX) is None:
             # this is slightly hacky, but i like the way it looks
@@ -354,8 +351,8 @@ def setup_selenium_firefox(ctx: 'scr_context.ScrContext') -> None:
 
 
 def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
-    driver_executable = selenium_driver_download.get_preferred_selenium_driver_path(
-        SeleniumVariant.CHROME
+    selenium_driver_download.put_local_selenium_driver_in_path(
+        ctx, SeleniumVariant.CHROME
     )
     options = selenium.webdriver.ChromeOptions()
     if ctx.selenium_headless:
@@ -376,8 +373,7 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
         ctx.selenium_driver = selenium.webdriver.Chrome(
             options=options,
             service=SeleniumChromeService(  # type: ignore
-                log_path=ctx.selenium_log_path,
-                executable_path=driver_executable
+                log_path=ctx.selenium_log_path
             )
         )
     except SeleniumWebDriverException as ex:
@@ -414,6 +410,8 @@ def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
 
 
 def prevent_selenium_sigint() -> None:
+    if utils.is_windows():
+        return
     if selenium.webdriver.common.service.Service.start is selenium_start_wrapper:
         return
     selenium_start_wrapper.original_start = selenium.webdriver.common.service.Service.start  # type: ignore
@@ -1050,7 +1048,7 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
             )
             selpath = doc.path
             if doc.document_type in [document.DocumentType.FILE, DocumentType.RFILE]:
-                selpath = "file:" + os.path.realpath(selpath)
+                selpath = "file:" + os.path.abspath(selpath)
             try:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
@@ -1593,7 +1591,7 @@ def normalize_link(
                     base = doc_url_parsed.path
                     if ctx.selenium_variant.enabled():
                         # attempt to preserve short, relative paths were possible
-                        if os.path.realpath(doc_url_parsed.path) == os.path.realpath(src_doc.path):
+                        if os.path.abspath(doc_url_parsed.path) == os.path.abspath(src_doc.path):
                             base = src_doc.path
                 else:
                     base = src_doc.path
@@ -1833,7 +1831,7 @@ def resolve_repl_defaults(
         if doc_url:
             if utils.begins(doc_url, "file:"):
                 path = doc_url[len("file:"):]
-                if not last_doc or os.path.realpath(last_doc.path) != os.path.realpath(path):
+                if not last_doc or os.path.abspath(last_doc.path) != os.path.abspath(path):
                     doctype = DocumentType.FILE
                     if last_doc and last_doc.document_type == DocumentType.RFILE:
                         doctype = DocumentType.RFILE
@@ -1858,14 +1856,15 @@ def resolve_repl_defaults(
 
 
 def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
+    success = False
     try:
         # run with initial args
-        readline.set_auto_history(False)
+        if not utils.is_windows():
+            readline.set_auto_history(False)
         readline.add_history(shlex.join(args[1:]))
         tty = sys.stdin.isatty()
         stable_ctx = initial_ctx
         ctx: Optional['scr_context.ScrContext'] = initial_ctx
-        success = False
         while True:
             try:
                 if ctx is not None:

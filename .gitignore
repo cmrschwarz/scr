@@ -6,6 +6,7 @@ __pycache__
 .pytest_cache
 .mypy_cache
 /.tox
+
 # pytest-cov
 cov.xml
 .coverage*
@@ -18,3 +19,4 @@ cov.xml
 # scr dev stuff
 /tmp
 *.tmp
+geckodriver.log

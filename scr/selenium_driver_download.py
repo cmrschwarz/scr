@@ -1,14 +1,16 @@
 from .definitions import *
-from . import scr_context, scr
+from . import scr_context, scr, utils, scr_context
 from typing import Optional, cast
 import selenium_driver_updater
 import selenium_driver_updater.util.exceptions
 import os
 import glob
+import pathlib
+SELENIUM_DRIVER_DIR_ADDED_TO_PATH: bool = False
 
 
 def get_script_dir() -> str:
-    return os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+    return os.path.abspath(os.path.dirname(__file__))
 
 
 def get_selenium_drivers_dir() -> str:
@@ -20,13 +22,15 @@ def get_selenium_drivers_dir() -> str:
 
 
 def get_selenium_driver_executable_basename(variant: SeleniumVariant) -> Optional[str]:
-    #windows = (os.name == 'nt')
-    return {
+    bn = {
         SeleniumVariant.CHROME: "chromedriver",
         SeleniumVariant.FIREFOX: "geckodriver",
         SeleniumVariant.TORBROWSER: "geckodriver",
         SeleniumVariant.DISABLED: None
-    }[variant]  # + (".exe" if windows else "")
+    }[variant]
+    if bn is None:
+        return None
+    return bn + (".exe" if utils.is_windows() else "")
 
 
 def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> Optional[str]:
@@ -40,14 +44,17 @@ def get_local_selenium_driver_executable_path(variant: SeleniumVariant) -> Optio
 
 
 def touch_file(path: str) -> None:
-    open(path, "ab").close()
+    open(path, "ab+").close()
 
 
 def is_selenium_driver_present(path: str) -> bool:
     try:
         return os.path.getsize(path) != 0
     except FileNotFoundError:
-        touch_file(path)
+        try:
+            touch_file(path)
+        except IOError:
+            pass
         return False
 
 
@@ -58,6 +65,16 @@ def try_get_local_selenium_driver_path(variant: 'SeleniumVariant') -> Optional[s
     if is_selenium_driver_present(path):
         return path
     return None
+
+
+def put_local_selenium_driver_in_path(ctx: scr_context.ScrContext, variant: 'SeleniumVariant') -> None:
+    global SELENIUM_DRIVER_DIR_ADDED_TO_PATH
+    if SELENIUM_DRIVER_DIR_ADDED_TO_PATH:
+        return
+    SELENIUM_DRIVER_DIR_ADDED_TO_PATH = True
+    path_seperator = ":" if not utils.is_windows() else ";"
+    os.environ["PATH"] += path_seperator + get_selenium_drivers_dir()
+    scr.log(ctx, Verbosity.INFO, f"added to PATH: {get_selenium_drivers_dir()}")
 
 
 def get_preferred_selenium_driver_path(variant: 'SeleniumVariant') -> str:
@@ -120,13 +137,13 @@ def install_selenium_driver(ctx: 'scr_context.ScrContext', variant: 'SeleniumVar
         # we should not have to do this, this is working around a bug in the library
         if not success:
             open(local_driver_path, "w").close()
-        cleanup_selenium_installation_artifacts(ctx)
+        # cleanup_selenium_installation_artifacts(ctx, silent=not success)
 
 
-def cleanup_selenium_installation_artifacts(ctx: 'scr_context.ScrContext') -> None:
+def cleanup_selenium_installation_artifacts(ctx: 'scr_context.ScrContext', silent: bool = False) -> None:
     # clean up remains from potentially failed installs
     present_files = [
-        os.path.realpath(p)
+        os.path.abspath(p)
         for p in glob.glob(get_selenium_drivers_dir() + "/**")
     ]
     variant_files = {
