@@ -1600,17 +1600,31 @@ def normalize_link(
     doc_url_parsed = urllib.parse.urlparse(doc_path) if doc_path else None
     if src_doc.document_type == document.DocumentType.FILE:
         if not link_parsed.scheme:
+            handle_windows_paths = False
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
                     if ctx.selenium_variant.enabled():
+                        # browsers turn windows paths like 'C:\foobar' into "file:///C:/foobar"
+                        # which does not fly with pythons os.path, so we hack in a fix
+                        # that removes that leading slash from the path
+                        # once we do that, urllib thinks that C: is a scheme,
+                        # so we have to include file://
+                        handle_windows_paths = (
+                            utils.is_windows()
+                            and doc_url_parsed.scheme == "file"
+                            and re.match("/[A-Za-z]:/", base[0:4])
+                        )
+                        if handle_windows_paths:
+                            base = base[1:]  # remove the leading / from /C:/...
                         # attempt to preserve short, relative paths were possible
-                        if os.path.abspath(doc_url_parsed.path) == os.path.abspath(src_doc.path):
+                        if os.path.abspath(base) == os.path.abspath(src_doc.path):
                             base = src_doc.path
                 else:
                     base = src_doc.path
-                link = os.path.normpath(
-                    os.path.join(os.path.dirname(base), link))
+                link = os.path.normpath(os.path.join(os.path.dirname(base), link))
+                if handle_windows_paths:
+                    link = f"file://{link}"
                 return link, urllib.parse.urlparse(link)
         return link, link_parsed
     if doc_url_parsed and link_parsed.netloc == "" and src_doc.document_type == document.DocumentType.URL:
