@@ -311,7 +311,7 @@ def selenium_build_firefox_options(
 def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
     cwd = os.getcwd()
     selenium_driver_download.put_local_selenium_driver_in_path(
-        ctx, SeleniumVariant.FIREFOX
+        ctx, SeleniumVariant.TORBROWSER
     )
     if ctx.tor_browser_dir is None:
         tb_env_var = "TOR_BROWSER_DIR"
@@ -326,7 +326,11 @@ def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
         )
 
     except SeleniumWebDriverException as ex:
-        raise ScrSetupError(f"failed to start tor browser: {str(ex)}")
+        err_msg = f"failed to start tor browser: {str(ex)}"
+        if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.TORBROWSER) is None:
+            # same hack as for firefox
+            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=torbrowser'"
+        raise ScrSetupError(err_msg)
     os.chdir(cwd)  # restore cwd that is changed by tor for some reason
 
 
@@ -376,8 +380,13 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
                 log_path=ctx.selenium_log_path
             )
         )
-    except SeleniumWebDriverException as ex:
-        raise ScrSetupError(f"failed to start chromedriver: {str(ex)}")
+    except (SeleniumWebDriverException, OSError) as ex:
+        err_msg = f"failed to start chromedriver: {utils.truncate(str(ex))}"
+
+        if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.CHROME) is None:
+            # same hack as for firefox
+            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=chrome'"
+        raise ScrSetupError(err_msg)
 
 
 def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
