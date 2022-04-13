@@ -4,3 +4,14 @@ requires = [
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = [
+    "selenium: uses selenium with a driver for the specified browser",
+    "httpbin: requires the httpbin website (and therefore network access)",
+    "cmrs_io: requires the cmrs.io website (and therefore network access)",
+    "repl: uses the scr repl",
+]
+
+[tool.mypy]
+strict = true
