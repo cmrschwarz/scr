@@ -6,7 +6,7 @@ def test_basic_xpath(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/foo+bar+baz.html",
+            "rfile=../res/foo+bar+baz.html",
             "cx= //ul/li/text()"
         ],
         stdout="foo\nbar\nbaz\n",
@@ -17,12 +17,12 @@ def test_cm_available_in_cpf(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file0=./res/a.txt.html",
+            "file0=../res/a.txt.html",
             "cx=//@src",
             "cl=1",
             "cpf={cm}\\n"
         ],
-        stdout="res/a.txt\n",
+        stdout="../res/a.txt\n",
     )
 
 
@@ -42,7 +42,7 @@ def test_data_url_download(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/data_url.html",
+            "rfile=../res/data_url.html",
             "cx=//@src",
             "cl",
             "csf={fn}"
@@ -55,9 +55,9 @@ def test_data_urls(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/data_url.txt",
-            "file=./res/data_url_base64.txt",
-            "file=./res/data url with space.txt",
+            "file=../res/data_url.txt",
+            "file=../res/data_url_base64.txt",
+            "file=../res/data url with space.txt",
             "cr=^.+$",
             "cl=1"
         ],
@@ -73,7 +73,7 @@ def test_disallow_empty_save_path(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/a.txt",
+            "rfile=../res/a.txt",
             "cr=.*",
             "csf="
         ],
@@ -86,7 +86,7 @@ def test_double_content_print_from_file(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/a.txt.html",
+            "file=../res/a.txt.html",
             "cl=1",
             "cx=//@src",
             "cpf={c}:::{c}"
@@ -99,7 +99,7 @@ def test_double_content_print_file_from_url(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/file_url.html",
+            "rfile=../res/file_url.html",
             "cl=1",
             "cx=//@src",
             "cpf={c}:::{c}"
@@ -112,7 +112,7 @@ def test_empty_cpf(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/a.txt",
+            "rfile=../res/a.txt",
             "cr=.*",
             "cpf="
         ],
@@ -124,7 +124,7 @@ def test_empty_document(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/empty.html",
+            "rfile=../res/empty.html",
             "cr=.*"
         ],
         stdout="\n",
@@ -135,7 +135,7 @@ def test_download_file(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/a.txt.html",
+            "file=../res/a.txt.html",
             "cl=1",
             "cx=//@src",
             "csf0={fb}+{fb}{fe}",
@@ -154,7 +154,7 @@ def test_download_url(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/file_url.html",
+            "rfile=../res/file_url.html",
             "cl=1",
             "cx=//@src",
             "lx=//@id",
@@ -172,7 +172,7 @@ def test_filename_if_content_not_needed(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/data_url.html",
+            "rfile=../res/data_url.html",
             "cx=//@src",
             "cl",
             "cpf={fn}\n"
@@ -185,12 +185,12 @@ def test_illegal_url(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "url=./res/basic.html",
+            "url=../res/basic.html",
             "cr=.",  # to not trigger doc as content optimization
             "cpf={c}"
         ],
         ec=1,
-        stderr="[ERROR]: Failed to fetch https:///./res/basic.html: invalid url\n"
+        stderr="[ERROR]: Failed to fetch https:///../res/basic.html: invalid url\n"
     )
 
 
@@ -198,7 +198,7 @@ def test_info_verbosity(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/iframe_tree.html",
+            "file=../res/iframe_tree.html",
             "v=info",
             "dx=//iframe/@src",
             "cx=//title/text()",
@@ -213,12 +213,12 @@ def test_info_verbosity(cli_env: CliEnv) -> None:
             "iframe_tree_r"
         ],
         stderr=[
-            " [INFO]: reading file 'res/iframe_tree.html'",
-            " [INFO]: reading file 'res/iframe_tree_l.html'",
-            " [INFO]: reading file 'res/iframe_tree_l1.html'",
-            " [INFO]: reading file 'res/iframe_tree_l2.html'",
-            " [INFO]: reading file 'res/iframe_tree_l3.html'",
-            " [INFO]: reading file 'res/iframe_tree_r.html'"
+            " [INFO]: reading file '../res/iframe_tree.html'",
+            " [INFO]: reading file '../res/iframe_tree_l.html'",
+            " [INFO]: reading file '../res/iframe_tree_l1.html'",
+            " [INFO]: reading file '../res/iframe_tree_l2.html'",
+            " [INFO]: reading file '../res/iframe_tree_l3.html'",
+            " [INFO]: reading file '../res/iframe_tree_r.html'"
         ]
     )
 
@@ -227,7 +227,7 @@ def test_invalid_xpath(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/basic.html",
+            "rfile=../res/basic.html",
             "cx=??xxx"
         ],
         ec=1,
@@ -250,13 +250,13 @@ def test_multichain(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file0=./res/a.txt.html",
+            "file0=../res/a.txt.html",
             "dx0=//@src",
             "doc0=1",
             "cx0=//@id",
             "cr1=a",
             "cpf1={cr}\n",
-            "file2=./res/b.txt",
+            "file2=../res/b.txt",
             "cr2=b",
             "cpf2={c}\n"
         ],
@@ -268,11 +268,11 @@ def test_nonexisting_file(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/xxxxxxx",
+            "rfile=../res/xxxxxxx",
             "cx=//p/text()"
         ],
         ec=1,
-        stderr="[ERROR]: Failed to fetch res/xxxxxxx: no such file or directory\n"
+        stderr="[ERROR]: Failed to fetch ../res/xxxxxxx: no such file or directory\n"
     )
 
 
@@ -282,7 +282,7 @@ def test_cli_doc_reuse(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "repl",
-            "rfile=./res/foo+bar+baz.html",
+            "rfile=../res/foo+bar+baz.html",
             "cx=//ul/li/text()"
         ],
         stdin=[
@@ -322,18 +322,18 @@ def test_tree_bfs(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/iframe_tree.html",
+            "file=../res/iframe_tree.html",
             "dx=//iframe/@src",
             "cpf={dl}\\n",
             "bfs=1"
         ],
         stdout=[
-            "res/iframe_tree.html",
-            "res/iframe_tree_l.html",
-            "res/iframe_tree_r.html",
-            "res/iframe_tree_l1.html",
-            "res/iframe_tree_l2.html",
-            "res/iframe_tree_l3.html"
+            "../res/iframe_tree.html",
+            "../res/iframe_tree_l.html",
+            "../res/iframe_tree_r.html",
+            "../res/iframe_tree_l1.html",
+            "../res/iframe_tree_l2.html",
+            "../res/iframe_tree_l3.html"
         ]
     )
 
@@ -343,16 +343,16 @@ def test_tree_dfs(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/iframe_tree.html",
+            "file=../res/iframe_tree.html",
             "dx=//iframe/@src",
             "cpf={dl}\\n"
         ],
         stdout=[
-            "res/iframe_tree.html",
-            "res/iframe_tree_l.html",
-            "res/iframe_tree_l1.html",
-            "res/iframe_tree_l2.html",
-            "res/iframe_tree_l3.html",
-            "res/iframe_tree_r.html"
+            "../res/iframe_tree.html",
+            "../res/iframe_tree_l.html",
+            "../res/iframe_tree_l1.html",
+            "../res/iframe_tree_l2.html",
+            "../res/iframe_tree_l3.html",
+            "../res/iframe_tree_r.html"
         ]
     )

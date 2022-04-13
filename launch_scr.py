@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env python3
 
 # convenience wrapper for debugging from within a set working directory
 

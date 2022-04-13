@@ -6,7 +6,7 @@ def test_allow_chain_on_bool_param(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/a.txt.html",
+            "file=../res/a.txt.html",
             "cx=//@src",
             "cl0"
         ],
@@ -162,7 +162,7 @@ def test_repl_invalid_xpath(cli_env: CliEnv) -> None:
             "repl"
         ],
         stdin=[
-            "rfile=./test/res/basic.html",
+            "rfile=./tes../res/basic.html",
             "cx0-2=//foo@bar",
             "exit"
         ],
@@ -199,7 +199,7 @@ def test_unknown_param_explicit_chain(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/empty.html",
+            "rfile=../res/empty.html",
             "cxx12=3"
         ],
         ec=1,
@@ -211,7 +211,7 @@ def test_unknown_param(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/empty.html",
+            "rfile=../res/empty.html",
             "cxx=3"
         ],
         ec=1,

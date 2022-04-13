@@ -7,7 +7,7 @@ def test_closing_doc(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/closing_doc.html",
+            "rfile=../res/closing_doc.html",
             "cx=//p/text()",
             "sel=f",
             "selh"
@@ -23,7 +23,7 @@ def test_cors(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/cors.html",
+            "rfile=../res/cors.html",
             "cx=//embed/@src",
             "sel=c",
             "cl=t",
@@ -34,7 +34,7 @@ def test_cors(cli_env: CliEnv) -> None:
         ],
         ec=1,
         stdout="cors\n",
-        stderr="[ERROR]: res/cors.html (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n",
+        stderr="[ERROR]: ../res/cors.html (ci=1): selenium download of 'http://echo.d.cmrs.io/?echo=cors' failed (potential CORS issue): Failed to fetch\n",
     )
 
 
@@ -43,7 +43,7 @@ def test_dedup(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/foo+bar+foo.html",
+            "rfile=../res/foo+bar+foo.html",
             "cx= //ul/li/text()",
             "sel=f",
             "selstrat=dedup",
@@ -51,7 +51,7 @@ def test_dedup(cli_env: CliEnv) -> None:
         ],
         stdin="y\n",
         stdout=[
-            "res/foo+bar+foo.html: use page with potentially   < 2 >   contents [Yes/skip]? foo",
+            "../res/foo+bar+foo.html: use page with potentially   < 2 >   contents [Yes/skip]? foo",
             "bar"
         ]
     )
@@ -62,7 +62,7 @@ def test_js_content(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "rfile=./res/js_content.html",
+            "rfile=../res/js_content.html",
             "cx=//p/text()",
             "sel=c",
             "selh"
@@ -79,7 +79,7 @@ def test_js_exec_causes_reload(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "sel=f",
-            "file=./res/a.txt.html",
+            "file=../res/a.txt.html",
             "cx0=//@id",
             "cr0=[^\\.]+$",
             "cjs0=const a = document.createElement('a');a.id=cr; a.text = cx; document.body.appendChild(a); return 'hello from js';",
@@ -98,7 +98,7 @@ def test_recursive_iframes(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/iframe_tree.html",
+            "file=../res/iframe_tree.html",
             "cx=//title/text()",
             "sel=c",
             "selh"
@@ -125,18 +125,18 @@ def test_repl_selenium(cli_env: CliEnv) -> None:
             "sel=d"
         ],
         stdin=[
-            "file=./res/a.txt cpf={c}",
-            "file=./res/js_content.html",
+            "file=../res/a.txt cpf={c}",
+            "file=../res/js_content.html",
             "'cx=//p/text()'",
             "sel=f",
             "'cx=//p/text()'",
             # firefox is weird and wraps this
-            "file=./res/b.txt cpf={c} cx=//pre/text()",
-            "file=./res/js_content.html",
+            "file=../res/b.txt cpf={c} cx=//pre/text()",
+            "file=../res/js_content.html",
             "'cx=//p/text()'",
             "sel=d",
             "'cx=//p/text()'",
-            "file=./res/a.txt cpf={c}",
+            "file=../res/a.txt cpf={c}",
             "cpf='c\\n'",
             "exit"
         ],
@@ -157,8 +157,8 @@ def test_selenium_download_chrome(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/a.txt.html",
-            "rfile=./res/file_url.html",
+            "file=../res/a.txt.html",
+            "rfile=../res/file_url.html",
             "cl=1",
             "cx=//@src",
             "cpf={c}",
@@ -186,8 +186,8 @@ def test_selenium_download_firefox(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "file=./res/a.txt.html",
-            "rfile=./res/file_url.html",
+            "file=../res/a.txt.html",
+            "rfile=../res/file_url.html",
             "cl=1",
             "cx=//@src",
             "cpf={c}",

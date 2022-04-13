@@ -1,10 +1,12 @@
 from io import FileIO, TextIOWrapper
 from multiprocessing.connection import Client
 import os
+import tempfile
 import pytest
 from pytest import CaptureFixture
+import shutil
 from typing import Any, Optional, cast, Generator, Union
-from ... import scr
+from ... import scr, utils
 
 
 class CliEnv():
@@ -14,16 +16,12 @@ class CliEnv():
     stdin_file: Optional[TextIOWrapper]
     special_files: set[str]
 
-    def __init__(self, tmpdir: Any, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
-        self.tmpdir = str(tmpdir)
+    def __init__(self, cli_env_dir: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
+        self.tmpdir = tempfile.mkdtemp(dir=cli_env_dir)
         self.capsys = capsys
         self.monkeypatch = monkeypatch
-        os.symlink(
-            os.path.join(os.path.dirname(__file__), "res"),
-            os.path.join(tmpdir, "res")
-        )
-        os.chdir(tmpdir)
-        self.special_files = {"res"}
+        os.chdir(self.tmpdir)
+        self.special_files = set()
 
     def set_stdin(self, stdin: str) -> None:
         if stdin:
@@ -45,9 +43,11 @@ class CliEnv():
             self.stdin_file.close()
 
 
+
+
 @pytest.fixture
-def cli_env(tmpdir: Any, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> Generator[CliEnv, None, None]:
-    cli_env = CliEnv(tmpdir, capsys, monkeypatch)
+def cli_env(cli_env_root_dir: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> Generator[CliEnv, None, None]:
+    cli_env = CliEnv(cli_env_root_dir, capsys, monkeypatch)
     yield cli_env
     cli_env.close()
 
