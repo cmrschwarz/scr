@@ -1,5 +1,6 @@
 from .cli_env import cli_env, CliEnv, run_scr
 import pytest
+from os.path import normpath
 
 
 def test_basic_xpath(cli_env: CliEnv) -> None:
@@ -22,7 +23,7 @@ def test_cm_available_in_cpf(cli_env: CliEnv) -> None:
             "cl=1",
             "cpf={cm}\\n"
         ],
-        stdout="../res/a.txt\n",
+        stdout=f"{normpath('../res/a.txt')}\n",
     )
 
 
@@ -213,12 +214,12 @@ def test_info_verbosity(cli_env: CliEnv) -> None:
             "iframe_tree_r"
         ],
         stderr=[
-            " [INFO]: reading file '../res/iframe_tree.html'",
-            " [INFO]: reading file '../res/iframe_tree_l.html'",
-            " [INFO]: reading file '../res/iframe_tree_l1.html'",
-            " [INFO]: reading file '../res/iframe_tree_l2.html'",
-            " [INFO]: reading file '../res/iframe_tree_l3.html'",
-            " [INFO]: reading file '../res/iframe_tree_r.html'"
+            f" [INFO]: reading file '{normpath('../res/iframe_tree.html')}'",
+            f" [INFO]: reading file '{normpath('../res/iframe_tree_l.html')}'",
+            f" [INFO]: reading file '{normpath('../res/iframe_tree_l1.html')}'",
+            f" [INFO]: reading file '{normpath('../res/iframe_tree_l2.html')}'",
+            f" [INFO]: reading file '{normpath('../res/iframe_tree_l3.html')}'",
+            f" [INFO]: reading file '{normpath('../res/iframe_tree_r.html')}'"
         ]
     )
 
@@ -272,7 +273,7 @@ def test_nonexisting_file(cli_env: CliEnv) -> None:
             "cx=//p/text()"
         ],
         ec=1,
-        stderr="[ERROR]: Failed to fetch ../res/xxxxxxx: no such file or directory\n"
+        stderr=f"[ERROR]: Failed to fetch {normpath('../res/xxxxxxx')}: no such file or directory\n"
     )
 
 
@@ -328,12 +329,12 @@ def test_tree_bfs(cli_env: CliEnv) -> None:
             "bfs=1"
         ],
         stdout=[
-            "../res/iframe_tree.html",
-            "../res/iframe_tree_l.html",
-            "../res/iframe_tree_r.html",
-            "../res/iframe_tree_l1.html",
-            "../res/iframe_tree_l2.html",
-            "../res/iframe_tree_l3.html"
+            f"{normpath('../res/iframe_tree.html')}",
+            f"{normpath('../res/iframe_tree_l.html')}",
+            f"{normpath('../res/iframe_tree_r.html')}",
+            f"{normpath('../res/iframe_tree_l1.html')}",
+            f"{normpath('../res/iframe_tree_l2.html')}",
+            f"{normpath('../res/iframe_tree_l3.html')}"
         ]
     )
 
@@ -348,11 +349,11 @@ def test_tree_dfs(cli_env: CliEnv) -> None:
             "cpf={dl}\\n"
         ],
         stdout=[
-            "../res/iframe_tree.html",
-            "../res/iframe_tree_l.html",
-            "../res/iframe_tree_l1.html",
-            "../res/iframe_tree_l2.html",
-            "../res/iframe_tree_l3.html",
-            "../res/iframe_tree_r.html"
+            f"{normpath('../res/iframe_tree.html')}",
+            f"{normpath('../res/iframe_tree_l.html')}",
+            f"{normpath('../res/iframe_tree_l1.html')}",
+            f"{normpath('../res/iframe_tree_l2.html')}",
+            f"{normpath('../res/iframe_tree_l3.html')}",
+            f"{normpath('../res/iframe_tree_r.html')}"
         ]
     )
