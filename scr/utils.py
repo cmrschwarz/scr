@@ -4,6 +4,7 @@ from . import scr_context, match_chain, document
 import urllib
 import os
 import sys
+import re
 
 
 def is_windows() -> bool:
@@ -59,3 +60,20 @@ def stdin_has_content(timeout: float) -> bool:
         return win32event.WaitForSingleObject(
             win32api.STD_INPUT_HANDLE, int(timeout * 1000)  # milliseconds
         ) is win32event.WAIT_OBJECT_0
+
+
+def remove_file_scheme_from_url(url: str) -> str:
+    offs = len("file:")
+    assert url[:offs] == "file:"
+    for i in range(2):
+        if url[offs] == "/":
+            offs += 1
+    url = url[offs:]
+    # browsers turn windows paths like 'C:\foobar' into "file:///C:/foobar"
+    # which does not fly with pythons os.path, so we hack in a fix
+    # that removes that leading slash from the path
+    # once we do that, urllib thinks that C: is a scheme,
+    # so we have to include file://, see handle_widows_paths normalize_link
+    if is_windows() and re.match("/[A-Za-z]:/", url):
+        url = url[1:]
+    return url

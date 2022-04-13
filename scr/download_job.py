@@ -352,9 +352,16 @@ class DownloadJob:
         return InteractiveResult.ACCEPT
 
     def selenium_download_from_local_file(self) -> bool:
-        self.content = self.cm.clm.result
+        path = self.cm.clm.result
         self.content_format = ContentFormat.FILE
-        self.filename = os.path.basename(self.cm.clm.result)
+        if cast(urllib.parse.ParseResult, self.cm.url_parsed).scheme == "file":
+            offs = len("file:")
+            for i in range(2):
+                if path[offs] == "/":
+                    offs += 1
+            path = path[offs:]
+        self.content = path
+        self.filename = os.path.basename(path)
         return True
 
     def selenium_download_external(self) -> bool:

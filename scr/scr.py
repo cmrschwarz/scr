@@ -1607,18 +1607,12 @@ def normalize_link(
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
                     if ctx.selenium_variant.enabled():
-                        # browsers turn windows paths like 'C:\foobar' into "file:///C:/foobar"
-                        # which does not fly with pythons os.path, so we hack in a fix
-                        # that removes that leading slash from the path
-                        # once we do that, urllib thinks that C: is a scheme,
-                        # so we have to include file://
                         handle_windows_paths = (
                             bool(utils.is_windows())
                             and bool(doc_url_parsed.scheme == "file")
-                            and bool(re.match("/[A-Za-z]:/", base[0:4]))
                         )
                         if handle_windows_paths:
-                            base = base[1:]  # remove the leading / from /C:/...
+                            base = utils.remove_file_scheme_from_url(cast(str, doc_path))
                         # attempt to preserve short, relative paths were possible
                         if os.path.abspath(base) == os.path.abspath(src_doc.path):
                             base = src_doc.path
@@ -1626,7 +1620,7 @@ def normalize_link(
                     base = src_doc.path
                 link = os.path.normpath(os.path.join(os.path.dirname(base), link))
                 if handle_windows_paths:
-                    link = f"file://{link}"
+                    link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
                 return link, urllib.parse.urlparse(link)
         return link, link_parsed
     if doc_url_parsed and link_parsed.netloc == "" and src_doc.document_type == document.DocumentType.URL:
@@ -1860,7 +1854,7 @@ def resolve_repl_defaults(
                 last_doc = None
         if doc_url:
             if utils.begins(doc_url, "file:"):
-                path = doc_url[len("file:"):]
+                path = utils.remove_file_scheme_from_url(doc_url)
                 if not last_doc or os.path.abspath(last_doc.path) != os.path.abspath(path):
                     doctype = DocumentType.FILE
                     if last_doc and last_doc.document_type == DocumentType.RFILE:

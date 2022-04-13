@@ -226,25 +226,29 @@ def stringify_status_report_lines(report_lines: list[StatusReportLine]) -> None:
                     rl.speed_frame_time_begin).total_seconds()
             )
             handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
-            if handled_size == 0:
-                speed = 0.0
+            if duration < sys.float_info.epsilon:
+                rl.speed_str, rl.speed_u_str = "???", " "
                 rl.eta_str, rl.eta_u_str = "???", " "
             else:
-                speed = float(handled_size) / duration
-                if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                    rl.eta_str, rl.eta_u_str = get_timespan_string(
-                        (rl.expected_size - rl.downloaded_size) / speed
-                    )
-                elif rl.finished:
-                    rl.eta_str, rl.eta_u_str = "---", "-"
-                else:
+                if handled_size == 0:
+                    speed = 0.0
                     rl.eta_str, rl.eta_u_str = "???", " "
-            rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
-            rl.speed_u_str += "/s"
+                else:
+                    speed = float(handled_size) / duration
+                    if rl.expected_size and rl.expected_size > rl.downloaded_size:
+                        rl.eta_str, rl.eta_u_str = get_timespan_string(
+                            (rl.expected_size - rl.downloaded_size) / speed
+                        )
+                    elif rl.finished:
+                        rl.eta_str, rl.eta_u_str = "---", "-"
+                    else:
+                        rl.eta_str, rl.eta_u_str = "???", " "
+                rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
+                rl.speed_u_str += "/s"
         else:
             rl.speed_frame_time_end = now
             rl.eta_str, rl.eta_u_str = "???", " "
-            rl.speed_str, rl.speed_u_str = "???", "B/s"
+            rl.speed_str, rl.speed_u_str = "???", ""
 
         rl.total_time_str, rl.total_time_u_str = get_timespan_string(
             (rl.download_end - rl.download_begin).total_seconds()
