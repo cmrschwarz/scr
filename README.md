@@ -12,72 +12,53 @@ Command-line Utility for Web Scraping
 ## Core Features
 * Extract web content based on XPath-, Regex-, (Javascript-), and Python Format Expressions
 * Crawls through complex graphs of webpages using expressive match chains and forwarding rules
-* Selenium support, explicitly also with the Tor Browser
-* REPL mode for building up complex commands
+* Selenium support, explicitly also for headless mode and for the Tor Browser
+* REPL mode for quick and dirty jobs / debugging larger commands
 * **dd** style Command-line Interface
-* Multithreaded Downloads with optional progress output on the console
+* Multithreaded downloads with optional progress output on the console
 * Interactive modes for rejecting false matches, adjusting filenames etc.
-
-
-## Examples
-
-### Get text from all paragraphs on a site:
-```bash
-scr url=google.com cx='//p/text()'
-```
-
-### Open up a REPL to explore, using firefox selenium
-```bash
-scr repl sel=firefox url=example.org
-scr> cr="some regex to match in the open firefox tab" cpf="print regex result on stdout: {cr}"
-scr> exit
-```
-
-### Interactively scroll through top reddit posts (max to page 42) :
-```bash
-scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din dimax=42 mt=0
-```
-
-### Download the first 10 pdfs from a site and add their number (zero padded) before the filename:
-```bash
-scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr='.*\.pdf$' cl csf='{ci:02}_{fn}' cimax=10
-```
-
-### Downloading first 3 pdfs and 5 gifs from a site, use selenium tor for the fetch:
-```bash
-scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif$' cl csf='{fn}' cin=1 cimax0=3 cimax1=5 sel=tor
-```
 
 ## Setup
 
-SCR can be installed from pypi using
+SCR can be installed from pypi.org using
 
 ```bash
 pip install scr
 ```
 
-To use the selenium feature,
-you need to have a driver for the selected browser installed.
+Selenium drivers for Firefox/Tor (``geckodriver``), and chrome/chromium
+(``chromedriver``) can be installed e.g. using
+```
+scr selinstall=firefox
+``` 
+(and later updated e.g. using ``scr selupdate=chrome``).
+You still need to have the browser installed, though.
 
-### Setting up Firefox for selenium
 
-The geckodriver executable can be downloaded from
-https://github.com/mozilla/geckodriver/releases
-It must be in a folder on the PATH for scr to find it.
+## Examples
 
-### Setting up Tor Browser for selenium
-Once the Tor Browser have bin installed in any directory, add a
-TOR_BROWSER_DIR environment variable for scr to find it.
-(Alternatively pass it explicitly using ```tbdir=<folder path>```)
-Since Tor Browser is based on Firefox, the geckodriver executable
-is also needed.
+### Download and enumerate all images from a website into the current working directory:
+```bash
+scr url=google.com cx='//img/@src' cl csf="img_{ci}{fe}" 
+```
 
-### Setting up Chrome for Selenium
+### Open up a REPL, remote controlling a Firefox Browser using selenium
+```bash
+scr repl sel=firefox url="https://en.wikipedia.org/wiki/web_scraping"
+scr> 'cx=//span[text()="Edit"]/parent::*/parent::*/@id' cjs="document.getElementById(cx).children[0].click()"
+scr> exit
+```
 
-Simply install the `chromium-driver` (debian +deriviates),
-`chromium-chromedriver` (alpine) or `chromedriver` (arch aur)
-package for your distribution.
-(A pullrequest with instructions for windows here would be appreciated.)
+### Interactively scroll through top reddit posts, following the 'next page' buttons:
+```bash
+scr url=old.reddit.com dx='//span[@class="next-button"]/a/@href' cx='//div[contains(@class,"entry")]//a[contains(@class,"title")]/text()' din mt=0
+```
+
+### Downloading first 3 pdfs and first 5 gifs from a site, use a headless selenium tor browser for the fetch:
+```bash
+scr url=https://dtc.ucsf.edu/learning-library/resource-materials/ cx=//@href cr0='.*\.pdf$' cr1='.*\.gif$' cl csf='{fn}' cin=1 cimax0=3 cimax1=5 sel=tor selh
+```
+
 
 ## Options List
 ```
