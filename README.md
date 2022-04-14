@@ -2,6 +2,13 @@
 
 Command-line Utility for Web Scraping
 
+
+[![GitHub Workflow Status (branch)](https://img.shields.io/github/workflow/status/cmrschwarz/scr/tests/master?label=tests)](https://github.com/cmrschwarz/scr/actions/workflows/tests.yml)
+[![Supported Versions](https://img.shields.io/pypi/v/scr?color=blue)](https://pypi.org/project/scr)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/scr)](https://pypi.org/project/scr)
+![Lines of code](https://img.shields.io/tokei/lines/github/cmrschwarz/scr?label=lines%20of%20code)
+[![PyPI - License](https://img.shields.io/pypi/l/scr?color=dark-green)](./LICENSE)
+
 ## Core Features
 * Extract web content based on XPath-, Regex-, (Javascript-), and Python Format Expressions
 * Crawls through complex graphs of webpages using expressive match chains and forwarding rules
@@ -190,8 +197,8 @@ scr [OPTIONS]
     Miscellaneous:
         help                   prints this help
         selinstall=<browser>   installs selenium driver for the specified browser in the directory of this script
-        seluninstall=<browser> installs selenium driver for the specified browser in the directory of this script
-        selupdate=<browser>    installs selenium driver for the specified browser in the directory of this script
+        seluninstall=<browser> uninstalls selenium driver for the specified browser in the directory of this script
+        selupdate=<browser>    updates (or installs) the local selenium driver for the specified browser
         version                print version information
 
     Global Options:
