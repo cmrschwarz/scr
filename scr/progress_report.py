@@ -1,11 +1,11 @@
-from typing import Optional, Union, cast
+from typing import Optional, Union
 import math
 import datetime
 from collections import deque
 import sys
 import urllib
 import os
-from . import download_job, scr, utils
+from . import download_job, utils
 
 DOWNLOAD_STATUS_LOG_ELEMENTS_MIN = 5
 DOWNLOAD_STATUS_LOG_ELEMENTS_MAX = 50
@@ -261,7 +261,6 @@ def append_status_report_line_strings(
     def field_len_max(field_name: str) -> int:
         return max(map(lambda rl: len(rl.__dict__[field_name]), report_lines))
 
-    name_lm = field_len_max("name")
     total_time_lm = field_len_max("total_time_str")
     total_time_u_lm = field_len_max("total_time_u_str")
     downloaded_size_lm = field_len_max("downloaded_size_str")
@@ -323,10 +322,10 @@ def print_status_report(report_lines: list[StatusReportLine], prev_report_line_c
         # don't bother
         return prev_report_line_count
 
-    for l in report_line_strings:
-        if len(l) < max_cols:
-            report += l + " " * (max_cols - len(l)) + "\n"
+    for rls in report_line_strings:
+        if len(rls) < max_cols:
+            report += rls + " " * (max_cols - len(rls)) + "\n"
         else:
-            report += l[0:max_cols-3] + "...\n"
+            report += rls[0:max_cols-3] + "...\n"
     sys.stdout.write(report)
     return len(report_lines)

@@ -1,12 +1,9 @@
-from io import FileIO, TextIOWrapper
-from multiprocessing.connection import Client
+from io import TextIOWrapper
 import os
 import tempfile
 import pytest
-from pytest import CaptureFixture
-import shutil
-from typing import Any, Optional, cast, Generator, Union
-from ... import scr, utils
+from typing import Optional, cast, Generator, Union
+from ... import scr
 
 
 class CliEnv():
@@ -43,9 +40,7 @@ class CliEnv():
             self.stdin_file.close()
 
 
-
-
-@pytest.fixture
+@pytest.fixture()
 def cli_env(cli_env_root_dir: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> Generator[CliEnv, None, None]:
     cli_env = CliEnv(cli_env_root_dir, capsys, monkeypatch)
     yield cli_env

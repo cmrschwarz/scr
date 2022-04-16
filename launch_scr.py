@@ -10,6 +10,6 @@ import os
 sys.path.insert(1, os.path.dirname(__file__))
 
 # this must come after the path insertion
-from scr import scr  # nopep8
+from scr import scr  # noqa: E402
 
 scr.main()

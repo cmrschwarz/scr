@@ -1,9 +1,9 @@
-from .cli_env import cli_env, CliEnv, run_scr
+from .cli_env import CliEnv, run_scr
 import pytest
 from os.path import normpath
 
 
-@pytest.mark.selenium
+@pytest.mark.selenium()
 def test_closing_doc(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -18,8 +18,8 @@ def test_closing_doc(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
-@pytest.mark.cmrs_io
+@pytest.mark.selenium()
+@pytest.mark.cmrs_io()
 def test_cors(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -39,7 +39,7 @@ def test_cors(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
+@pytest.mark.selenium()
 def test_dedup(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -58,7 +58,7 @@ def test_dedup(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
+@pytest.mark.selenium()
 def test_js_content(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -74,7 +74,7 @@ def test_js_content(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
+@pytest.mark.selenium()
 def test_js_exec_causes_reload(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -94,7 +94,7 @@ def test_js_exec_causes_reload(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
+@pytest.mark.selenium()
 def test_recursive_iframes(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -115,8 +115,8 @@ def test_recursive_iframes(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
-@pytest.mark.repl
+@pytest.mark.selenium()
+@pytest.mark.repl()
 def test_repl_selenium(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -152,8 +152,8 @@ def test_repl_selenium(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
-@pytest.mark.httpbin
+@pytest.mark.selenium()
+@pytest.mark.httpbin()
 def test_selenium_download_chrome(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -181,8 +181,8 @@ def test_selenium_download_chrome(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.selenium
-@pytest.mark.httpbin
+@pytest.mark.selenium()
+@pytest.mark.httpbin()
 def test_selenium_download_firefox(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

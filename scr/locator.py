@@ -1,12 +1,11 @@
-from .definitions import *
-from . import args_parsing, match_chain, scr, utils, document, content_match
+from .definitions import (ScrSetupError, ScrMatchError, Verbosity)
+from . import match_chain, scr, utils, document, content_match
 from .config_data_class import ConfigDataClass
 from typing import Optional, Union, Any, cast
 import lxml.etree
 import lxml.html
 import re
 from selenium.common.exceptions import WebDriverException as SeleniumWebDriverException
-from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
 from selenium.common.exceptions import JavascriptException as SeleniumJavascriptException
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
@@ -204,7 +203,7 @@ class Locator(ConfigDataClass):
                 xpath_matches = src_xml.getparent().xpath(fixed_xpath)
             else:
                 xpath_matches = (xp.evaluate(src_xml))  # type: ignore
-        except lxml.etree.XPathError as ex:
+        except lxml.etree.XPathError:
             raise ScrMatchError(
                 f"xpath matching failed for: '{self.xpath}' in {doc_path}"
             )
@@ -299,7 +298,7 @@ class Locator(ConfigDataClass):
                     f"{name}: js exception on {utils.truncate(doc.path)}:\n{textwrap.indent(str(ex), '    ')}"
                 )
                 continue
-            except (SeleniumWebDriverException, SeleniumMaxRetryError) as ex:
+            except (SeleniumWebDriverException, SeleniumMaxRetryError):
                 if scr.selenium_has_died(mc.ctx):
                     raise ScrMatchError(
                         "the selenium instance was closed unexpectedly")

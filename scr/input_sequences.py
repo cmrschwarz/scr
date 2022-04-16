@@ -1,6 +1,6 @@
-from typing import Iterable, TypeVar
+from typing import Iterable
 
-from .definitions import *
+from .definitions import (T)
 
 
 def prefixes(str: str) -> set[str]:

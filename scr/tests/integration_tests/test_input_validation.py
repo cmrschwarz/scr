@@ -1,4 +1,4 @@
-from .cli_env import cli_env, CliEnv, run_scr
+from .cli_env import CliEnv, run_scr
 import pytest
 
 
@@ -141,7 +141,7 @@ def test_no_url_error(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_no_url_error_repl(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -154,7 +154,7 @@ def test_no_url_error_repl(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_repl_invalid_xpath(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

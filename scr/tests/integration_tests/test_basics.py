@@ -1,4 +1,4 @@
-from .cli_env import cli_env, CliEnv, run_scr
+from .cli_env import CliEnv, run_scr
 import pytest
 from os.path import normpath
 
@@ -150,7 +150,7 @@ def test_download_file(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.httpbin
+@pytest.mark.httpbin()
 def test_download_url(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -277,7 +277,7 @@ def test_nonexisting_file(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_cli_doc_reuse(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -294,7 +294,7 @@ def test_cli_doc_reuse(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_repl_exit(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -307,7 +307,7 @@ def test_repl_exit(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_repl_immediate_exit(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -318,7 +318,7 @@ def test_repl_immediate_exit(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_tree_bfs(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
@@ -339,7 +339,7 @@ def test_tree_bfs(cli_env: CliEnv) -> None:
     )
 
 
-@pytest.mark.repl
+@pytest.mark.repl()
 def test_tree_dfs(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

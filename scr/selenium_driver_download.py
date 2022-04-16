@@ -1,11 +1,13 @@
-from .definitions import *
-from . import scr_context, scr, utils, scr_context
+from .definitions import (
+    SeleniumVariant, Verbosity, ScrSetupError, selenium_variants_display_dict,
+    SCRIPT_NAME
+)
+from . import scr, utils, scr_context
 from typing import Optional, cast
 import selenium_driver_updater
 import selenium_driver_updater.util.exceptions
 import os
 import glob
-import pathlib
 SELENIUM_DRIVER_DIR_ADDED_TO_PATH: bool = False
 
 
@@ -152,13 +154,13 @@ def cleanup_selenium_installation_artifacts(ctx: 'scr_context.ScrContext', silen
     }
     cleanup = False
     for pf in present_files:
-        if not pf in variant_files:
+        if pf not in variant_files:
             os.remove(pf)
             cleanup = True
     if cleanup:
         scr.log(
             ctx, Verbosity.INFO,
-            f"cleaned up artifacts from previous installations"
+            "cleaned up artifacts from previous installations"
         )
 
 

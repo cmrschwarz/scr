@@ -1,6 +1,12 @@
-from .definitions import *
-from .input_sequences import *
-from typing import Optional, BinaryIO, Union, cast, Any, Iterator
+from .definitions import (
+    DocumentType, URL_FILENAME_MAX_LEN, Verbosity, InteractiveResult,
+    SeleniumDownloadStrategy, ScrFetchError, SeleniumVariant, DEFAULT_CWF
+)
+from .input_sequences import (
+    YES_INDICATING_STRINGS, NO_INDICATING_STRINGS, EDIT_INDICATING_STRINGS,
+    CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS,
+)
+from typing import Optional, BinaryIO, Union, cast, Iterator
 import os
 import urllib
 import time
@@ -10,7 +16,7 @@ from selenium.common.exceptions import WebDriverException as SeleniumWebDriverEx
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
-from . import progress_report, match_chain, content_match, scr, utils, scr_context
+from . import progress_report, content_match, scr, utils, scr_context
 from collections import OrderedDict
 import threading
 import concurrent.futures
@@ -409,7 +415,7 @@ class DownloadJob:
             scr.log(
                 self.cm.mc.ctx, Verbosity.ERROR,
                 f"{self.cm.clm.result}{scr.get_ci_di_context(self.cm)}: "
-                + f"failed to download: seldl=internal does not work across origins"
+                + "failed to download: seldl=internal does not work across origins"
             )
             return False
 
@@ -719,7 +725,7 @@ class DownloadJob:
                         len(cast(Union[str, bytes], self.content)))
                 for of in self.output_formatters:
                     res = of.advance()
-                    assert res == False
+                    assert not res
                     self.check_abort()
                 success = True
                 return True
@@ -729,7 +735,7 @@ class DownloadJob:
                     self.temp_file_path, _filename = scr.gen_dl_temp_name(
                         self.cm.mc.ctx, self.save_path)
                     self.temp_file = open(self.temp_file_path, "xb+")
-                except IOError as ex:
+                except IOError:
                     return False
                 self.multipass_file = self.temp_file
                 self.check_abort()

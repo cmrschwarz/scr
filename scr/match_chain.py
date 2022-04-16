@@ -1,5 +1,7 @@
 from typing import Optional, Union
-from .definitions import *
+from .definitions import (
+    SeleniumStrategy, SeleniumDownloadStrategy, DocumentType,
+    DEFAULT_ESCAPE_SEQUENCE, FALLBACK_DOCUMENT_SCHEME)
 from .config_data_class import ConfigDataClass
 from . import locator, content_match, scr_context, document
 
@@ -130,7 +132,8 @@ class MatchChain(ConfigDataClass):
         )
 
     def need_content_matches(self) -> bool:
-        assert self.ci is not None and self.di is not None
+        assert self.ci is not None
+        assert self.di is not None
         return self.has_content_matching and self.ci <= self.cimax and self.di <= self.dimax
 
     def is_valid_label(self, label: str) -> bool:

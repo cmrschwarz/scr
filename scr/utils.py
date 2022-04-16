@@ -1,7 +1,4 @@
-from .definitions import *
 from typing import Optional
-from . import scr_context, match_chain, document
-import urllib
 import os
 import sys
 import re

@@ -2,9 +2,7 @@
 import functools
 import subprocess
 import selenium.webdriver
-from abc import ABC, abstractmethod
-import multiprocessing
-from typing import Any, Optional, BinaryIO, TextIO, Union, cast
+from typing import Any, Optional, BinaryIO, Union, cast
 import mimetypes
 import shutil
 from io import BytesIO
@@ -16,7 +14,6 @@ import pyrfc6266
 import requests
 import sys
 import xml.sax.saxutils
-import select
 import re
 import os
 from string import Formatter
@@ -41,16 +38,26 @@ from selenium.common.exceptions import TimeoutException as SeleniumTimeoutExcept
 # but selenium throws it arbitrarily, just like SeleniumWebDriverException,
 # and that is the only way in which we use it
 from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
-from collections import deque
 import time
 import tempfile
 import warnings
 import urllib.request
 
-from .definitions import *
-from .input_sequences import *
+from .definitions import (
+    T, K, ScrSetupError, ScrFetchError, ScrMatchError, Verbosity, SCRIPT_NAME,
+    SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
+    DocumentType, InteractiveResult,
+    verbosities_display_dict, document_type_display_dict,
+    DEFAULT_CSF, DEFAULT_CWF, DEFAULT_CPF, SCR_USER_AGENT, FALLBACK_DOCUMENT_SCHEME
+
+)
+from .input_sequences import (
+    OptionIndicatingStrings, YES_INDICATING_STRINGS, NO_INDICATING_STRINGS,
+    EDIT_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS, CHAIN_SKIP_INDICATING_STRINGS,
+    INSPECT_INDICATING_STRINGS, SKIP_INDICATING_STRINGS, set_join
+)
 from . import (
-    document, utils, config_data_class, args_parsing, utils, download_job,
+    document, utils, config_data_class, args_parsing, download_job,
     locator, selenium_driver_download, content_match, match_chain, scr_context
 )
 
@@ -128,7 +135,8 @@ class OutputFormatter:
             if not self._found_stream:
                 break
 
-        assert buffer is None and not self._format_parts
+        assert buffer is None
+        assert not self._format_parts
         self._out_stream.flush()
         return False
 
@@ -139,7 +147,10 @@ def dict_update_unless_none(current: dict[K, Any], updates: dict[K, Any]) -> Non
     })
 
 
-def apply_general_format_args(doc: 'document.Document', mc: 'match_chain.MatchChain', args_dict: dict[str, Any], ci: Optional[int]) -> None:
+def apply_general_format_args(
+    doc: 'document.Document', mc: 'match_chain.MatchChain',
+    args_dict: dict[str, Any], ci: Optional[int]
+) -> None:
     dict_update_unless_none(args_dict, {
         "cenc": doc.encoding,
         "cesc": mc.content_escape_sequence,
@@ -150,7 +161,9 @@ def apply_general_format_args(doc: 'document.Document', mc: 'match_chain.MatchCh
     })
 
 
-def apply_locator_match_format_args(locator_name: str, lm: 'locator.LocatorMatch', args_dict: dict[str, Any]) -> None:
+def apply_locator_match_format_args(
+    locator_name: str, lm: 'locator.LocatorMatch', args_dict: dict[str, Any]
+) -> None:
     p = locator_name[0]
     dict_update_unless_none(args_dict, {
         f"{p}x": lm.xmatch,
@@ -245,7 +258,7 @@ def parse_bse_o(match: re.Match[str]) -> str:
     }.get(code, None)
     if res is None:
         if code == "":
-            raise ValueError(f"unterminated escape sequence '\\'")
+            raise ValueError("unterminated escape sequence '\\'")
         raise ValueError(f"invalid escape code \\{code}")
     return "".join(map(lambda x: cast(str, x) if x else "", [match[1], match[2], res]))
 
@@ -320,7 +333,7 @@ def setup_selenium_tor(ctx: 'scr_context.ScrContext') -> None:
         if tb_env_var in os.environ:
             ctx.tor_browser_dir = os.environ[tb_env_var]
         else:
-            raise ScrSetupError(f"no tbdir specified, check --help")
+            raise ScrSetupError("no tbdir specified, check --help")
     try:
         ctx.selenium_driver = TorBrowserDriver(
             ctx.tor_browser_dir, tbb_logfile_path=ctx.selenium_log_path,
@@ -364,7 +377,7 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
     if ctx.selenium_headless:
         options.headless = True
     options.add_argument("--incognito")
-    if ctx.user_agent != None:
+    if ctx.user_agent is not None:
         options.add_argument(f"user-agent={ctx.user_agent}")
 
     if ctx.downloads_temp_dir is not None:
@@ -442,10 +455,9 @@ def setup_selenium(ctx: 'scr_context.ScrContext') -> None:
         setup_selenium_tor(ctx)
     elif ctx.selenium_variant == SeleniumVariant.CHROME:
         setup_selenium_chrome(ctx)
-    elif ctx.selenium_variant == SeleniumVariant.FIREFOX:
-        setup_selenium_firefox(ctx)
     else:
-        assert False
+        assert ctx.selenium_variant == SeleniumVariant.FIREFOX
+        setup_selenium_firefox(ctx)
     assert ctx.selenium_driver is not None
     if ctx.user_agent is None:
         ctx.user_agent = str(selenium_exec_script(
@@ -554,9 +566,9 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     mc.di = mc.dimin
 
     if mc.dimin > mc.dimax:
-        raise ScrSetupError(f"dimin can't exceed dimax")
+        raise ScrSetupError("dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
-        raise ScrSetupError(f"cimin can't exceed cimax")
+        raise ScrSetupError("cimin can't exceed cimax")
 
     if mc.content_write_format is not None and mc.content_save_format is None:
         mc.content_save_format = DEFAULT_CSF
@@ -568,12 +580,12 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_save_format = ""
 
     locators = [mc.loc_content, mc.loc_label, mc.loc_document]
-    for l in locators:
-        l.setup(mc)
-        if l.parses_documents():
+    for loc in locators:
+        loc.setup(mc)
+        if loc.parses_documents():
             mc.parses_documents = True
 
-    if any(l.xpath is not None for l in locators):
+    if any(lc.xpath is not None for lc in locators):
         mc.has_xpath_matching = True
     if mc.loc_label.is_active():
         mc.has_label_matching = True
@@ -744,7 +756,7 @@ def setup(ctx: 'scr_context.ScrContext') -> None:
     load_cookie_jar(ctx)
 
     if ctx.user_agent is not None and ctx.user_agent_random:
-        raise ScrSetupError(f"the options ua and uar are incompatible")
+        raise ScrSetupError("the options ua and uar are incompatible")
     elif ctx.user_agent_random:
         ctx.user_agent = get_random_user_agent()
     elif ctx.user_agent is None and not ctx.selenium_variant.enabled():
@@ -837,7 +849,7 @@ def selenium_get_url(ctx: 'scr_context.ScrContext') -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
         return cast(str, ctx.selenium_driver.current_url)
-    except (SeleniumWebDriverException, SeleniumMaxRetryError) as e:
+    except (SeleniumWebDriverException, SeleniumMaxRetryError):
         report_selenium_died(ctx)
         return None
 
@@ -847,7 +859,7 @@ def selenium_has_died(ctx: 'scr_context.ScrContext') -> bool:
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except (SeleniumWebDriverException, SeleniumMaxRetryError) as e:
+    except (SeleniumWebDriverException, SeleniumMaxRetryError):
         return True
 
 
@@ -945,7 +957,7 @@ def try_get_filename_from_content_disposition(content_dispositon: Optional[str])
         return None
     try:
         return sanitize_filename(pyrfc6266.parse_filename(content_dispositon))
-    except pyparsing.exceptions.ParseException as ex:
+    except pyparsing.exceptions.ParseException:
         return None
 
 
@@ -1060,7 +1072,7 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
                 f"getting selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
             )
             selpath = doc.path
-            if doc.document_type in [document.DocumentType.FILE, DocumentType.RFILE]:
+            if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.abspath(selpath)
             try:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
@@ -1069,10 +1081,10 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
             except SeleniumWebDriverException as ex:
                 try:
                     if (
-                        doc.document_type == document.DocumentType.URL
+                        doc.document_type == DocumentType.URL
                         and os.path.exists(doc.path_parsed.path)
                     ):
-                        raise ScrFetchError(f"not found, possibly file misrepresented, as url")
+                        raise ScrFetchError("not found, possibly file misrepresented, as url")
                 except IOError:
                     pass
                 raise ex
@@ -1091,7 +1103,7 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
         ctx.reused_doc = None
         if doc.text and not ctx.changed_selenium:
             return
-    if doc.document_type in [document.DocumentType.FILE, DocumentType.RFILE]:
+    if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         log(
             ctx, Verbosity.INFO,
             f"reading {document_type_display_dict[doc.document_type]} '{doc.path}'"
@@ -1136,7 +1148,7 @@ def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
     elif cm.mc.loc_content.multimatch:
         di_ci_context = f" (ci={cm.ci})"
     else:
-        di_ci_context = f""
+        di_ci_context = ""
     return di_ci_context
 
 
@@ -1461,7 +1473,6 @@ def handle_interactive_chains(
         msg_full = None
 
     user_answered = False
-    rlist: list[TextIO] = []
     if try_number > 1:
         user_answered = utils.stdin_has_content(ctx.selenium_poll_frequency_secs)
 
@@ -1596,10 +1607,10 @@ def accept_for_match_chain(
 
 def normalize_link(
     ctx: 'scr_context.ScrContext', mc: Optional['match_chain.MatchChain'],
-    src_doc_type: 'document.DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
+    src_doc_type: 'DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
     last_doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
-    if src_doc_type == document.DocumentType.CONTENT_FILE:
+    if src_doc_type == DocumentType.CONTENT_FILE:
         return link, link_parsed
     if last_doc_path is not None:
         doc_url_parsed = urllib.parse.urlparse(last_doc_path)
@@ -1607,14 +1618,15 @@ def normalize_link(
         doc_url_parsed = src_doc_path
     else:
         doc_url_parsed = None
-    if src_doc_type.derived_type() == document.DocumentType.FILE:
+    if src_doc_type.derived_type() == DocumentType.FILE:
         if not link_parsed.scheme:
             handle_windows_paths: bool = False
             if not os.path.isabs(link):
                 if doc_url_parsed is not None:
                     base = doc_url_parsed.path
                     if ctx.selenium_variant.enabled():
-                        assert last_doc_path is not None and src_doc_path is not None
+                        assert last_doc_path is not None
+                        assert src_doc_path is not None
                         handle_windows_paths = (
                             bool(utils.is_windows())
                             and bool(doc_url_parsed.scheme == "file")
@@ -1632,13 +1644,14 @@ def normalize_link(
                     link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
                 return link, urllib.parse.urlparse(link)
         return link, link_parsed
-    assert src_doc_type.derived_type() == document.DocumentType.URL
+    assert src_doc_type.derived_type() == DocumentType.URL
     if doc_url_parsed and link_parsed.netloc == "" and link_parsed.scheme == "":
         lnk_ppp = pathlib.PurePosixPath(link)
         if not lnk_ppp.is_absolute() and doc_url_parsed.path:
             du_ppp = pathlib.PurePosixPath(doc_url_parsed.path)
             lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
-        link_parsed = link_parsed._replace(netloc=doc_url_parsed.netloc, scheme=doc_url_parsed.scheme, path=str(lnk_ppp))
+        link_parsed = link_parsed._replace(
+            netloc=doc_url_parsed.netloc, scheme=doc_url_parsed.scheme, path=str(lnk_ppp))
 
     # for urls like 'google.com' urllib makes this a path instead of a netloc
     if link_parsed.netloc == "" and not doc_url_parsed and link_parsed.scheme == "" and link_parsed.path != "" and link[0] not in [".", "/"]:
@@ -1861,7 +1874,7 @@ def resolve_repl_defaults(
         doc_url = None
         try:
             doc_url = ctx_new.selenium_driver.current_url
-        except (SeleniumWebDriverException, SeleniumMaxRetryError) as ex:
+        except (SeleniumWebDriverException, SeleniumMaxRetryError):
             # selenium died, abort
             if selenium_has_died(ctx_new):
                 report_selenium_died(ctx_new)

@@ -1,8 +1,13 @@
-from typing import Any, Optional, Callable, Iterable, TypeVar
+from typing import Any, Optional, Callable, Iterable
 import urllib
 import itertools
 import copy
-from .definitions import *
+from .definitions import (
+    T, ScrSetupError, DocumentType, SeleniumVariant, selenium_variants_dict,
+    selenium_strats_dict, selenium_download_strategies_dict, verbosities_dict,
+    VERSION, SCRIPT_NAME, DEFAULT_ESCAPE_SEQUENCE, DEFAULT_CPF, DEFAULT_CWF,
+    DEFAULT_TIMEOUT_SECONDS
+)
 
 from . import (
     match_chain, document, input_sequences,
@@ -16,8 +21,6 @@ MATCH_CHAIN_ARGUMENT_REGEX = re.compile("^[0-9\\-\\*\\^]*$")
 
 
 def help(err: bool = False) -> None:
-    global DEFAULT_CPF
-    global DEFAULT_CWF
     text = f"""{SCRIPT_NAME} [OPTIONS]
 
     Matching chains are evaluated in the following order, skipping unspecified steps:
@@ -167,7 +170,7 @@ def help(err: bool = False) -> None:
 def parse_mc_range_int(ctx: 'scr_context.ScrContext', v: str, arg: str) -> int:
     try:
         return int(v)
-    except ValueError as ex:
+    except ValueError:
         raise ScrSetupError(
             f"failed to parse '{v}' as an integer for match chain specification of '{arg}'"
         )

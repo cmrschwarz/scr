@@ -15,3 +15,5 @@ markers = [
 
 [tool.mypy]
 strict = true
+
+[tool.flake8]

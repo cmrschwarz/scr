@@ -1,5 +1,5 @@
 from typing import Optional, Any
-from .definitions import *
+from .definitions import (DocumentType)
 from . import locator, match_chain, scr_context
 import lxml.html
 import urllib

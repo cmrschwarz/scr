@@ -2,7 +2,7 @@ from .. import progress_report
 import pytest
 
 
-@pytest.mark.parametrize("byte_size,output_size,output_unit", [
+@pytest.mark.parametrize(('byte_size', 'output_size', 'output_unit'), [
     (1000, "1000", "B"),
     (-1, "-1", "B"),
     (0, "0", "B"),
@@ -17,7 +17,7 @@ def test_get_byte_size_string_ints(byte_size: int, output_size: str, output_unit
     )
 
 
-@pytest.mark.parametrize("timespan,output_size,output_unit", [
+@pytest.mark.parametrize(('timespan', 'output_size', 'output_unit'), [
     (0, "0.0", "s"),
     (-1, "-1.0", "s"),
     (60, "01:00", "m"),
