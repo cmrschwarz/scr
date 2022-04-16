@@ -1,12 +1,16 @@
-shellescape
-json5
-twine
-build
-mypy
-tox
-pytest
-pytest-parallel
-pytest-cov
-flake8
-
+types-selenium==3.141
+types-requests==2.25
+types-urllib3==1.26
+types-certifi==2021.10.8.1
+types-lxml==2022.4.10
+shellescape==3.8.1
+json5==0.9.6
+twine==4.0.0
+build==0.7.0
+mypy==0.942
+tox==3.25.0
+pytest==7.1.1
+pytest-parallel==0.1.1
+pytest-cov==3.0.0
+flake8==4.0.1
 -r requirements.txt

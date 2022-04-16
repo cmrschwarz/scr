@@ -28,6 +28,8 @@ import pathlib
 import selenium
 import selenium.webdriver.common.by
 from http.cookiejar import MozillaCookieJar
+
+import selenium.webdriver
 from selenium.webdriver.remote.webelement import WebElement as SeleniumWebElement
 from selenium.webdriver.firefox.service import Service as SeleniumFirefoxService
 from selenium.webdriver.chrome.service import Service as SeleniumChromeService
@@ -39,7 +41,6 @@ from selenium.common.exceptions import TimeoutException as SeleniumTimeoutExcept
 # but selenium throws it arbitrarily, just like SeleniumWebDriverException,
 # and that is the only way in which we use it
 from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
-import selenium.webdriver.firefox.webdriver
 from collections import deque
 import time
 import tempfile
