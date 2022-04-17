@@ -3,7 +3,7 @@
 Command-line Utility for Web Scraping
 
 
-[![GitHub Workflow Status (branch)](https://img.shields.io/github/workflow/status/cmrschwarz/scr/tests/master?label=tests)](https://github.com/cmrschwarz/scr/actions/workflows/tests.yml)
+[![GitHub Workflow Status (branch)](https://github.com/cmrschwarz/scr/workflows/tests/badge.svg)](https://github.com/cmrschwarz/scr/actions/workflows/tests.yml)
 [![Supported Versions](https://img.shields.io/pypi/v/scr?color=blue)](https://pypi.org/project/scr)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/scr)](https://pypi.org/project/scr)
 ![Lines of code](https://img.shields.io/tokei/lines/github/cmrschwarz/scr?label=lines%20of%20code)
