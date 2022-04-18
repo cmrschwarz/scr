@@ -2,19 +2,64 @@ from .definitions import (
     SeleniumVariant, Verbosity, ScrSetupError, selenium_variants_display_dict,
     SCRIPT_NAME
 )
-from . import scr, utils, scr_context
+from . import scr, utils, scr_context, windows
 from typing import Optional, cast
 import selenium_driver_updater
+
 import selenium_driver_updater.util.exceptions
 import os
 import glob
+import distutils.spawn
+from functools import cache
 SELENIUM_DRIVER_DIR_ADDED_TO_PATH: bool = False
 
 
+def try_resolve_executable_names(exec_names: list[str]) -> Optional[str]:
+    for x in exec_names:
+        path = distutils.spawn.find_executable(x)
+        if path is not None:
+            return path
+    return None
+
+
+def accept_first_existing_path(paths: list[str]) -> Optional[str]:
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def find_chrome_binary() -> Optional[str]:
+    if utils.is_linux():
+        return try_resolve_executable_names([
+            "chromium",
+            "chromium-browser",
+            "google-chrome-stable",
+            "google-chrome"
+        ])
+    if utils.is_osx():
+        return accept_first_existing_path([
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        ])
+    if not utils.is_windows():
+        return None
+
+    return utils.choose_first_not_none(
+        lambda: windows.try_get_app_path_from_reg_uninstall_path("Chromium", "chrome.exe"),
+        lambda: windows.try_get_app_path_from_reg_start_menu_internet("Chromium"),
+        lambda: windows.try_get_app_path_from_reg_app_paths("chrome.exe"),
+        lambda: windows.try_get_app_path_from_reg_uninstall_path("Google Chrome", "chrome.exe"),
+        lambda: windows.try_get_app_path_from_reg_start_menu_internet("Google Chrome"),
+    )
+
+
+@ cache
 def get_script_dir() -> str:
     return os.path.abspath(os.path.dirname(__file__))
 
 
+@ cache
 def get_selenium_drivers_dir() -> str:
     script_dir = get_script_dir()
     debug_path = os.path.join(script_dir, "selenium_drivers_debug")

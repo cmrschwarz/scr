@@ -8,6 +8,7 @@ import mimetypes
 import functools
 import subprocess
 import os
+import sys
 from typing import Any, Optional, cast
 from . import (scr_context, selenium_driver_download, utils, scr)
 from .definitions import (SeleniumVariant, ScrSetupError, verbosities_display_dict, Verbosity, SCRIPT_NAME)
@@ -120,13 +121,17 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
     selenium_driver_download.put_local_selenium_driver_in_path(
         ctx, SeleniumVariant.CHROME
     )
+
     options = selenium.webdriver.ChromeOptions()
+    options.binary_location = ""
+    browser_path = selenium_driver_download.find_chrome_binary()
     if ctx.selenium_headless:
         options.headless = True
     options.add_argument("--incognito")
+    if browser_path is not None:
+        options.binary_location = browser_path
     if ctx.user_agent is not None:
         options.add_argument(f"user-agent={ctx.user_agent}")
-
     if ctx.downloads_temp_dir is not None:
         prefs = {
             "download.default_directory": ctx.downloads_temp_dir,
@@ -137,7 +142,7 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
 
     try:
         ctx.selenium_driver = selenium.webdriver.Chrome(
-            options=options,
+            options=options, service_log_path=ctx.selenium_log_path,
             service=SeleniumChromeService(  # type: ignore
                 log_path=ctx.selenium_log_path
             )
@@ -167,6 +172,7 @@ def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
 
 
 def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
+    assert sys.platform != "win32"
     def preexec_function() -> None:
         # this makes sure that the selenium instance does not die on SIGINT
         os.setpgrp()
@@ -182,6 +188,7 @@ def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
 
 def prevent_selenium_sigint() -> None:
     if utils.is_windows():
+        # TODO
         return
     if selenium.webdriver.common.service.Service.start is selenium_start_wrapper:
         return
