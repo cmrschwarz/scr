@@ -22,8 +22,9 @@ from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
 def load_selenium_cookies(ctx: 'scr_context.ScrContext') -> dict[str, dict[str, dict[str, Any]]]:
     assert ctx.selenium_driver is not None
     # the selenium function isn't type annotated properly
-    cookies: list[dict[str, Any]
-                  ] = ctx.selenium_driver.get_cookies()  # type: ignore
+    cookies: list[
+        dict[str, Any]
+    ] = ctx.selenium_driver.get_cookies()  # type: ignore
     cookie_dict: dict[str, dict[str, dict[str, Any]]] = {}
     for ck in cookies:
         if cast(str, ck["domain"]) not in cookie_dict:
@@ -172,11 +173,10 @@ def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
 
 
 def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
-    assert sys.platform != "win32"
-
     def preexec_function() -> None:
-        # this makes sure that the selenium instance does not die on SIGINT
-        os.setpgrp()
+        if sys.platform != "win32":  # make mypy happy
+            # this makes sure that the selenium instance does not die on SIGINT
+            os.setpgrp()
     original_p_open = subprocess.Popen
     subprocess.Popen = functools.partial(  # type: ignore
         subprocess.Popen, preexec_fn=preexec_function

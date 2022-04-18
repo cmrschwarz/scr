@@ -1,5 +1,5 @@
 import sys
-from typing import Optional
+from typing import Optional, cast
 from enum import Enum
 import os
 import shlex
@@ -65,7 +65,9 @@ def get_registry_entries(
                 try:
                     # subkey may be None, which is legal in winapi (returns value of the key itself)
                     # but for some reason forbidden by the type annotation in winreg
-                    value = winreg.QueryValueEx(key, subkey)[0] # type: ignore
+                    # we can't even type ignore it since mypy on linux will complain about
+                    # an unused type ignore then ...
+                    value = winreg.QueryValueEx(key, cast(str, subkey))[0]
                     results.append(value)
                 except FileNotFoundError:
                     results.append(None)
