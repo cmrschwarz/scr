@@ -434,8 +434,8 @@ class DownloadJob:
             selenium_setup.selenium_exec_script(self.cm.mc.ctx, script_source,
                                                 self.cm.clm.result, tmp_filename)
         except SeleniumWebDriverException as ex:
-            if scr.selenium_has_died(self.cm.mc.ctx):
-                scr.report_selenium_died(self.cm.mc.ctx)
+            if selenium_setup.selenium_has_died(self.cm.mc.ctx):
+                selenium_setup.report_selenium_died(self.cm.mc.ctx)
             else:
                 scr.log(
                     self.cm.mc.ctx, Verbosity.ERROR,
@@ -454,7 +454,7 @@ class DownloadJob:
                 time.sleep(0.1)
                 if i > 15:
                     i = 10
-                    if scr.selenium_has_died(self.cm.mc.ctx):
+                    if selenium_setup.selenium_has_died(self.cm.mc.ctx):
                         return False
 
             i += 1
@@ -502,8 +502,8 @@ class DownloadJob:
             res = selenium_setup.selenium_exec_script(
                 self.cm.mc.ctx, script_source, self.cm.clm.result)
         except SeleniumWebDriverException as ex:
-            if scr.selenium_has_died(self.cm.mc.ctx):
-                scr.report_selenium_died(self.cm.mc.ctx)
+            if selenium_setup.selenium_has_died(self.cm.mc.ctx):
+                selenium_setup.report_selenium_died(self.cm.mc.ctx)
                 return False
             err = str(ex)
         if "error" in res:

@@ -1,5 +1,5 @@
 from .definitions import (ScrSetupError, ScrMatchError, Verbosity)
-from . import match_chain, scr, utils, document, content_match
+from . import match_chain, scr, utils, document, content_match, selenium_setup
 from .config_data_class import ConfigDataClass
 from typing import Optional, Union, Any, cast
 import lxml.etree
@@ -299,7 +299,7 @@ class Locator(ConfigDataClass):
                 )
                 continue
             except (SeleniumWebDriverException, SeleniumMaxRetryError):
-                if scr.selenium_has_died(mc.ctx):
+                if selenium_setup.selenium_has_died(mc.ctx):
                     raise ScrMatchError(
                         "the selenium instance was closed unexpectedly")
                 continue
