@@ -69,7 +69,7 @@ def try_get_local_selenium_driver_path(variant: 'SeleniumVariant') -> Optional[s
     return None
 
 
-def put_local_selenium_driver_in_path(ctx: scr_context.ScrContext, variant: 'SeleniumVariant') -> None:
+def put_local_selenium_driver_in_path(ctx: 'scr_context.ScrContext', variant: 'SeleniumVariant') -> None:
     global SELENIUM_DRIVER_DIR_ADDED_TO_PATH
     if SELENIUM_DRIVER_DIR_ADDED_TO_PATH:
         return

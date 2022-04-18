@@ -16,7 +16,7 @@ from selenium.common.exceptions import WebDriverException as SeleniumWebDriverEx
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
-from . import progress_report, content_match, scr, utils, scr_context
+from . import progress_report, content_match, scr, utils, scr_context, selenium_setup
 from collections import OrderedDict
 import threading
 import concurrent.futures
@@ -384,7 +384,7 @@ class DownloadJob:
                 req = scr.request_raw(
                     self.cm.mc.ctx, self.cm.clm.result, cast(
                         urllib.parse.ParseResult, self.cm.url_parsed),
-                    scr.load_selenium_cookies(self.cm.mc.ctx),
+                    selenium_setup.load_selenium_cookies(self.cm.mc.ctx),
                     proxies=proxies, stream=True
                 )
                 self.content = ResponseStreamWrapper(req)
@@ -406,7 +406,7 @@ class DownloadJob:
             return False
 
     def selenium_download_internal(self) -> bool:
-        doc_url_str = scr.selenium_get_url(self.cm.mc.ctx)
+        doc_url_str = selenium_setup.selenium_get_url(self.cm.mc.ctx)
         if doc_url_str is None:
             return False
         doc_url = urllib.parse.urlparse(doc_url_str)
@@ -431,8 +431,8 @@ class DownloadJob:
             document.body.removeChild(a);
         """
         try:
-            scr.selenium_exec_script(self.cm.mc.ctx, script_source,
-                                     self.cm.clm.result, tmp_filename)
+            selenium_setup.selenium_exec_script(self.cm.mc.ctx, script_source,
+                                                self.cm.clm.result, tmp_filename)
         except SeleniumWebDriverException as ex:
             if scr.selenium_has_died(self.cm.mc.ctx):
                 scr.report_selenium_died(self.cm.mc.ctx)
@@ -499,7 +499,7 @@ class DownloadJob:
         driver = cast(SeleniumWebDriver, self.cm.mc.ctx.selenium_driver)
         try:
             doc_url = driver.current_url
-            res = scr.selenium_exec_script(
+            res = selenium_setup.selenium_exec_script(
                 self.cm.mc.ctx, script_source, self.cm.clm.result)
         except SeleniumWebDriverException as ex:
             if scr.selenium_has_died(self.cm.mc.ctx):
