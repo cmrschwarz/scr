@@ -25,7 +25,7 @@ class ScrContext(ConfigDataClass):
     request_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_download_threads: int = multiprocessing.cpu_count()
 
-    selenium_log_path: str = os.path.devnull
+    selenium_log_path: str = os.devnull
     selenium_poll_frequency_secs: float = 0.3
     selenium_content_count_pad_length: int = 6
     downloads_temp_dir: Optional[str] = None

@@ -139,10 +139,10 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
             "profile.default_content_setting_values.automatic_downloads": 1,
         }
         options.add_experimental_option("prefs", prefs)
-
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
     try:
         ctx.selenium_driver = selenium.webdriver.Chrome(
-            options=options, service_log_path=ctx.selenium_log_path,
+            options=options,
             service=SeleniumChromeService(  # type: ignore
                 log_path=ctx.selenium_log_path
             )
@@ -173,6 +173,7 @@ def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
 
 def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
     assert sys.platform != "win32"
+
     def preexec_function() -> None:
         # this makes sure that the selenium instance does not die on SIGINT
         os.setpgrp()
