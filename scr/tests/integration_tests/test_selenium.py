@@ -208,3 +208,35 @@ def test_selenium_download_firefox(cli_env: CliEnv) -> None:
         ],
         stderr="[ERROR]: http://httpbin.org/base64/ZmlsZV91cmwK (ci=1): failed to download: seldl=internal does not work across origins\n"
     )
+
+
+@pytest.mark.selenium()
+def test_selenium_install_firefox(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "selinstall=f"
+        ],
+        ec=0,
+        stderr=" [INFO]: existing Firefox driver found\n",
+    )
+
+
+@pytest.mark.selenium()
+def test_selenium_js_fail(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "sel=f",
+            "selh",
+            "file=../res/empty.html",
+            "cjs=xxx"
+        ],
+        ec=0,
+        stderr=[
+            r' \[WARN\]: cjs: js exception on '
+            + normpath("../res/empty").replace(".", "\\.")
+            + r'\.html:.*'
+        ],
+        stderr_re=True
+    )

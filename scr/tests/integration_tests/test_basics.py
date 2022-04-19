@@ -14,6 +14,21 @@ def test_basic_xpath(cli_env: CliEnv) -> None:
     )
 
 
+def test_lic(cli_env: CliEnv) -> None:
+    # TODO: allow lic to get out of text() content xpathes
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li/@id",
+            "lic",
+            "lx=../text()",
+            "cpf={l}|{c}\n"
+        ],
+        stdout="foo|foo\nbar|bar\nbaz|baz\n",
+    )
+
+
 def test_cm_available_in_cpf(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

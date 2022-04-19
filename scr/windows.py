@@ -35,7 +35,7 @@ class RegistryClass(Enum):
 
 def stdin_has_content(timeout: float) -> bool:
     if sys.platform != 'win32':
-        return False
+        raise NotImplementedError
     else:
         try:
             # without this the wait sometimes returns without there being
@@ -55,7 +55,7 @@ def get_registry_entries(
     wow_key: int = 0
 ) -> Optional[list[Optional[str]]]:
     if sys.platform != 'win32':
-        return None
+        raise NotImplementedError
     else:
         results: list[Optional[str]] = []
         key = None

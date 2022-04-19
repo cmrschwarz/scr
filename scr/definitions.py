@@ -151,3 +151,4 @@ verbosities_display_dict: dict[Verbosity, str] = {
     Verbosity.INFO:  " [INFO]: ",
     Verbosity.DEBUG: "[DEBUG]: ",
 }
+1

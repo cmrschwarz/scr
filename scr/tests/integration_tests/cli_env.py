@@ -4,6 +4,7 @@ import tempfile
 import pytest
 from typing import Optional, cast, Generator, Union
 from ... import scr
+import re
 
 
 class CliEnv():
@@ -64,7 +65,9 @@ def run_scr(
     stderr: Union[list[str], str] = "",
     ec: int = 0,
     stdin: Union[list[str], str] = "",
-    output_files: dict[str, str] = {}
+    output_files: dict[str, str] = {},
+    stdout_re: bool = False,
+    stderr_re: bool = False
 ) -> None:
     stdin = join_lines(stdin)
     stdout = join_lines(stdout)
@@ -73,11 +76,19 @@ def run_scr(
     env.monkeypatch.setattr("sys.stdin", env.stdin_file)
     exit_code = scr.run_scr(["scr"] + args)
     cap = env.capsys.readouterr()
-    if cap.err != stderr:
+    if (
+        (stderr_re and not re.match(stderr, cap.err, re.DOTALL))
+        or
+        (not stderr_re and stderr != cap.err)
+    ):
         raise ValueError(
             f"wrong stderr:\n{received_expected_strs(cap.err, stderr)}"
         )
-    if cap.out != stdout:
+    if (
+        (stdout_re and not re.match(stdout, cap.out, re.DOTALL))
+        or
+        (not stdout_re and stdout != cap.out)
+    ):
         raise ValueError(
             f"wrong stdout:\n{received_expected_strs(cap.out, stdout)}"
         )
