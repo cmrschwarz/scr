@@ -218,7 +218,8 @@ def test_selenium_install_firefox(cli_env: CliEnv) -> None:
             "selinstall=f"
         ],
         ec=0,
-        stderr=" [INFO]: existing Firefox driver found\n",
+        stderr="(.* \\[INFO\\]: Firefox driver installed| \\[INFO\\]: existing Firefox driver found)\n",
+        stderr_re=True
     )
 
 
