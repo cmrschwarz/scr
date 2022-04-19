@@ -236,8 +236,12 @@ def test_selenium_js_fail(cli_env: CliEnv) -> None:
         ec=0,
         stderr=[
             r' \[WARN\]: cjs: js exception on '
-            + normpath("../res/empty").replace(".", "\\.")
-            + r'\.html:.*'
+            + (
+                normpath("../res/empty.html")
+                .replace("\\", "\\\\")
+                .replace(".", "\\.")
+            )
+            + ':.*'
         ],
         stderr_re=True
     )
