@@ -8,8 +8,8 @@ __pycache__
 /.tox
 
 # pytest-cov
-cov.xml
-.coverage*
+/cov.xml
+/.coverage
 
 # setuptools
 *.egg-info
