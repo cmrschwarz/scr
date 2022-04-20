@@ -217,7 +217,7 @@ def selenium_has_died(ctx: 'scr_context.ScrContext') -> bool:
     try:
         # throws an exception if the session died
         return not len(ctx.selenium_driver.window_handles) > 0
-    except (SeleniumWebDriverException, SeleniumMaxRetryError):
+    except (SeleniumWebDriverException, SeleniumMaxRetryError, OSError):
         return True
 
 

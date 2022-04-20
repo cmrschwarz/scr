@@ -1579,6 +1579,16 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
     return doc
 
 
+def try_close_selenium(ctx: 'scr_context.ScrContext') -> None:
+    try:
+        sd = cast(SeleniumWebDriver, ctx.selenium_driver)
+        sd.quit()  # quit automatically closes all windows
+    except (SeleniumWebDriverException, SeleniumMaxRetryError, OSError):
+        pass
+    finally:
+        ctx.selenium_driver = None
+
+
 def finalize(ctx: 'scr_context.ScrContext') -> None:
     if ctx.dl_manager:
         success = False
@@ -1592,12 +1602,7 @@ def finalize(ctx: 'scr_context.ScrContext') -> None:
             ctx.dl_manager = None
 
     if ctx.selenium_driver and not ctx.selenium_keep_alive and not selenium_setup.selenium_has_died(ctx):
-        try:
-            ctx.selenium_driver.close()
-        except SeleniumWebDriverException:
-            pass
-        finally:
-            ctx.selenium_driver = None
+        try_close_selenium(ctx)
     if ctx.downloads_temp_dir:
         try:
             shutil.rmtree(ctx.downloads_temp_dir)
@@ -1626,14 +1631,9 @@ def resolve_repl_defaults(
     changed_selenium = False
     if ctx_new.selenium_variant != ctx.selenium_variant:
         changed_selenium = True
-        try:
-            if ctx.selenium_driver:
-                ctx.selenium_driver.close()
-        except SeleniumWebDriverException:
-            pass
-        finally:
-            ctx_new.selenium_driver = None
-            ctx.selenium_driver = None
+        ctx_new.selenium_driver = None
+        if ctx.selenium_driver is not None:
+            try_close_selenium(ctx)
 
     if ctx_new.selenium_driver:
         doc_url = None
