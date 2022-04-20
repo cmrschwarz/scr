@@ -362,11 +362,9 @@ class ProgressReportManager:
         if max_cols < 5:
             # don't bother
             return
+        # even if the size just grew we are doing this since the terminal
+        # might have messed up our output
         update_finished = (max_cols != self.prev_terminal_column_count)
-        if update_finished and max_cols > self.finished_report_lines_max_length:
-            if self.prev_terminal_column_count > self.finished_report_lines_max_length:
-                update_finished = False
-
         report_lines = self.newly_finished_report_lines + self.report_lines
         self._stringify_status_report_lines(report_lines)
         report_line_strings: list[str] = []
