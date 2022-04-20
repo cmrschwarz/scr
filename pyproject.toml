@@ -1,7 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=54",
-    "wheel"
+    "setuptools>=60",
+    "wheel>=0.37"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -15,3 +15,13 @@ markers = [
 
 [tool.mypy]
 strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "tbselenium.*",
+    "pyrfc6266.*",
+    "selenium_driver_updater.*",
+    "random_user_agent.*",
+    "pyreadline3.*",
+]
+ignore_missing_imports = true

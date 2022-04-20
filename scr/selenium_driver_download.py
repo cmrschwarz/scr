@@ -5,7 +5,6 @@ from .definitions import (
 from . import scr, utils, scr_context, windows
 from typing import Optional, cast
 import selenium_driver_updater
-
 import selenium_driver_updater.util.exceptions
 import os
 import glob

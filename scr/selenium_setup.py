@@ -206,7 +206,9 @@ def selenium_exec_script(ctx: 'scr_context.ScrContext', script: str, *args: Any)
 def selenium_get_url(ctx: 'scr_context.ScrContext') -> Optional[str]:
     assert ctx.selenium_driver is not None
     try:
-        return cast(str, ctx.selenium_driver.current_url)
+        # depending on the env, mypy either demands a cast() here or hates it
+        # I, for one, welcome our new typechecking overlords
+        return str(ctx.selenium_driver.current_url)
     except (SeleniumWebDriverException, SeleniumMaxRetryError):
         report_selenium_died(ctx)
         return None
