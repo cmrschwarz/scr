@@ -137,195 +137,205 @@ class StatusReportLine:
     eta_u_str: str
 
 
-def load_status_report_lines(dsr_list: list[DownloadStatusReport], report_lines: list[StatusReportLine]) -> None:
-    # when we have more reports than report lines,
-    # we remove the oldest finished report
-    # if none are finished, we get more report lines
-    if DOWNLOAD_STATUS_KEEP_FINISHED:
-        dsr_list.sort(key=lambda dsr: not dsr.download_finished)
-    elif len(dsr_list) > len(report_lines):
-        i = 0
-        while i < len(dsr_list):
-            if dsr_list[i].download_finished:
-                del dsr_list[i]
-                if len(dsr_list) == len(report_lines):
-                    break
-            else:
-                i += 1
-    for i in range(len(dsr_list) - len(report_lines)):
-        report_lines.append(StatusReportLine())
-    for i in range(len(report_lines)):
-        rl = report_lines[i]
-        dsr = dsr_list[i]
-        rl.name = dsr.name
-        rl.expected_size = dsr.expected_size
-        rl.downloaded_size = dsr.downloaded_size
-        rl.download_begin = dsr.download_begin_time
-        rl.download_end = dsr.download_end_time
-        rl.finished = dsr.download_finished
-        if not len(dsr.updates):
-            rl.speed_calculatable = False
-        elif len(dsr.updates) == 1:
-            rl.speed_calculatable = True
-            rl.speed_frame_time_begin = dsr.download_begin_time
-            rl.speed_frame_size_begin = 0
-            rl.speed_frame_time_end = dsr.updates[0][0]
-            rl.speed_frame_size_end = dsr.updates[0][1]
-        else:
-            rl.speed_calculatable = True
-            rl.speed_frame_time_begin = dsr.updates[0][0]
-            rl.speed_frame_size_begin = dsr.updates[0][1]
-            rl.speed_frame_time_end = dsr.updates[-1][0]
-            rl.speed_frame_size_end = dsr.updates[-1][1]
+class ProgressReportManager:
+    report_lines: list[StatusReportLine]
+    prev_report_line_count: int
 
+    def __init__(self) -> None:
+        self.report_lines = []
+        self.prev_report_line_count = 0
 
-def stringify_status_report_lines(report_lines: list[StatusReportLine]) -> None:
-    now = datetime.datetime.now()
-    for rl in report_lines:
-        if rl.expected_size and rl.expected_size >= rl.downloaded_size:
-            frac = float(rl.downloaded_size) / rl.expected_size
-            filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
-            empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
-            tip = ">" if rl.downloaded_size != rl.expected_size else "="
-            rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
-        elif rl.finished:
-            rl.bar_str = "[" + "*" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
-        else:
-            left = rl.star_pos - 1
-            right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
-            rl.bar_str = "[" + " " * left + "***" + " " * right + "]"
-            if rl.star_pos == DOWNLOAD_STATUS_BAR_LENGTH - 2:
-                rl.star_dir = -1
-            elif rl.star_pos == 1:
-                rl.star_dir = 1
-            rl.star_pos += rl.star_dir
-        if rl.finished:
-            rl.expected_size = rl.downloaded_size
-        rl.downloaded_size_str, rl.downloaded_size_u_str = (
-            get_byte_size_string(rl.downloaded_size)
-        )
-        if rl.expected_size:
-            rl.expected_size_str, rl.expected_size_u_str = (
-                get_byte_size_string(rl.expected_size)
+    def load_status(self, download_manager: 'download_job.DownloadManager') -> None:
+        with download_manager.status_report_lock:
+            self._load_status_report_lines(
+                download_manager.download_status_reports
             )
-        else:
-            rl.expected_size_str, rl.expected_size_u_str = "???", "B"
 
-        if rl.finished:
-            assert rl.download_end
-            rl.speed_frame_size_begin = 0
-            rl.speed_frame_time_begin = rl.download_begin
-            rl.speed_frame_size_end = rl.downloaded_size
-            rl.speed_frame_time_end = rl.download_end
-            rl.speed_calculatable = True
-        else:
-            rl.download_end = now
-        if rl.speed_calculatable:
-            duration = (
-                (rl.speed_frame_time_end -
-                    rl.speed_frame_time_begin).total_seconds()
-            )
-            handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
-            if duration < sys.float_info.epsilon:
-                rl.speed_str, rl.speed_u_str = "???", " "
-                rl.eta_str, rl.eta_u_str = "???", " "
+    def active_download_count(self) -> int:
+        return len(self.report_lines)
+
+    def _load_status_report_lines(self, dsr_list: list[DownloadStatusReport]) -> None:
+        # when we have more reports than report lines,
+        # we remove the oldest finished report
+        # if none are finished, we get more report lines
+        if DOWNLOAD_STATUS_KEEP_FINISHED:
+            dsr_list.sort(key=lambda dsr: not dsr.download_finished)
+        elif len(dsr_list) > len(self.report_lines):
+            i = 0
+            while i < len(dsr_list):
+                if dsr_list[i].download_finished:
+                    del dsr_list[i]
+                    if len(dsr_list) == len(self.report_lines):
+                        break
+                else:
+                    i += 1
+        for i in range(len(dsr_list) - len(self.report_lines)):
+            self.report_lines.append(StatusReportLine())
+        for i in range(len(self.report_lines)):
+            rl = self.report_lines[i]
+            dsr = dsr_list[i]
+            rl.name = dsr.name
+            rl.expected_size = dsr.expected_size
+            rl.downloaded_size = dsr.downloaded_size
+            rl.download_begin = dsr.download_begin_time
+            rl.download_end = dsr.download_end_time
+            rl.finished = dsr.download_finished
+            if not len(dsr.updates):
+                rl.speed_calculatable = False
+            elif len(dsr.updates) == 1:
+                rl.speed_calculatable = True
+                rl.speed_frame_time_begin = dsr.download_begin_time
+                rl.speed_frame_size_begin = 0
+                rl.speed_frame_time_end = dsr.updates[0][0]
+                rl.speed_frame_size_end = dsr.updates[0][1]
             else:
-                if handled_size == 0:
-                    speed = 0.0
+                rl.speed_calculatable = True
+                rl.speed_frame_time_begin = dsr.updates[0][0]
+                rl.speed_frame_size_begin = dsr.updates[0][1]
+                rl.speed_frame_time_end = dsr.updates[-1][0]
+                rl.speed_frame_size_end = dsr.updates[-1][1]
+
+    def _stringify_status_report_lines(self) -> None:
+        now = datetime.datetime.now()
+        for rl in self.report_lines:
+            if rl.expected_size and rl.expected_size >= rl.downloaded_size:
+                frac = float(rl.downloaded_size) / rl.expected_size
+                filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
+                empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
+                tip = ">" if rl.downloaded_size != rl.expected_size else "="
+                rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
+            elif rl.finished:
+                rl.bar_str = "[" + "*" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
+            else:
+                left = rl.star_pos - 1
+                right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
+                rl.bar_str = "[" + " " * left + "***" + " " * right + "]"
+                if rl.star_pos == DOWNLOAD_STATUS_BAR_LENGTH - 2:
+                    rl.star_dir = -1
+                elif rl.star_pos == 1:
+                    rl.star_dir = 1
+                rl.star_pos += rl.star_dir
+            if rl.finished:
+                rl.expected_size = rl.downloaded_size
+            rl.downloaded_size_str, rl.downloaded_size_u_str = (
+                get_byte_size_string(rl.downloaded_size)
+            )
+            if rl.expected_size:
+                rl.expected_size_str, rl.expected_size_u_str = (
+                    get_byte_size_string(rl.expected_size)
+                )
+            else:
+                rl.expected_size_str, rl.expected_size_u_str = "???", "B"
+
+            if rl.finished:
+                assert rl.download_end
+                rl.speed_frame_size_begin = 0
+                rl.speed_frame_time_begin = rl.download_begin
+                rl.speed_frame_size_end = rl.downloaded_size
+                rl.speed_frame_time_end = rl.download_end
+                rl.speed_calculatable = True
+            else:
+                rl.download_end = now
+            if rl.speed_calculatable:
+                duration = (
+                    (rl.speed_frame_time_end -
+                        rl.speed_frame_time_begin).total_seconds()
+                )
+                handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
+                if duration < sys.float_info.epsilon:
+                    rl.speed_str, rl.speed_u_str = "???", " "
                     rl.eta_str, rl.eta_u_str = "???", " "
                 else:
-                    speed = float(handled_size) / duration
-                    if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                        rl.eta_str, rl.eta_u_str = get_timespan_string(
-                            (rl.expected_size - rl.downloaded_size) / speed
-                        )
-                    elif rl.finished:
-                        rl.eta_str, rl.eta_u_str = "---", "-"
-                    else:
+                    if handled_size == 0:
+                        speed = 0.0
                         rl.eta_str, rl.eta_u_str = "???", " "
-                rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
-                rl.speed_u_str += "/s"
-        else:
-            rl.speed_frame_time_end = now
-            rl.eta_str, rl.eta_u_str = "???", " "
-            rl.speed_str, rl.speed_u_str = "???", ""
+                    else:
+                        speed = float(handled_size) / duration
+                        if rl.expected_size and rl.expected_size > rl.downloaded_size:
+                            rl.eta_str, rl.eta_u_str = get_timespan_string(
+                                (rl.expected_size - rl.downloaded_size) / speed
+                            )
+                        elif rl.finished:
+                            rl.eta_str, rl.eta_u_str = "---", "-"
+                        else:
+                            rl.eta_str, rl.eta_u_str = "???", " "
+                    rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
+                    rl.speed_u_str += "/s"
+            else:
+                rl.speed_frame_time_end = now
+                rl.eta_str, rl.eta_u_str = "???", " "
+                rl.speed_str, rl.speed_u_str = "???", ""
 
-        rl.total_time_str, rl.total_time_u_str = get_timespan_string(
-            (rl.download_end - rl.download_begin).total_seconds()
-        )
+            rl.total_time_str, rl.total_time_u_str = get_timespan_string(
+                (rl.download_end - rl.download_begin).total_seconds()
+            )
 
+    def _append_status_report_line_strings(self, report: list[str]) -> None:
+        def field_len_max(field_name: str) -> int:
+            return max(map(lambda rl: len(rl.__dict__[field_name]), self.report_lines))
 
-def append_status_report_line_strings(
-    report_lines: list[StatusReportLine], report: list[str]
-) -> None:
-    def field_len_max(field_name: str) -> int:
-        return max(map(lambda rl: len(rl.__dict__[field_name]), report_lines))
+        total_time_lm = field_len_max("total_time_str")
+        total_time_u_lm = field_len_max("total_time_u_str")
+        downloaded_size_lm = field_len_max("downloaded_size_str")
+        downloaded_size_u_lm = field_len_max("downloaded_size_u_str")
+        expected_size_lm = field_len_max("expected_size_str")
+        expected_size_u_lm = field_len_max("expected_size_u_str")
+        eta_lm = field_len_max("eta_str")
+        eta_u_lm = field_len_max("eta_u_str")
+        speed_lm = field_len_max("speed_str")
+        speed_u_lm = field_len_max("speed_u_str")
 
-    total_time_lm = field_len_max("total_time_str")
-    total_time_u_lm = field_len_max("total_time_u_str")
-    downloaded_size_lm = field_len_max("downloaded_size_str")
-    downloaded_size_u_lm = field_len_max("downloaded_size_u_str")
-    expected_size_lm = field_len_max("expected_size_str")
-    expected_size_u_lm = field_len_max("expected_size_u_str")
-    eta_lm = field_len_max("eta_str")
-    eta_u_lm = field_len_max("eta_u_str")
-    speed_lm = field_len_max("speed_str")
-    speed_u_lm = field_len_max("speed_u_str")
+        for rl in self.report_lines:
+            line = ""
 
-    for rl in report_lines:
-        line = ""
+            line += lpad(rl.total_time_str, total_time_lm) + " "
+            line += rpad(rl.total_time_u_str, total_time_u_lm) + " "
 
-        line += lpad(rl.total_time_str, total_time_lm) + " "
-        line += rpad(rl.total_time_u_str, total_time_u_lm) + " "
+            line += lpad(rl.speed_str, speed_lm) + " "
+            line += rpad(rl.speed_u_str, speed_u_lm) + " "
 
-        line += lpad(rl.speed_str, speed_lm) + " "
-        line += rpad(rl.speed_u_str, speed_u_lm) + " "
+            line += rl.bar_str + " "
 
-        line += rl.bar_str + " "
+            line += lpad(rl.downloaded_size_str, downloaded_size_lm) + " "
+            line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm)
+            line += " / "
+            line += lpad(rl.expected_size_str, expected_size_lm) + " "
+            line += rpad(rl.expected_size_u_str, expected_size_u_lm) + " "
 
-        line += lpad(rl.downloaded_size_str, downloaded_size_lm) + " "
-        line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm)
-        line += " / "
-        line += lpad(rl.expected_size_str, expected_size_lm) + " "
-        line += rpad(rl.expected_size_u_str, expected_size_u_lm) + " "
+            line += "eta "
+            line += lpad(rl.eta_str, eta_lm)
+            line += " " + rpad(rl.eta_u_str, eta_u_lm) + " "
 
-        line += "eta "
-        line += lpad(rl.eta_str, eta_lm)
-        line += " " + rpad(rl.eta_u_str, eta_u_lm) + " "
+            # if everybody is done, we don't need to pad for this anymore
+            line += rl.name
 
-        # if everybody is done, we don't need to pad for this anymore
-        line += rl.name
+            if len(line) < rl.last_line_length:
+                lll = len(line)
+                # fill with spaces to clear previous line
+                line += " " * (rl.last_line_length - lll)
+                rl.last_line_length = lll
+            else:
+                rl.last_line_length = len(line)
+            report.append(line)
 
-        if len(line) < rl.last_line_length:
-            lll = len(line)
-            # fill with spaces to clear previous line
-            line += " " * (rl.last_line_length - lll)
-            rl.last_line_length = lll
-        else:
-            rl.last_line_length = len(line)
-        report.append(line)
+    def print_status_report(self) -> None:
+        self._stringify_status_report_lines()
+        report_line_strings: list[str] = []
+        self._append_status_report_line_strings(report_line_strings)
 
+        report = ""
+        if self.prev_report_line_count:
+            report += f"\x1B[{self.prev_report_line_count}F"
 
-def print_status_report(report_lines: list[StatusReportLine], prev_report_line_count: int) -> int:
-    stringify_status_report_lines(report_lines)
-    report_line_strings: list[str] = []
-    append_status_report_line_strings(
-        report_lines, report_line_strings
-    )
+        max_cols = os.get_terminal_size().columns
+        if max_cols < 5:
+            # don't bother
+            return
 
-    report = ""
-    if prev_report_line_count:
-        report += f"\x1B[{prev_report_line_count}F"
-
-    max_cols = os.get_terminal_size().columns
-    if max_cols < 5:
-        # don't bother
-        return prev_report_line_count
-
-    for rls in report_line_strings:
-        if len(rls) < max_cols:
-            report += rls + " " * (max_cols - len(rls)) + "\n"
-        else:
-            report += rls[0:max_cols-3] + "...\n"
-    sys.stdout.write(report)
-    return len(report_lines)
+        for rls in report_line_strings:
+            if len(rls) < max_cols:
+                report += rls + " " * (max_cols - len(rls)) + "\n"
+            else:
+                report += rls[0:max_cols-3] + "...\n"
+        sys.stdout.write(report)
+        self.prev_report_line_count = len(self.report_lines)

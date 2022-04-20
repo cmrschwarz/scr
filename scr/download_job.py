@@ -835,31 +835,25 @@ class DownloadManager:
                 x.result()
             self.pending_jobs.clear()
         self.pom.request_print_access()
-        committed_report_line_count = 0
-        report_lines: list[progress_report.StatusReportLine] = []
+        prm = progress_report.ProgressReportManager()
         while True:
             results = concurrent.futures.wait(
                 self.pending_jobs,
-                timeout=0 if not committed_report_line_count
+                timeout=0 if not prm.prev_report_line_count
                 else progress_report.DOWNLOAD_STATUS_REFRESH_INTERVAL
             )
             for x in results.done:
                 x.result()
             self.pending_jobs = results.not_done
-            with self.status_report_lock:
-                progress_report.load_status_report_lines(
-                    self.download_status_reports, report_lines
-                )
-            if len(report_lines) == 0:
+            prm.load_status(self)
+            if not prm.active_download_count():
                 if not self.pending_jobs:
                     # this happens when we got main thread print access
                     # but everybody is already done and never downloaded anything
                     # we don't want any progress reports here
                     break
                 continue
-            committed_report_line_count = progress_report.print_status_report(
-                report_lines, committed_report_line_count
-            )
+            prm.print_status_report()
             if not self.pending_jobs:
                 break
 

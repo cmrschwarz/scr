@@ -9,14 +9,14 @@ import selenium_driver_updater
 import selenium_driver_updater.util.exceptions
 import os
 import glob
-import distutils.spawn
+import shutil
 from functools import cache
 SELENIUM_DRIVER_DIR_ADDED_TO_PATH: bool = False
 
 
 def try_resolve_executable_names(exec_names: list[str]) -> Optional[str]:
     for x in exec_names:
-        path = distutils.spawn.find_executable(x)
+        path = shutil.which(x)
         if path is not None:
             return path
     return None
