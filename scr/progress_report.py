@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, cast
 import math
 import datetime
 from collections import deque
@@ -138,11 +138,29 @@ class StatusReportLine:
 
 
 class ProgressReportManager:
+    finished_report_lines: list[StatusReportLine]
+    finished_report_lines_max_length: int = 0
+    newly_finished_report_lines: list[StatusReportLine]
     report_lines: list[StatusReportLine]
     prev_report_line_count: int
+    prev_terminal_column_count: int = 0
+
+    total_time_lm: int = 0
+    total_time_u_lm: int = 0
+    downloaded_size_lm: int = 0
+    downloaded_size_u_lm: int = 0
+    expected_size_lm: int = 0
+    expected_size_u_lm: int = 0
+    eta_lm: int = 0
+    eta_u_lm: int = 0
+    speed_lm: int = 0
+    speed_u_lm: int = 0
+    lms_changed: bool = False
 
     def __init__(self) -> None:
         self.report_lines = []
+        self.finished_report_lines = []
+        self.newly_finished_report_lines = []
         self.prev_report_line_count = 0
 
     def load_status(self, download_manager: 'download_job.DownloadManager') -> None:
@@ -151,16 +169,18 @@ class ProgressReportManager:
                 download_manager.download_status_reports
             )
 
-    def active_download_count(self) -> int:
-        return len(self.report_lines)
+    def updates_remaining(self) -> bool:
+        return (
+            len(self.report_lines) > 0
+            or
+            len(self.newly_finished_report_lines) > 0
+        )
 
     def _load_status_report_lines(self, dsr_list: list[DownloadStatusReport]) -> None:
-        # when we have more reports than report lines,
-        # we remove the oldest finished report
-        # if none are finished, we get more report lines
-        if DOWNLOAD_STATUS_KEEP_FINISHED:
-            dsr_list.sort(key=lambda dsr: not dsr.download_finished)
-        elif len(dsr_list) > len(self.report_lines):
+        if (not DOWNLOAD_STATUS_KEEP_FINISHED) and len(dsr_list) > len(self.report_lines):
+            # when we have more reports than report lines,
+            # we remove the oldest finished report
+            # if none are finished, we get more report lines
             i = 0
             while i < len(dsr_list):
                 if dsr_list[i].download_finished:
@@ -194,10 +214,19 @@ class ProgressReportManager:
                 rl.speed_frame_size_begin = dsr.updates[0][1]
                 rl.speed_frame_time_end = dsr.updates[-1][0]
                 rl.speed_frame_size_end = dsr.updates[-1][1]
+        if DOWNLOAD_STATUS_KEEP_FINISHED:
+            i = 0
+            while i < len(dsr_list):
+                if dsr_list[i].download_finished:
+                    self.newly_finished_report_lines.append(self.report_lines[i])
+                    del dsr_list[i]
+                    del self.report_lines[i]
+                else:
+                    i += 1
 
-    def _stringify_status_report_lines(self) -> None:
+    def _stringify_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
         now = datetime.datetime.now()
-        for rl in self.report_lines:
+        for rl in report_lines:
             if rl.expected_size and rl.expected_size >= rl.downloaded_size:
                 frac = float(rl.downloaded_size) / rl.expected_size
                 filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
@@ -270,41 +299,51 @@ class ProgressReportManager:
                 (rl.download_end - rl.download_begin).total_seconds()
             )
 
-    def _append_status_report_line_strings(self, report: list[str]) -> None:
-        def field_len_max(field_name: str) -> int:
-            return max(map(lambda rl: len(rl.__dict__[field_name]), self.report_lines))
+    def _update_field_len_max(
+        self, report_lines: list[StatusReportLine], field_name: str
+    ) -> None:
+        rls_lm = max(map(
+            lambda rl: len(rl.__dict__[field_name + "_str"]), report_lines
+        ), default=0)
+        if rls_lm > cast(int, self.__dict__.get(field_name + "_lm", 0)):
+            self.__dict__[field_name + "_lm"] = rls_lm
+            self.lms_changed = True
 
-        total_time_lm = field_len_max("total_time_str")
-        total_time_u_lm = field_len_max("total_time_u_str")
-        downloaded_size_lm = field_len_max("downloaded_size_str")
-        downloaded_size_u_lm = field_len_max("downloaded_size_u_str")
-        expected_size_lm = field_len_max("expected_size_str")
-        expected_size_u_lm = field_len_max("expected_size_u_str")
-        eta_lm = field_len_max("eta_str")
-        eta_u_lm = field_len_max("eta_u_str")
-        speed_lm = field_len_max("speed_str")
-        speed_u_lm = field_len_max("speed_u_str")
+    def _append_status_report_line_strings(
+        self, report_lines: list[StatusReportLine], report: list[str]
+    ) -> None:
 
-        for rl in self.report_lines:
+        self._update_field_len_max(report_lines, "total_time")
+        self._update_field_len_max(report_lines, "total_time_u")
+        self._update_field_len_max(report_lines, "downloaded_size")
+        self._update_field_len_max(report_lines, "downloaded_size_u")
+        self._update_field_len_max(report_lines, "expected_size")
+        self._update_field_len_max(report_lines, "expected_size_u")
+        self._update_field_len_max(report_lines, "eta")
+        self._update_field_len_max(report_lines, "eta_u")
+        self._update_field_len_max(report_lines, "speed")
+        self._update_field_len_max(report_lines, "speed_u")
+
+        for rl in report_lines:
             line = ""
 
-            line += lpad(rl.total_time_str, total_time_lm) + " "
-            line += rpad(rl.total_time_u_str, total_time_u_lm) + " "
+            line += lpad(rl.total_time_str, self.total_time_lm) + " "
+            line += rpad(rl.total_time_u_str, self.total_time_u_lm) + " "
 
-            line += lpad(rl.speed_str, speed_lm) + " "
-            line += rpad(rl.speed_u_str, speed_u_lm) + " "
+            line += lpad(rl.speed_str, self.speed_lm) + " "
+            line += rpad(rl.speed_u_str, self.speed_u_lm) + " "
 
             line += rl.bar_str + " "
 
-            line += lpad(rl.downloaded_size_str, downloaded_size_lm) + " "
-            line += rpad(rl.downloaded_size_u_str, downloaded_size_u_lm)
+            line += lpad(rl.downloaded_size_str, self.downloaded_size_lm) + " "
+            line += rpad(rl.downloaded_size_u_str, self.downloaded_size_u_lm)
             line += " / "
-            line += lpad(rl.expected_size_str, expected_size_lm) + " "
-            line += rpad(rl.expected_size_u_str, expected_size_u_lm) + " "
+            line += lpad(rl.expected_size_str, self.expected_size_lm) + " "
+            line += rpad(rl.expected_size_u_str, self.expected_size_u_lm) + " "
 
             line += "eta "
-            line += lpad(rl.eta_str, eta_lm)
-            line += " " + rpad(rl.eta_u_str, eta_u_lm) + " "
+            line += lpad(rl.eta_str, self.eta_lm)
+            line += " " + rpad(rl.eta_u_str, self.eta_u_lm) + " "
 
             # if everybody is done, we don't need to pad for this anymore
             line += rl.name
@@ -319,23 +358,57 @@ class ProgressReportManager:
             report.append(line)
 
     def print_status_report(self) -> None:
-        self._stringify_status_report_lines()
-        report_line_strings: list[str] = []
-        self._append_status_report_line_strings(report_line_strings)
-
-        report = ""
-        if self.prev_report_line_count:
-            report += f"\x1B[{self.prev_report_line_count}F"
-
         max_cols = os.get_terminal_size().columns
         if max_cols < 5:
             # don't bother
             return
+        update_finished = (max_cols != self.prev_terminal_column_count)
+        if update_finished and max_cols > self.finished_report_lines_max_length:
+            if self.prev_terminal_column_count > self.finished_report_lines_max_length:
+                update_finished = False
 
+        report_lines = self.newly_finished_report_lines + self.report_lines
+        self._stringify_status_report_lines(report_lines)
+        report_line_strings: list[str] = []
+        self._append_status_report_line_strings(
+            self.newly_finished_report_lines,
+            report_line_strings
+        )
+        max_len_nfrls = max((len(rls) for rls in report_line_strings), default=0)
+        self.finished_report_lines_max_length = max(
+            max_len_nfrls,
+            self.finished_report_lines_max_length
+        )
+        self._append_status_report_line_strings(
+            self.report_lines,
+            report_line_strings
+        )
+        if self.lms_changed:
+            self._stringify_status_report_lines(self.finished_report_lines)
+            update_finished = True
+            self.lms_changed = False
+
+        report_lines_to_rewrite = self.prev_report_line_count
+        if update_finished:
+            finished_rls: list[str] = []
+            self._append_status_report_line_strings(
+                self.finished_report_lines,
+                finished_rls
+            )
+            finished_rls.extend(report_line_strings)
+            report_line_strings = finished_rls
+            report_lines_to_rewrite += len(self.finished_report_lines)
+        report = ""
+        if report_lines_to_rewrite:
+            report += f"\x1B[{report_lines_to_rewrite}F"
         for rls in report_line_strings:
-            if len(rls) < max_cols:
+            rls_len = len(rls)
+            if rls_len < max_cols:
                 report += rls + " " * (max_cols - len(rls)) + "\n"
             else:
                 report += rls[0:max_cols-3] + "...\n"
         sys.stdout.write(report)
+        self.finished_report_lines.extend(self.newly_finished_report_lines)
+        self.newly_finished_report_lines.clear()
         self.prev_report_line_count = len(self.report_lines)
+        self.prev_terminal_column_count = max_cols

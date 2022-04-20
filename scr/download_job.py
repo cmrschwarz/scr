@@ -4,7 +4,7 @@ from .definitions import (
 )
 from .input_sequences import (
     YES_INDICATING_STRINGS, NO_INDICATING_STRINGS, EDIT_INDICATING_STRINGS,
-    CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS,
+    CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS
 )
 from typing import Optional, BinaryIO, Union, cast, Iterator
 import os
@@ -16,7 +16,9 @@ from selenium.common.exceptions import WebDriverException as SeleniumWebDriverEx
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
-from . import progress_report, content_match, scr, utils, scr_context, selenium_setup
+from . import (
+    progress_report, content_match, scr, utils, scr_context, selenium_setup
+)
 from collections import OrderedDict
 import threading
 import concurrent.futures
@@ -846,7 +848,7 @@ class DownloadManager:
                 x.result()
             self.pending_jobs = results.not_done
             prm.load_status(self)
-            if not prm.active_download_count():
+            if not prm.updates_remaining():
                 if not self.pending_jobs:
                     # this happens when we got main thread print access
                     # but everybody is already done and never downloaded anything
