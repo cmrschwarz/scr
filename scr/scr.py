@@ -410,6 +410,12 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.has_content_matching and mc.content_print_format is None and mc.content_save_format is None:
         mc.content_print_format = DEFAULT_CPF
 
+    if not mc.content_raw:
+        mc.parses_documents = True
+    if not mc.parses_documents:
+        # prepare chain to be used in the document -> content link optimization
+        mc.content_raw = False
+
     dummy_cm = mc.gen_dummy_content_match()
     if mc.content_print_format:
         validate_format(mc, ["content_print_format"],
@@ -484,11 +490,6 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
             raise ScrSetupError(
                 f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
             )
-    if not mc.content_raw:
-        mc.parses_documents = True
-    if not mc.parses_documents:
-        # prepare chain to be used in the document -> content link optimization
-        mc.content_raw = False
 
 
 def load_cookie_jar(ctx: 'scr_context.ScrContext') -> None:
