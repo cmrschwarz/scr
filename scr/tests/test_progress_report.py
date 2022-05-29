@@ -70,14 +70,30 @@ def test_append_status_report_line_strings_known_size(
     dummy_status_reports: list[progress_report.DownloadStatusReport]
 ) -> None:
     prm = progress_report.ProgressReportManager()
-    prm._load_status_report_lines(dummy_status_reports[1:2])
+    prm._load_status_report_lines(dummy_status_reports)
     strs: list[str] = []
     prm._stringify_status_report_lines(prm.report_lines)
     prm._append_status_report_line_strings(prm.report_lines, strs)
     assert (
+        strs[1]
+        ==
+        '01:00 m 1.00 B/s [==============>               ] 1 B /   2 B  eta 1.0 s dummy_dl_1'
+    )
+
+
+def test_status_report_error(
+    dummy_status_reports: list[progress_report.DownloadStatusReport]
+) -> None:
+    prm = progress_report.ProgressReportManager()
+    dummy_status_reports[0].error = "test"
+    dummy_status_reports[0].download_finished = True
+    dummy_status_reports[0].download_end_time = dummy_status_reports[0].download_begin_time
+    prm._load_status_report_lines(dummy_status_reports)
+    strs: list[str] = []
+    prm._stringify_status_report_lines(prm.newly_finished_report_lines)
+    prm._append_status_report_line_strings(prm.newly_finished_report_lines, strs)
+    assert (
         strs[0]
         ==
-        '01:00 m 1.00 B/s [==============>               ] '
-        +
-        '1 B / 2 B  eta 1.0 s dummy_dl_1'
+        '0.0 s ??? B/s [         !! test !!         ] 0 B / ??? B  eta --- -- dummy_dl_0'
     )

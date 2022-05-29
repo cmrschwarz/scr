@@ -236,7 +236,7 @@ class ProgressReportManager:
     def _stringify_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
         now = datetime.datetime.now()
         for rl in report_lines:
-            if rl.error:
+            if rl.error is not None:
                 if not rl.finished:
                     rl.finished = True
                     rl.download_end = now
@@ -280,6 +280,8 @@ class ProgressReportManager:
                 rl.speed_calculatable = True
             else:
                 rl.download_end = now
+            if rl.finished:
+                rl.eta_str, rl.eta_u_str = "---", "--"
             if rl.speed_calculatable:
                 duration = (
                     (rl.speed_frame_time_end -
@@ -287,28 +289,30 @@ class ProgressReportManager:
                 )
                 handled_size = rl.speed_frame_size_end - rl.speed_frame_size_begin
                 if duration < sys.float_info.epsilon:
-                    rl.speed_str, rl.speed_u_str = "???", " "
-                    rl.eta_str, rl.eta_u_str = "???", " "
+                    rl.speed_str, rl.speed_u_str = "???", "B/s"
+                    if not rl.finished:
+                        rl.eta_str, rl.eta_u_str = "???", "s"
                 else:
                     if handled_size == 0:
                         speed = 0.0
-                        rl.eta_str, rl.eta_u_str = "???", " "
+                        if not rl.finished:
+                            rl.eta_str, rl.eta_u_str = "???", "s"
                     else:
                         speed = float(handled_size) / duration
-                        if rl.expected_size and rl.expected_size > rl.downloaded_size:
-                            rl.eta_str, rl.eta_u_str = get_timespan_string(
-                                (rl.expected_size - rl.downloaded_size) / speed
-                            )
-                        elif rl.finished:
-                            rl.eta_str, rl.eta_u_str = "---", "-"
-                        else:
-                            rl.eta_str, rl.eta_u_str = "???", " "
+                        if not rl.finished:
+                            if rl.expected_size and rl.expected_size > rl.downloaded_size:
+                                rl.eta_str, rl.eta_u_str = get_timespan_string(
+                                    (rl.expected_size - rl.downloaded_size) / speed
+                                )
+                            else:
+                                rl.eta_str, rl.eta_u_str = "???", "s"
                     rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
                     rl.speed_u_str += "/s"
             else:
                 rl.speed_frame_time_end = now
-                rl.eta_str, rl.eta_u_str = "???", " "
-                rl.speed_str, rl.speed_u_str = "???", ""
+                rl.speed_str, rl.speed_u_str = "???", "B/s"
+                if not rl.finished:
+                    rl.eta_str, rl.eta_u_str = "???", "s"
 
             rl.total_time_str, rl.total_time_u_str = get_timespan_string(
                 (rl.download_end - rl.download_begin).total_seconds()

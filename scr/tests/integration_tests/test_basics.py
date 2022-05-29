@@ -184,6 +184,21 @@ def test_download_url(cli_env: CliEnv) -> None:
     )
 
 
+def test_connection_timeout(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "url=http://httpbin.org/delay/5",
+            "cpf={c}",
+            "timeout=0.1"
+        ],
+        stderr=[
+            "[ERROR]: http://httpbin.org/delay/5 (ci=1): failed to download 'http://httpbin.org/delay/5': connection timeout"
+        ],
+        ec=1
+    )
+
+
 def test_filename_if_content_not_needed(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

@@ -689,7 +689,7 @@ def request_exception_to_scr_fetch_error(ex: requests.exceptions.RequestExceptio
     if isinstance(ex, requests.exceptions.ConnectTimeout):
         return ScrFetchError("connection timeout")
     if isinstance(ex, requests.exceptions.ConnectionError):
-        return ScrFetchError("connection error")
+        return ScrFetchError("connection failed")
     return ScrFetchError(utils.truncate(str(ex)))
 
 
