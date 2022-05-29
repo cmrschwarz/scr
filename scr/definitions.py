@@ -45,7 +45,7 @@ class InteractiveResult(Enum):
     SKIP_CHAIN = 4
     SKIP_DOC = 5
     ACCEPT_CHAIN = 6
-    ERROR = 0
+    ERROR = 7
 
 
 class SeleniumVariant(Enum):

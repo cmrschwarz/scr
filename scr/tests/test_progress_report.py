@@ -79,5 +79,5 @@ def test_append_status_report_line_strings_known_size(
         ==
         '01:00 m 1.00 B/s [==============>               ] '
         +
-        '1 B / 2 B eta 1.0 s dummy_dl_1'
+        '1 B / 2 B  eta 1.0 s dummy_dl_1'
     )

@@ -613,8 +613,11 @@ class DownloadJob:
                                 return False
                         except requests.exceptions.RequestException as ex:
                             fe = scr.request_exception_to_scr_fetch_error(ex)
-                            scr.log(self.cm.mc.ctx, Verbosity.ERROR,
-                                    f"{self.context}: failed to download '{utils.truncate(self.cm.clm.result)}': {str(fe)}")
+                            if self.status_report:
+                                self.status_report.error = str(fe)
+                            else:
+                                scr.log(self.cm.mc.ctx, Verbosity.ERROR,
+                                        f"{self.context}: failed to download '{utils.truncate(self.cm.clm.result)}': {str(fe)}")
                             return False
         return True
 

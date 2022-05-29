@@ -46,6 +46,12 @@ def rpad(string: str, tgt_len: int) -> str:
     return string + " " * (tgt_len - len(string))
 
 
+def pad(string: str, tgt_len: int) -> str:
+    lpad = int((tgt_len - len(string)) / 2)
+    rpad = tgt_len - len(string) - lpad
+    return " " * lpad + string + " " * rpad
+
+
 class DownloadStatusReport:
     name: str
     expected_size: Optional[int] = None
@@ -55,6 +61,7 @@ class DownloadStatusReport:
     updates: deque[tuple[datetime.datetime, int]]
     download_finished: bool = False
     download_manager: 'download_job.DownloadManager'
+    error: Optional[str] = None
 
     def __init__(self, download_manager: 'download_job.DownloadManager') -> None:
         self.updates = deque()
@@ -123,6 +130,7 @@ class StatusReportLine:
     star_dir: int = 1
     last_line_length: int = 0
     finished: bool = False
+    error: Optional[str] = None
 
     total_time_str: str
     total_time_u_str: str
@@ -199,6 +207,7 @@ class ProgressReportManager:
             rl.downloaded_size = dsr.downloaded_size
             rl.download_begin = dsr.download_begin_time
             rl.download_end = dsr.download_end_time
+            rl.error = dsr.error
             rl.finished = dsr.download_finished
             if not len(dsr.updates):
                 rl.speed_calculatable = False
@@ -227,14 +236,20 @@ class ProgressReportManager:
     def _stringify_status_report_lines(self, report_lines: list[StatusReportLine]) -> None:
         now = datetime.datetime.now()
         for rl in report_lines:
-            if rl.expected_size and rl.expected_size >= rl.downloaded_size:
+            if rl.error:
+                if not rl.finished:
+                    rl.finished = True
+                    rl.download_end = now
+                err_str = utils.truncate(rl.error, DOWNLOAD_STATUS_BAR_LENGTH - 8)
+                rl.bar_str = "[" + pad("!! " + err_str + " !!", DOWNLOAD_STATUS_BAR_LENGTH - 2) + "]"
+            elif rl.expected_size and rl.expected_size >= rl.downloaded_size:
                 frac = float(rl.downloaded_size) / rl.expected_size
                 filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
                 empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
                 tip = ">" if rl.downloaded_size != rl.expected_size else "="
                 rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
             elif rl.finished:
-                rl.bar_str = "[" + "*" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
+                rl.bar_str = "[" + "=" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
             else:
                 left = rl.star_pos - 1
                 right = DOWNLOAD_STATUS_BAR_LENGTH - 3 - left
@@ -339,9 +354,9 @@ class ProgressReportManager:
             line += rpad(rl.downloaded_size_u_str, self.downloaded_size_u_lm)
             line += " / "
             line += lpad(rl.expected_size_str, self.expected_size_lm) + " "
-            line += rpad(rl.expected_size_u_str, self.expected_size_u_lm) + " "
+            line += rpad(rl.expected_size_u_str, self.expected_size_u_lm)
 
-            line += "eta "
+            line += "  eta "
             line += lpad(rl.eta_str, self.eta_lm)
             line += " " + rpad(rl.eta_u_str, self.eta_u_lm) + " "
 
