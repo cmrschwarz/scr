@@ -190,7 +190,7 @@ def test_connection_timeout(cli_env: CliEnv) -> None:
         args=[
             "url=http://httpbin.org/delay/5",
             "cpf={c}",
-            "timeout=0.1"
+            "timeout=0.5"
         ],
         stderr=[
             "[ERROR]: http://httpbin.org/delay/5 (ci=1): failed to download 'http://httpbin.org/delay/5': connection timeout"
