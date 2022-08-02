@@ -79,7 +79,7 @@ def help(err: bool = False) -> None:
         dpsch=<bool>         use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
-        dd=<duplication>     whether to allow document duplication (default: nonrecusive, values: allowed, nonrecursive, unique)
+        dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
     Initial Documents:
         url=<url>            fetch a document from a url, derived document matches are (relative) urls
         file=<path>          fetch a document from a file, derived documents matches are (relative) file pathes

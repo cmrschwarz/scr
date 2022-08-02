@@ -14,7 +14,7 @@ class MatchChain(ConfigDataClass):
     cimin: int = 1
     cimax: Union[int, float] = float("inf")
     ci_continuous: bool = False
-    document_duplication: DocumentDuplication = DocumentDuplication.NONRECURSIVE
+    document_duplication: DocumentDuplication = DocumentDuplication.UNIQUE
     content_save_format: Optional[str] = None
     content_print_format: Optional[str] = None
     content_write_format: Optional[str] = None

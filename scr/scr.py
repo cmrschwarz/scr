@@ -1725,7 +1725,8 @@ def resolve_repl_defaults(
             else:
                 if not last_doc or doc_url != last_doc.path:
                     last_doc = document.Document(DocumentType.URL, doc_url)
-
+    for d in ctx_new.docs:
+        d.parent_doc = last_doc
     if not ctx_new.docs and last_doc:
         last_doc.expand_match_chains_above = len(ctx_new.match_chains)
         last_doc.match_chains = list(ctx_new.match_chains)

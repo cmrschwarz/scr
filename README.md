@@ -70,7 +70,6 @@ scr [OPTIONS]
 
     Content to Write out:
         cx=<xpath>            xpath for content matching
-        cxsd=<>
         cr=<regex>            regex for content matching
         cjs=<js string>       javascript to execute on the page, format args are available as js variables (selenium only)
         cf=<format string>    content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
@@ -185,7 +184,7 @@ scr [OPTIONS]
         version                print version information
 
     Global Options:
-        timeout=<float>        seconds before a web request timeouts (default 30)
+        timeout=<seconds>      seconds before a web request timeouts (default 30)
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>            user agent to pass in the html header for url GETs
