@@ -1775,6 +1775,7 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
                     ctx = None
             except KeyboardInterrupt:
                 print("")
+                ctx = None
                 continue
     finally:
         if not success:
