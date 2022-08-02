@@ -685,11 +685,9 @@ def try_read_data_url(cm: 'content_match.ContentMatch') -> Optional[bytes]:
 def request_exception_to_scr_fetch_error(ex: requests.exceptions.RequestException) -> ScrFetchError:
     if isinstance(ex, requests.exceptions.InvalidURL):
         return ScrFetchError("invalid url")
-    if isinstance(ex, requests.exceptions.ConnectTimeout):
+    if isinstance(ex, requests.exceptions.ConnectTimeout) or isinstance(ex, requests.ReadTimeout):
         return ScrFetchError("connection timeout")
-    if isinstance(ex, requests.exceptions.ConnectionError):
-        return ScrFetchError("connection failed")
-    return ScrFetchError(utils.truncate(str(ex)))
+    return ScrFetchError("connection failed")
 
 
 def request_raw(
