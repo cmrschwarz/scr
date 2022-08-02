@@ -1,10 +1,6 @@
 from typing import TypeVar
 from enum import Enum, IntEnum
 
-T = TypeVar("T")
-K = TypeVar("K")
-V = TypeVar("V")
-
 # because for python, sys.argv[0] does not reflect what the user typed anyways,
 # we just use this fixed value for --help etc.
 SCRIPT_NAME = "scr"
@@ -13,6 +9,7 @@ VERSION = "0.10.1"
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
 DEFAULT_TIMEOUT_SECONDS = 30
+# cap for filenames deduced from urls to avoid a messs e.g. for data urls
 URL_FILENAME_MAX_LEN = 256
 
 
@@ -23,6 +20,11 @@ DEFAULT_CPF = "{c}\\n"
 DEFAULT_CWF = "{c}"
 DEFAULT_CSF = "{fn}"
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
+
+
+T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
 
 
 class ScrSetupError(Exception):

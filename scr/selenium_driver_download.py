@@ -61,6 +61,11 @@ def get_script_dir() -> str:
 @ cache
 def get_selenium_drivers_dir() -> str:
     script_dir = get_script_dir()
+    # we want to have the selenium_drivers dir inside the git repository with empty files
+    # these files are then made part of the pip package and therefore removed
+    # without warnings on pip uninstall
+    # since we need actual drivers for testing, we prefer to use this directory
+    # which is not part of the pip package
     debug_path = os.path.join(script_dir, "selenium_drivers_debug")
     if os.path.exists(debug_path):
         return debug_path
