@@ -861,6 +861,9 @@ class DownloadManager:
             if not self.pending_jobs:
                 break
 
+    def reset(self) -> None:
+        self.pom.reset()
+
     def terminate(self, cancel_running: bool = False) -> None:
         try:
             if not cancel_running:

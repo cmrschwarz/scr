@@ -1672,6 +1672,8 @@ def resolve_repl_defaults(
                 ctx.dl_manager.terminate()
             finally:
                 ctx.dl_manager = None
+    elif ctx.dl_manager is not None:
+        ctx.dl_manager.reset()
     changed_selenium = False
     if ctx_new.selenium_variant != ctx.selenium_variant:
         changed_selenium = True
