@@ -10,7 +10,6 @@ import lxml.html
 import pyrfc6266
 import requests
 import sys
-import xml.sax.saxutils
 import re
 import os
 from string import Formatter
@@ -768,45 +767,75 @@ def requests_dl(
         raise request_exception_to_scr_fetch_error(ex)
 
 
+def build_xpath_string(text: str) -> str:
+    pos_single_quote = text.find("'")
+    if pos_single_quote == -1:
+        return f"'{text}'"
+    pos_double_quote = text.find('"')
+    if pos_double_quote == -1:
+        return f'"{text}"'
+    # since xpath does not have escaping, if we have both types of
+    # quotes in our string we need to express it using concat()
+    if pos_single_quote < pos_double_quote:
+        head = f'"{text[:pos_double_quote]}"'
+        tail = text[pos_double_quote:]
+    else:
+        head = f"'{text[:pos_single_quote]}'"
+        tail = text[pos_single_quote:]
+    return f'concat({head},{build_xpath_string(tail)})'
+
+
+def build_elem_xpath(root: 'lxml.html.HtmlElement', elem: 'lxml.html.HtmlElement') -> str:
+    id = elem.get("id")
+    if id is not None:
+        return f"//{elem.tag}[@id={build_xpath_string(id)}]"
+    res = ""
+    while True:
+        parent = cast(Optional[lxml.html.HtmlElement], elem.getparent())
+        index = 1
+        if parent is not None:
+            for e in parent.iterchildren():
+                if e == elem:
+                    break
+                if e.tag == elem.tag:
+                    index += 1
+        res = f"/{elem.tag}[{index}]{res}"
+        if elem == root or parent is None:
+            return res
+        assert(parent is not None)
+        elem = parent
+
+
+def get_child_iframes(elem: 'lxml.html.HtmlElement') -> list['lxml.html.HtmlElement']:
+    return cast(list[lxml.html.HtmlElement], elem.xpath("//iframe"))
+
+
 def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     text = drv.page_source
     doc_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
-    iframes_xml_all_sources: list[lxml.html.HtmlElement] = doc_xml.xpath(
-        "//iframe"
-    )
-    if not iframes_xml_all_sources:
+    iframes: list[lxml.html.HtmlElement] = get_child_iframes(doc_xml)
+    if not iframes:
         return text, doc_xml
     depth = 0
+    curr_xml = doc_xml
     try:
         iframe_stack: list[tuple[
             SeleniumWebElement, int, lxml.html.HtmlElement
         ]] = []
         while True:
-            iframes_by_source: dict[str, list[lxml.html.HtmlElement]] = {}
-            for iframe in reversed(iframes_xml_all_sources):
-                iframe_src = iframe.attrib["src"]
-                iframe_src_escaped = xml.sax.saxutils.escape(iframe_src)
-                if iframe_src_escaped in iframes_by_source:
-                    iframes_by_source[iframe_src_escaped].append(iframe)
-                else:
-                    iframes_by_source[iframe_src_escaped] = [iframe]
-            for iframe_src_escaped, iframes_xml in iframes_by_source.items():
+            for iframe in reversed(iframes):
+                iframe_xpath = build_elem_xpath(curr_xml, iframe)
                 iframes_sel = drv.find_elements(
                     by=selenium.webdriver.common.by.By.XPATH,
-                    value=f"//iframe[@src='{iframe_src_escaped}']"
+                    value=iframe_xpath
                 )
-                len_sel = len(iframes_sel)
-                len_xml = len(iframes_xml)
-                if len_sel != len_xml:
+                if len(iframes_sel) != 1:
                     log(
-                        ctx, Verbosity.WARN,
-                        f"iframe count diverged for iframe source in '{iframe_src_escaped}'"
+                        ctx, Verbosity.WARN, "failed to match up iframe contents"
                     )
-                for i in range(0, min(len_sel, len_xml)):
-                    iframe_stack.append(
-                        (iframes_sel[i], depth + 1, iframes_xml[i])
-                    )
+                else:
+                    iframe_stack.append((iframes_sel[0], depth + 1, iframe))
             if not iframe_stack:
                 break
             iframe_sel, depth_new, curr_xml = iframe_stack.pop()
@@ -814,18 +843,20 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
                 depth -= 1
                 drv.switch_to.parent_frame()
             drv.switch_to.frame(iframe_sel)
-            log(ctx, Verbosity.DEBUG,
-                f"expanding iframe {curr_xml.attrib['src']}")
             depth = depth_new
             iframe_xml = cast(
                 lxml.html.HtmlElement, lxml.html.fromstring(drv.page_source)
             )
+            iframes = get_child_iframes(iframe_xml)
             curr_xml.append(iframe_xml)
             curr_xml = iframe_xml
-            lxml.etree.XPath
-            iframes_xml_all_sources = iframe_xml.xpath(".//iframe")
 
         return cast(str, lxml.html.tostring(doc_xml)), doc_xml
+    except SeleniumWebDriverException:
+        # if the document fundamentally changes while we do this, we might
+        # end up trying to focus on a deleted iframe
+        # in that case we just give up on the iframe sources for this iteration
+        return text, doc_xml
     finally:
         drv.switch_to.default_content()
 
