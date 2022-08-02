@@ -85,7 +85,7 @@ class PrintOutputManager:
             for b in stored_buffers:
                 sys.stdout.buffer.write(b)
             sys.stdout.buffer.write(buffer)
-            if(stored_buffers):
+            if stored_buffers:
                 self.size_blocked.notifyAll()
 
     def request_print_access(self) -> int:

@@ -39,7 +39,7 @@ class ConfigDataClass:
             self.__dict__[scs].apply_defaults(defaults.__dict__[scs])
 
     def follow_attrib_path(self, attrib_path: list[str]) -> tuple['ConfigDataClass', str]:
-        assert(len(attrib_path))
+        assert len(attrib_path)
         conf = self
         for attr in attrib_path[:-1]:
             assert attr in conf._subconfig_slots_

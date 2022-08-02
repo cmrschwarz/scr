@@ -28,7 +28,7 @@ def truncate(
     trailer: str = "..."
 ) -> str:
     if len(text) > max_len:
-        assert(max_len > len(trailer))
+        assert max_len > len(trailer)
         return text[0: max_len - len(trailer)] + trailer
     return text
 

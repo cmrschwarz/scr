@@ -800,7 +800,7 @@ def build_elem_xpath(root: 'lxml.html.HtmlElement', elem: 'lxml.html.HtmlElement
         res = f"/{elem.tag}[{index}]{res}"
         if elem == root or parent is None:
             return res
-        assert(parent is not None)
+        assert parent is not None
         elem = parent
 
 
@@ -1528,7 +1528,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
             try_number += 1
             same_content = static_content and not content_change
             if try_number > 1 and not same_content:
-                assert(ctx.selenium_variant.enabled())
+                assert ctx.selenium_variant.enabled()
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
                     last_doc_path = drv.current_url
