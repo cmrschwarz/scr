@@ -15,11 +15,13 @@ class Document:
     xml: Optional[lxml.html.HtmlElement]
     src_mc: Optional['match_chain.MatchChain']
     locator_match: Optional['locator.LocatorMatch']
+    parent_doc: Optional['Document']
     dfmatch: Optional[str]
 
     def __init__(
         self, document_type: DocumentType, path: str,
-        src_mc: Optional['match_chain.MatchChain'],
+        src_mc: Optional['match_chain.MatchChain'] = None,
+        parent_doc: Optional['Document'] = None,
         match_chains: Optional[list['match_chain.MatchChain']] = None,
         expand_match_chains_above: Optional[int] = None,
         locator_match: Optional['locator.LocatorMatch'] = None,
@@ -27,6 +29,7 @@ class Document:
     ) -> None:
         self.document_type = document_type
         self.path = path
+        self.parent_doc = parent_doc
         if path_parsed is not None:
             self.path_parsed = path_parsed
         else:
@@ -69,3 +72,6 @@ class Document:
         self.encoding = enc
         self.forced_encoding = forced
         return enc
+
+    def canonical_url(self) -> str:
+        return urllib.parse.urlunparse(self.path_parsed)

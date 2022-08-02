@@ -85,6 +85,12 @@ class Verbosity(IntEnum):
     DEBUG = 4
 
 
+class DocumentDuplication(Enum):
+    ALLOWED = 0
+    NONRECURSIVE = 1
+    UNIQUE = 2
+
+
 class DocumentType(Enum):
     URL = 1
     FILE = 2
@@ -152,4 +158,10 @@ verbosities_display_dict: dict[Verbosity, str] = {
     Verbosity.WARN:  " [WARN]: ",
     Verbosity.INFO:  " [INFO]: ",
     Verbosity.DEBUG: "[DEBUG]: ",
+}
+
+document_duplication_dict: dict[str, DocumentDuplication] = {
+    "allowed": DocumentDuplication.ALLOWED,
+    "nonrecursive": DocumentDuplication.NONRECURSIVE,
+    "unique": DocumentDuplication.UNIQUE,
 }

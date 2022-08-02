@@ -35,7 +35,7 @@ import warnings
 import urllib.request
 
 from .definitions import (
-    T, K, ScrSetupError, ScrFetchError, ScrMatchError, Verbosity, SCRIPT_NAME,
+    T, K, DocumentDuplication, ScrSetupError, ScrFetchError, ScrMatchError, Verbosity, SCRIPT_NAME,
     SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
     DocumentType, InteractiveResult,
     verbosities_display_dict, document_type_display_dict,
@@ -564,6 +564,9 @@ def setup(ctx: 'scr_context.ScrContext') -> None:
         if d.expand_match_chains_above is not None:
             d.match_chains.extend(
                 ctx.match_chains[d.expand_match_chains_above:])
+        canonical_url = d.canonical_url()
+        for mc in d.match_chains:
+            mc.requested_document_urls.add(canonical_url)
 
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
@@ -1128,7 +1131,7 @@ def gen_content_matches(
             # - we can't just change the document_type because this messes
             #   with last_doc for the repl
             dummy_doc = document.Document(
-                DocumentType.CONTENT_FILE, path=doc.path, src_mc=doc.src_mc,
+                DocumentType.CONTENT_FILE, path=doc.path, src_mc=doc.src_mc, parent_doc=doc,
                 locator_match=doc.locator_match, path_parsed=doc.path_parsed
             )
         return [content_match.ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
@@ -1201,21 +1204,43 @@ def gen_document_matches(
     document_lms = mc.loc_document.apply_regex_matches(document_lms)
     document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms)
     for dlm in document_lms:
-        ndoc = document.Document(
-            doc.document_type.derived_type(),
-            "",
-            mc,
-            mc.document_output_chains,
-            None,
-            dlm
-        )
-        mc.loc_document.apply_format_for_document_match(ndoc, mc, dlm)
-        ndoc.path, ndoc.path_parsed = normalize_link(
+        mc.loc_document.apply_format_for_document_match(doc, mc, dlm)
+        path, path_parsed = normalize_link(
             mc.ctx, mc, doc.document_type, doc.path_parsed,
             last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
         )
-        document_matches.append(ndoc)
+        if mc.document_duplication != DocumentDuplication.ALLOWED:
+            canonical_url = urllib.parse.urlunparse(path_parsed)
+            if canonical_url in mc.requested_document_urls:
+                if mc.document_duplication == DocumentDuplication.UNIQUE:
+                    continue
+                assert mc.document_duplication == DocumentDuplication.NONRECURSIVE
+                parent = doc
+                recursion_detected = False
+                while True:
+                    pcurl = parent.canonical_url()
+                    if pcurl == canonical_url:
+                        recursion_detected = True
+                        break
+                    if parent.parent_doc is None:
+                        break
+                    parent = parent.parent_doc
+                if recursion_detected:
+                    continue
+            else:
+                mc.requested_document_urls.add(canonical_url)
+
+        document_matches.append(document.Document(
+            doc.document_type.derived_type(),
+            path,
+            mc,
+            doc,
+            mc.document_output_chains,
+            None,
+            dlm,
+            path_parsed
+        ))
 
     return document_matches
 
@@ -1696,14 +1721,10 @@ def resolve_repl_defaults(
                     doctype = DocumentType.FILE
                     if last_doc and last_doc.document_type == DocumentType.RFILE:
                         doctype = DocumentType.RFILE
-                    last_doc = document.Document(
-                        doctype, path, None, None, None
-                    )
+                    last_doc = document.Document(doctype, path)
             else:
                 if not last_doc or doc_url != last_doc.path:
-                    last_doc = document.Document(
-                        DocumentType.URL, doc_url, None, None, None
-                    )
+                    last_doc = document.Document(DocumentType.URL, doc_url)
 
     if not ctx_new.docs and last_doc:
         last_doc.expand_match_chains_above = len(ctx_new.match_chains)

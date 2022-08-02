@@ -5,6 +5,7 @@ import copy
 from .definitions import (
     T, ScrSetupError, DocumentType, SeleniumVariant, selenium_variants_dict,
     selenium_strats_dict, selenium_download_strategies_dict, verbosities_dict,
+    document_duplication_dict,
     VERSION, SCRIPT_NAME, DEFAULT_ESCAPE_SEQUENCE, DEFAULT_CPF, DEFAULT_CWF,
     DEFAULT_TIMEOUT_SECONDS
 )
@@ -78,7 +79,7 @@ def help(err: bool = False) -> None:
         dpsch=<bool>         use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
-
+        dd=<duplication>     whether to allow document duplication (default: nonrecusive, values: allowed, nonrecursive, unique)
     Initial Documents:
         url=<url>            fetch a document from a url, derived document matches are (relative) urls
         file=<path>          fetch a document from a file, derived documents matches are (relative) file pathes
@@ -443,6 +444,7 @@ def apply_doc_arg(
         doctype,
         path,
         None,
+        None,
         mcs,
         extend_chains_above,
         path_parsed=path_parsed
@@ -663,8 +665,11 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         ): continue
         if apply_mc_arg(
             ctx, "seldl", ["selenium_download_strategy"], arg,
-            lambda v, arg: parse_variant_arg(
-                v, selenium_download_strategies_dict, arg)
+            lambda v, arg: parse_variant_arg(v, selenium_download_strategies_dict, arg)
+        ): continue
+        if apply_mc_arg(
+            ctx, "dd", ["document_duplication"], arg,
+            lambda v, arg: parse_variant_arg(v, document_duplication_dict, arg),
         ): continue
 
         # misc args

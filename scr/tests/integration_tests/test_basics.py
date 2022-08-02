@@ -184,6 +184,17 @@ def test_double_content_print_file_from_url(cli_env: CliEnv) -> None:
         stdout="file_url\n:::file_url\n",
     )
 
+def test_document_deduplication(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file=../res/recursive_iframe.html",
+            "dx=//iframe/@src",
+            "cx=//title/text()",
+        ],
+        stdout=["recursive_iframe", "recursive_iframe_child"]
+    )
+
 
 def test_empty_cpf(cli_env: CliEnv) -> None:
     run_scr(

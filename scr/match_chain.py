@@ -1,6 +1,6 @@
 from typing import Optional, Union
 from .definitions import (
-    SeleniumStrategy, SeleniumDownloadStrategy, DocumentType,
+    SeleniumStrategy, SeleniumDownloadStrategy, DocumentType, DocumentDuplication,
     DEFAULT_ESCAPE_SEQUENCE, FALLBACK_DOCUMENT_SCHEME)
 from .config_data_class import ConfigDataClass
 from . import locator, content_match, scr_context, document
@@ -14,6 +14,7 @@ class MatchChain(ConfigDataClass):
     cimin: int = 1
     cimax: Union[int, float] = float("inf")
     ci_continuous: bool = False
+    document_duplication: DocumentDuplication = DocumentDuplication.NONRECURSIVE
     content_save_format: Optional[str] = None
     content_print_format: Optional[str] = None
     content_write_format: Optional[str] = None
@@ -77,6 +78,7 @@ class MatchChain(ConfigDataClass):
     document_matches: list['document.Document']
     handled_content_matches: set['content_match.ContentMatch']
     handled_document_matches: set['document.Document']
+    requested_document_urls: set[str]
     satisfied: bool = True
     labels_none_for_n: int = 0
 
@@ -95,10 +97,11 @@ class MatchChain(ConfigDataClass):
         self.document_matches = []
         self.handled_content_matches = set()
         self.handled_document_matches = set()
+        self.requested_document_urls = set()
 
     def gen_dummy_document(self) -> 'document.Document':
         d = document.Document(
-            DocumentType.FILE, "", None,
+            DocumentType.FILE, "",
             locator_match=self.loc_document.gen_dummy_locator_match()
         )
         d.encoding = ""
