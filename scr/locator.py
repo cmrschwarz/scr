@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from .definitions import (ScrSetupError, ScrMatchError, Verbosity)
 from . import match_chain, scr, utils, document, content_match, selenium_setup
 from .config_data_class import ConfigDataClass
@@ -71,6 +72,55 @@ class LocatorMatch:
         if self.unnamed_cgroups is not None:
             c.unnamed_cgroups = self.unnamed_cgroups
         return c
+
+
+def build_sibling_xpath(root: lxml.html.HtmlElement, elem: lxml.html.HtmlElement, sibling_depth: int) -> lxml.etree.XPath:
+    res = ""
+    level = 0
+    if type(elem) == lxml.etree._ElementUnicodeResult:  # type: ignore
+        if elem.attrname is None:
+            res = "/text()"
+        else:
+            res = f"/@{elem.attrname}"
+        elem = elem.getparent()
+    while True:
+        parent = cast(Optional[lxml.html.HtmlElement], elem.getparent())
+        if level >= sibling_depth:
+            index = 1
+            if parent is not None:
+                for e in parent.iterchildren():
+                    if e == elem:
+                        break
+                    if e.tag == elem.tag:
+                        index += 1
+            res = f"/{elem.tag}[{index}]{res}"
+        else:
+            res = f"/{elem.tag}{res}"
+            level += 1
+        if elem == root:
+            break
+        assert parent is not None
+        elem = parent
+    return lxml.etree.XPath(res)
+
+
+def eval_xpath(src_xml: lxml.html.HtmlElement, xpath: lxml.etree.XPath) -> Any:
+    if type(src_xml) == lxml.etree._ElementUnicodeResult:  # type: ignore
+        # since lxml doesn't allow us to evaluate xpaths on these,
+        # but we need it for lic, we hack in support for it by
+        # generating a derived xpath that gets the expected results while
+        # actually being evaluated on the parent
+        if src_xml.attrname is None:
+            fixed_xpath = "./text()"
+        else:
+            fixed_xpath = f"./@{src_xml.attrname}"
+
+        if xpath.path[0:1] != "/":
+            fixed_xpath += "/"
+        fixed_xpath += xpath.path
+        return src_xml.getparent().xpath(fixed_xpath)
+    else:
+        return xpath.evaluate(src_xml)  # type: ignore
 
 
 class Locator(ConfigDataClass):
@@ -192,18 +242,7 @@ class Locator(ConfigDataClass):
         assert src_xml is not None
         try:
             xp = cast(lxml.etree.XPath, self.xpath)
-            if type(src_xml) == lxml.etree._ElementUnicodeResult:  # type: ignore
-                # since lxml doesn't allow us to evaluate xpaths on these,
-                # but we need it for lic, we hack in support for it by
-                # generating a derived xpath that gets the expected results while
-                # actually being evaluated on the parent
-                fixed_xpath = f"./@{src_xml.attrname}"
-                if xp.path[0:1] != "/":
-                    fixed_xpath += "/"
-                fixed_xpath += xp.path
-                xpath_matches = src_xml.getparent().xpath(fixed_xpath)
-            else:
-                xpath_matches = (xp.evaluate(src_xml))  # type: ignore
+            xpath_matches = eval_xpath(src_xml, xp)
         except lxml.etree.XPathError:
             raise ScrMatchError(
                 f"xpath matching failed for: '{self.xpath}' in {doc_path}"
@@ -218,6 +257,23 @@ class Locator(ConfigDataClass):
             raise ScrMatchError(
                 f"xpath matching failed for: '{self.xpath}' in {doc_path}"
             )
+
+        if self.xpath_sibling_match_depth > 0:
+            # we deduplicate based on the match and it's parent, because
+            # non identical unicode results with the same text will otherwise
+            # be merged
+            matches: OrderedDict[tuple[lxml.html.HtmlElement, lxml.html.HtmlElement], None] = OrderedDict()
+            for xm in xpath_matches:
+                # the sibling xpath will match the original element aswell,
+                # so no need to add it manually
+                sibling_xpath = build_sibling_xpath(src_xml, xm, self.xpath_sibling_match_depth)
+                sibling_matches = eval_xpath(src_xml, sibling_xpath)
+                if not isinstance(sibling_matches, list):
+                    continue
+
+                for match in sibling_matches:
+                    matches[(match.getparent(), match)] = None
+            xpath_matches = [k[1] for k in matches.keys()]
 
         if len(xpath_matches) > 1 and not self.multimatch:
             xpath_matches = xpath_matches[:1]

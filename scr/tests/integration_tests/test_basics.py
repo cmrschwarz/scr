@@ -15,7 +15,6 @@ def test_basic_xpath(cli_env: CliEnv) -> None:
 
 
 def test_lic(cli_env: CliEnv) -> None:
-    # TODO: allow lic to get out of text() content xpathes
     run_scr(
         cli_env,
         args=[
@@ -26,6 +25,68 @@ def test_lic(cli_env: CliEnv) -> None:
             "cpf={l}|{c}\n"
         ],
         stdout="foo|foo\nbar|bar\nbaz|baz\n",
+    )
+
+
+def test_lic_with_text(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li/text()",
+            "lic",
+            "lx=../text()",
+            "cpf={l}|{c}\n"
+        ],
+        stdout="foo|foo\nbar|bar\nbaz|baz\n",
+    )
+
+
+def test_cxs(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li[@id='bar']/text()",
+            "cxs=1",
+        ],
+        stdout=["foo", "bar", "baz"]
+    )
+
+
+def test_cxs_deduplication(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li/text()",
+            "cxs=1",
+        ],
+        stdout=["foo", "bar", "baz"]
+    )
+
+
+def test_cxs_no_dedup_on_unicode(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/two_lists.html",
+            "cx=//*[@id='l1e1']/text()",
+            "cxs=2",
+        ],
+        stdout=["foo", "bar", "baz", "foo", "bar", "baz"]
+    )
+
+
+def test_cxs_insufficient_level(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/two_lists.html",
+            "cx=//*[@id='l1e1']/@id",
+            "cxs=1",
+        ],
+        stdout=["l1e1", "l1e2", "l1e3"],
     )
 
 

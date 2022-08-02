@@ -800,7 +800,7 @@ def build_elem_xpath(root: 'lxml.html.HtmlElement', elem: 'lxml.html.HtmlElement
                 if e.tag == elem.tag:
                     index += 1
         res = f"/{elem.tag}[{index}]{res}"
-        if elem == root or parent is None:
+        if elem == root:
             return res
         assert parent is not None
         elem = parent

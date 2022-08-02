@@ -46,7 +46,7 @@ scr url=google.com cx='//img/@src' cl csf="img_{ci}{fe}"
 ### Open up a REPL, remote controlling a Firefox Browser using selenium
 ```bash
 scr repl sel=firefox url="https://en.wikipedia.org/wiki/web_scraping"
-scr> 'cx=//span[text()="Edit"]/parent::*/parent::*/@id' cjs="document.getElementById(cx).children[0].click()"
+scr> 'cx=//span[text()="Edit"]/../../@id' cjs="document.getElementById(cx).children[0].click()"
 scr> exit
 ```
 
