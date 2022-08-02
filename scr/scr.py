@@ -364,6 +364,13 @@ def gen_default_format(mc: 'match_chain.MatchChain') -> str:
     return form
 
 
+def mc_context(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> str:
+    if len(ctx.match_chains) == 0 or mc.chain_id is None:
+        return ""
+    else:
+        return f"match chain {mc.chain_id}: "
+
+
 def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> None:
 
     mc.apply_defaults(ctx.defaults_mc)
@@ -371,9 +378,9 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     mc.di = mc.dimin
 
     if mc.dimin > mc.dimax:
-        raise ScrSetupError("dimin can't exceed dimax")
+        raise ScrSetupError(f"{mc_context(mc, ctx)}dimin can't exceed dimax")
     if mc.cimin > mc.cimax:
-        raise ScrSetupError("cimin can't exceed cimax")
+        raise ScrSetupError(f"{mc_context(mc, ctx)}cimin can't exceed cimax")
 
     if mc.content_write_format is not None and mc.content_save_format is None:
         mc.content_save_format = DEFAULT_CSF
@@ -402,12 +409,19 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.loc_label.interactive or mc.loc_content.interactive:
         mc.has_interactive_matching = True
 
+    content_output_variants = [
+        mc.content_print_format,
+        mc.content_save_format,
+        mc.content_shell_command_format,
+        mc.content_forward_format
+    ]
+
     if mc.has_label_matching or mc.loc_content.is_active():
         mc.has_content_matching = True
-    elif mc.content_print_format or mc.content_save_format:
+    elif any(content_output_variants):
         mc.has_content_matching = True
 
-    if mc.has_content_matching and mc.content_print_format is None and mc.content_save_format is None:
+    if mc.has_content_matching and all((lambda o: o is None, content_output_variants)):
         mc.content_print_format = DEFAULT_CPF
 
     if not mc.content_raw:
@@ -421,10 +435,18 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         validate_format(mc, ["content_print_format"],
                         dummy_cm, True, True, not mc.content_raw)
 
+    if mc.content_shell_command_format:
+        validate_format(mc, ["content_command_format"],
+                        dummy_cm, True, True, not mc.content_raw)
+
+    if mc.content_forward_format:
+        validate_format(mc, ["content_forward_format"],
+                        dummy_cm, True, True, not mc.content_raw)
+
     if mc.content_save_format is not None:
         if mc.content_save_format == "":
             raise ScrSetupError(
-                f"csf cannot be the empty string: {mc.get_configuring_argument(['content_save_format'])}"
+                f"{mc_context(mc, ctx)}csf cannot be the empty string: {mc.get_configuring_argument(['content_save_format'])}"
             )
         validate_format(mc, ["content_save_format"], dummy_cm,
                         True, False, not mc.content_raw)
@@ -438,12 +460,13 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.label_allow_missing = True
         if mc.labels_inside_content:
             raise ScrSetupError(
-                f"match chain {mc.chain_id}: cannot specify lic without lx or lr"
+                f"{mc_context(mc, ctx)}cannot specify lic without lx or lr"
             )
     default_format: Optional[str] = None
 
     output_formats = [
         mc.content_print_format,
+        mc.content_shell_command_format,
         mc.content_save_format,
         mc.content_write_format  # this is none if save is None
     ]

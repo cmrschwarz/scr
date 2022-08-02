@@ -306,9 +306,10 @@ class DownloadJob:
         if not cm.mc.content_save_format:
             return InteractiveResult.ACCEPT
         if cm.llm and not cm.mc.is_valid_label(cm.llm.result):
-            scr.log(cm.mc.ctx, Verbosity.WARN,
-                    f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
-                    )
+            scr.log(
+                cm.mc.ctx, Verbosity.WARN,
+                f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
+            )
             save_path = None
         if cm.mc.need_filename:
             if not self.fetch_content():

@@ -218,10 +218,9 @@ class Locator(ConfigDataClass):
         self.js_script = js_prelude + self.js_script
 
     def setup(self, mc: 'match_chain.MatchChain') -> None:
-        self.xpath = utils.empty_string_to_none(cast(str, self.xpath))
+        self.xpath = cast(str, self.xpath)
         assert self.regex is None or type(self.regex) is str
-        self.regex = utils.empty_string_to_none(self.regex)
-        self.format = utils.empty_string_to_none(self.format)
+        self.regex = self.regex
         self.setup_xpath(mc)
         self.setup_regex(mc)
         self.setup_js(mc)

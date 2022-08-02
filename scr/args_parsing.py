@@ -41,9 +41,11 @@ def help(err: bool = False) -> None:
         cwf=<format string>   format to write to file. defaults to \"{DEFAULT_CWF}\"
         cpf=<format string>   print the result of this format string for each content, empty to disable
                               defaults to \"{DEFAULT_CPF}\" if cpf, csf and cfc are unspecified
+        cshf=<format string>  execute a shell command resulting from the given format string
+        cshp=<bool>           pipe the content into the stdin of the command specified by cshf
         cfc=<chain spec>      forward content match as a virtual document
         cff=<format string>   format of the virtual document forwarded to the cfc chains. defaults to \"{DEFAULT_CWF}\"
-        csin<bool>            give a promt to edit the save path for a file
+        csin<bool>            give a prompt to edit the save path for a file
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to \"{DEFAULT_ESCAPE_SEQUENCE}\"
@@ -582,6 +584,10 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "cwf", ["content_write_format"], arg):
             continue
         if apply_mc_arg(ctx, "csf", ["content_save_format"], arg):
+            continue
+        if apply_mc_arg(ctx, "cshf", ["content_shell_command_format"], arg):
+            continue
+        if apply_mc_arg(ctx, "cshp", ["content_shell_command_pipe_stdin"], arg):
             continue
         if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg, True):
             continue
