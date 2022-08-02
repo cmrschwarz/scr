@@ -31,9 +31,10 @@ def help(err: bool = False) -> None:
         cr=<regex>            regex for content matching
         cjs=<js string>       javascript to execute on the page, format args are available as js variables (selenium only)
         cf=<format string>    content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
+        cxs=<int|empty>       also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
         cmm=<bool>            allow multiple content matches in one document instead of picking the first (defaults to true)
-        cimin=<number>        initial content index, each successful match gets one index
-        cimax=<number>        max content index, matching stops here
+        cimin=<int>           initial content index, each successful match gets one index
+        cimax=<int>           max content index, matching stops here
         cicont=<bool>         don't reset the content index for each document
         csf=<format string>   save content to file at the path resulting from the format string, empty to enable
         cwf=<format string>   format to write to file. defaults to \"{DEFAULT_CWF}\"
@@ -53,6 +54,7 @@ def help(err: bool = False) -> None:
         lr=<regex>           regex for label matching
         ljs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         lf=<format string>   label format string
+        lxs=<int|empty>      also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
         lic=<bool>           match for the label within the content match instead of the hole document
         las=<bool>           allow slashes in labels
         lmm=<bool>           allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -65,8 +67,9 @@ def help(err: bool = False) -> None:
         dr=<regex>           regex for document matching
         djs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         df=<format string>   document format string
-        dimin=<number>       initial document index, each successful match gets one index
-        dimax=<number>       max document index, matching stops here
+        dxs=<int|empty>      also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
+        dimin=<int>          initial document index, each successful match gets one index
+        dimax=<int>          max document index, matching stops here
         dmm=<bool>           allow multiple document matches in one document instead of picking the first
         din=<bool>           give a prompt to ignore a potential document match
         denc=<encoding>      default document encoding to use for following documents, default is utf-8
@@ -142,15 +145,15 @@ def help(err: bool = False) -> None:
         version                print version information
 
     Global Options:
-        timeout=<seconds>      seconds before a web request timeouts (default {DEFAULT_TIMEOUT_SECONDS})
+        timeout=<float>        seconds before a web request timeouts (default {DEFAULT_TIMEOUT_SECONDS})
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>            user agent to pass in the html header for url GETs
         uar=<bool>             use a rangom user agent
         selkeep=<bool>         keep selenium instance alive after the command finished
         cookiefile=<path>      path to a netscape cookie file. cookies are passed along for url GETs
-        sel=<browser|bool>     use selenium (default is firefox) to load urls into an interactive browser session
-                               (default: disabled, values: tor, chrome, firefox, disabled)
+        sel=<browser|empty>    use selenium to load urls into an interactive browser session
+                               (empty means firefox, default: disabled, values: tor, chrome, firefox, disabled)
         selh=<bool>            use selenium in headless mode, implies sel
         tbdir=<path>           root directory of the tor browser installation, implies sel=tor
                                (default: environment variable TOR_BROWSER_DIR)
@@ -264,8 +267,8 @@ def parse_mc_range(ctx: 'scr_context.ScrContext', mc_spec: str, arg: str) -> Ite
 
 def parse_mc_arg(
     ctx: 'scr_context.ScrContext', argname: str, arg: str,
-    support_blank: bool = False, blank_value: str = ""
-) -> Optional[tuple[Iterable['match_chain.MatchChain'], str]]:
+    support_blank: bool = False
+) -> Optional[tuple[Iterable['match_chain.MatchChain'], Optional[str]]]:
     if not utils.begins(arg, argname):
         return None
     argname_len = len(argname)
@@ -278,7 +281,7 @@ def parse_mc_arg(
         elif not support_blank:
             raise ScrSetupError("missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
-        value = blank_value
+        value = None
     else:
         mc_spec = arg[argname_len: eq_pos]
         if not MATCH_CHAIN_ARGUMENT_REGEX.match(mc_spec):
@@ -297,14 +300,19 @@ def parse_mc_arg_as_range(
 def apply_mc_arg(
     ctx: 'scr_context.ScrContext', argname: str, config_opt_names: list[str], arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
-    support_blank: bool = False, blank_value: str = ""
+    support_blank: bool = False, blank_value: Optional[Any] = None
 ) -> bool:
-    parse_result = parse_mc_arg(
-        ctx, argname, arg, support_blank, blank_value)
+    parse_result = parse_mc_arg(ctx, argname, arg, support_blank)
     if parse_result is None:
         return False
     mcs, value = parse_result
-    value = value_parse(value, arg)
+    if value is None:
+        if blank_value is None:
+            value = value_parse("", arg)
+        else:
+            value = blank_value
+    else:
+        value = value_parse(value, arg)
     mcs = list(mcs)
     # so the lowest possible chain generates potential errors
     mcs.sort(key=lambda mc: mc.chain_id if mc.chain_id else float("inf"))
@@ -346,6 +354,13 @@ def parse_int_arg(v: str, arg: str) -> int:
         return int(v)
     except ValueError:
         raise ScrSetupError(f"cannot parse '{v}' as an integer in '{arg}'")
+
+
+def parse_non_negative_int_arg(v: str, arg: str) -> int:
+    i = parse_int_arg(v, arg)
+    if i < 0:
+        raise ScrSetupError(f"illegal negative value '{v}' for '{arg}'")
+    return i
 
 
 def parse_non_negative_float_arg(v: str, arg: str) -> float:
@@ -405,6 +420,7 @@ def apply_doc_arg(
     if parse_result is None:
         return False
     mcs, path = parse_result
+    assert path is not None
     mcs = list(mcs)
     if mcs == [ctx.defaults_mc]:
         extend_chains_above = len(ctx.match_chains)
@@ -439,13 +455,16 @@ def parse_plain_arg(
     optname: str, arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
     support_blank: bool = False,
-    blank_val: str = ""
+    blank_val: Optional[Any] = None
 ) -> Optional[Any]:
     if not utils.begins(arg, optname):
         return None
     if len(optname) == len(arg):
         if support_blank:
-            val = blank_val
+            if blank_val is None:
+                val = value_parse("", arg)
+            else:
+                val = blank_val
         else:
             raise ScrSetupError(
                 f"missing '=' and value for option '{optname}'"
@@ -458,15 +477,15 @@ def parse_plain_arg(
             )
         if nc[0] != "=":
             return None
-        val = get_arg_val(arg)
-    return value_parse(val, arg)
+        val = value_parse(get_arg_val(arg), arg)
+    return val
 
 
 def apply_ctx_arg(
     ctx: 'scr_context.ScrContext', optname: str, argname: str, arg: str,
     value_parse: Callable[[str, str], Any] = lambda x, _arg: x,
     support_blank: bool = False,
-    blank_val: str = ""
+    blank_val: Any = None
 ) -> bool:
     val = parse_plain_arg(optname, arg, value_parse, support_blank, blank_val)
     if val is None:
@@ -526,6 +545,9 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             ctx.special_args_occured = True
             continue
 
+        # we need a "infinite" int value default fox cxs/lxs/dxs
+        int_max = 2**64 - 1
+
         # content args
         if apply_mc_arg(ctx, "cx", ["loc_content", "xpath"], arg):
             continue
@@ -534,6 +556,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "cf", ["loc_content", "format"], arg):
             continue
         if apply_mc_arg(ctx, "cjs", ["loc_content", "js_script"], arg):
+            continue
+        if apply_mc_arg(ctx, "cxs", ["loc_content", "xpath_sibling_match_depth"], arg, parse_non_negative_int_arg, True, int_max):
             continue
         if apply_mc_arg(ctx, "cmm", ["loc_content", "multimatch"], arg, parse_bool_arg, True):
             continue
@@ -578,6 +602,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "ljs", ["loc_label", "js_script"], arg):
             continue
+        if apply_mc_arg(ctx, "lxs", ["loc_label", "xpath_sibling_match_depth"], arg, parse_non_negative_int_arg, True, int_max):
+            continue
         if apply_mc_arg(ctx, "lmm", ["loc_label", "multimatch"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "lin", ["loc_label", "interactive"], arg, parse_bool_arg, True):
@@ -601,6 +627,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "df", ["loc_document", "format"], arg):
             continue
         if apply_mc_arg(ctx, "djs", ["loc_document", "js_script"], arg):
+            continue
+        if apply_mc_arg(ctx, "dxs", ["loc_document", "xpath_sibling_match_depth"], arg, parse_non_negative_int_arg, True, int_max):
             continue
         if apply_mc_arg(ctx, "doc", ["document_output_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue

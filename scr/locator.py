@@ -81,6 +81,7 @@ class Locator(ConfigDataClass):
     format: Optional[str] = None
     multimatch: bool = True
     interactive: bool = False
+    xpath_sibling_match_depth: int = 0
     __annotations__: dict[str, type]
 
     _config_slots_: list[str] = (

@@ -31,7 +31,7 @@ Selenium drivers for Firefox/Tor (``geckodriver``), and chrome/chromium
 (``chromedriver``) can be installed e.g. using
 ```
 scr selinstall=firefox
-``` 
+```
 (and later updated e.g. using ``scr selupdate=chrome``).
 You still need to have the browser installed, though.
 
@@ -40,7 +40,7 @@ You still need to have the browser installed, though.
 
 ### Download and enumerate all images from a website into the current working directory:
 ```bash
-scr url=google.com cx='//img/@src' cl csf="img_{ci}{fe}" 
+scr url=google.com cx='//img/@src' cl csf="img_{ci}{fe}"
 ```
 
 ### Open up a REPL, remote controlling a Firefox Browser using selenium
@@ -70,6 +70,7 @@ scr [OPTIONS]
 
     Content to Write out:
         cx=<xpath>            xpath for content matching
+        cxsd=<>
         cr=<regex>            regex for content matching
         cjs=<js string>       javascript to execute on the page, format args are available as js variables (selenium only)
         cf=<format string>    content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
@@ -184,7 +185,7 @@ scr [OPTIONS]
         version                print version information
 
     Global Options:
-        timeout=<seconds>      seconds before a web request timeouts (default 30)
+        timeout=<float>        seconds before a web request timeouts (default 30)
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>            user agent to pass in the html header for url GETs
