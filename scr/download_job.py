@@ -379,7 +379,6 @@ class DownloadJob:
             proxies = {
                 "http": f"socks5h://localhost:{tbdriver.socks_port}",
                 "https": f"socks5h://localhost:{tbdriver.socks_port}",
-                "data": None
             }
         try:
             try:

@@ -693,7 +693,7 @@ def request_exception_to_scr_fetch_error(ex: requests.exceptions.RequestExceptio
 def request_raw(
     ctx: 'scr_context.ScrContext', path: str, path_parsed: urllib.parse.ParseResult,
     cookie_dict: Optional[dict[str, dict[str, dict[str, Any]]]] = None,
-    proxies: Optional[dict[str, Optional[str]]] = None, stream: bool = False
+    proxies: Optional[dict[str, str]] = None, stream: bool = False
 ) -> requests.Response:
     hostname = path_parsed.hostname if path_parsed.hostname else ""
     if cookie_dict is None:
@@ -702,6 +702,7 @@ def request_raw(
         name: ck["value"]
         for name, ck in cookie_dict.get(hostname, {}).items()
     }
+    assert ctx.user_agent is not None
     headers = {'User-Agent': ctx.user_agent}
 
     res = requests.get(
