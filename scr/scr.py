@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from datetime import datetime
 from typing import Any, Optional, BinaryIO, Union, cast
 
 import shutil
@@ -870,10 +871,12 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
             selpath = doc.path
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.abspath(selpath)
+
+            fetch_begin = datetime.now()
             try:
                 cast(SeleniumWebDriver, ctx.selenium_driver).get(selpath)
             except SeleniumTimeoutException:
-                ScrFetchError("selenium timeout")
+                raise ScrFetchError("selenium timeout")
             except SeleniumWebDriverException as ex:
                 try:
                     if (
@@ -884,6 +887,16 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
                 except IOError:
                     pass
                 raise ex
+            while (datetime.now() - fetch_begin).total_seconds() < ctx.request_timeout_seconds:
+                try:
+                    result = selenium_setup.selenium_exec_script(ctx, "return document.readyState == 'complete';")
+                    if result is True:
+                        break
+                    time.sleep(0)
+                except SeleniumTimeoutException:
+                    raise ScrFetchError("selenium timeout")
+                except SeleniumWebDriverException as ex:
+                    raise ex
         log(
             ctx, Verbosity.INFO,
             f"reloading selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
