@@ -73,10 +73,8 @@ class OutputFormatter:
         self, format_str: str, cm: 'content_match.ContentMatch',
         out_stream: Union[BinaryIO, 'download_job.PrintOutputStream'],
         content: Union[str, bytes, 'download_job.MinimalInputStream', BinaryIO, None],
-        filename: Optional[str]
     ) -> None:
-        self._args_dict = content_match_build_format_args(
-            cm, content, filename)
+        self._args_dict = content_match_build_format_args(cm, content)
         self._args_list = []  # no positional args right now
 
         # we reverse these lists so we can take out elements using pop()
@@ -104,7 +102,7 @@ class OutputFormatter:
                     break
 
             while self._format_parts:
-                (text, key, format_args, b) = self._format_parts.pop()
+                (text, key, format_args, _b) = self._format_parts.pop()
                 if text:
                     self._out_stream.write(text.encode("utf-8"))
                 if key is not None:
@@ -126,7 +124,6 @@ class OutputFormatter:
             if not self._found_stream:
                 break
 
-        assert buffer is None
         assert not self._format_parts
         self._out_stream.flush()
         return False
@@ -185,11 +182,10 @@ def apply_filename_format_args(filename: Optional[str], args_dict: dict[str, Any
 def content_match_build_format_args(
     cm: 'content_match.ContentMatch',
     content: Any = None,
-    filename: Optional[str] = None
 ) -> dict[str, Any]:
     args_dict: dict[str, Any] = {}
     apply_general_format_args(cm.doc, cm.mc, args_dict, ci=cm.ci)
-    apply_filename_format_args(filename, args_dict)
+    apply_filename_format_args(cm.filename, args_dict)
     if content is not None:
         args_dict["c"] = content
 
@@ -311,11 +307,11 @@ def format_strings_args_occurence(
 def validate_format(
     conf: config_data_class.ConfigDataClass, attrib_path: list[str],
     dummy_cm: 'content_match.ContentMatch',
-    unescape: bool, has_content: bool = False, has_filename: bool = False
+    unescape: bool, has_content: bool = False
 ) -> None:
     try:
         known_keys = content_match_build_format_args(
-            dummy_cm, "" if has_content else None, "" if has_filename else None
+            dummy_cm, "" if has_content else None
         )
         unnamed_key_count = 0
         fmt_keys = get_format_string_keys(conf.resolve_attrib_path(
@@ -331,6 +327,8 @@ def validate_format(
                         f"exceeded number of ordered keys in {conf.get_configuring_argument(attrib_path)}"
                     )
             elif k not in known_keys:
+                # TODO: maybe add some context dependant clues here
+                # example: no {fn} if you forget cl
                 raise ScrSetupError(
                     f"unavailable key '{{{k}}}' in {conf.get_configuring_argument(attrib_path)}"
                 )
@@ -365,7 +363,7 @@ def gen_default_format(mc: 'match_chain.MatchChain') -> str:
 
 
 def mc_context(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> str:
-    if len(ctx.match_chains) == 0 or mc.chain_id is None:
+    if len(ctx.match_chains) <= 1 or mc.chain_id is None:
         return ""
     else:
         return f"match chain {mc.chain_id}: "
@@ -421,7 +419,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     elif any(content_output_variants):
         mc.has_content_matching = True
 
-    if mc.has_content_matching and all((lambda o: o is None, content_output_variants)):
+    if mc.has_content_matching and all(cov is None for cov in content_output_variants):
         mc.content_print_format = DEFAULT_CPF
 
     if not mc.content_raw:
@@ -430,31 +428,26 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         # prepare chain to be used in the document -> content link optimization
         mc.content_raw = False
 
-    dummy_cm = mc.gen_dummy_content_match()
+    dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
     if mc.content_print_format:
-        validate_format(mc, ["content_print_format"],
-                        dummy_cm, True, True, not mc.content_raw)
+        validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
     if mc.content_shell_command_format:
-        validate_format(mc, ["content_command_format"],
-                        dummy_cm, True, True, not mc.content_raw)
+        validate_format(mc, ["content_command_format"], dummy_cm, True, True)
 
     if mc.content_forward_format:
-        validate_format(mc, ["content_forward_format"],
-                        dummy_cm, True, True, not mc.content_raw)
+        validate_format(mc, ["content_forward_format"], dummy_cm, True, True)
 
     if mc.content_save_format is not None:
         if mc.content_save_format == "":
             raise ScrSetupError(
                 f"{mc_context(mc, ctx)}csf cannot be the empty string: {mc.get_configuring_argument(['content_save_format'])}"
             )
-        validate_format(mc, ["content_save_format"], dummy_cm,
-                        True, False, not mc.content_raw)
+        validate_format(mc, ["content_save_format"], dummy_cm, True, False)
         if mc.content_write_format is None:
             mc.content_write_format = DEFAULT_CWF
         else:
-            validate_format(mc, ["content_write_format"],
-                            dummy_cm, True, True, not mc.content_raw)
+            validate_format(mc, ["content_write_format"], dummy_cm, True, True)
 
     if not mc.has_label_matching:
         mc.label_allow_missing = True
@@ -464,6 +457,14 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
             )
     default_format: Optional[str] = None
 
+    if mc.label_default_format is None:
+        if mc.label_allow_missing and mc.need_label:
+            if default_format is None:
+                default_format = gen_default_format(mc)
+            mc.label_default_format = default_format
+    else:
+        validate_format(mc, ["label_default_format"], dummy_cm, True, False)
+
     output_formats = [
         mc.content_print_format,
         mc.content_shell_command_format,
@@ -471,9 +472,17 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_write_format  # this is none if save is None
     ]
 
-    mc.need_filename = format_strings_args_occurence(
-        output_formats,
-        ["fn", "fb", "fe"]
+    label_formats = [mc.loc_label.format, mc.label_default_format]
+
+    filename_format_occurences = ["fn", "fb", "fe"]
+
+    # because of lin / csin
+    mc.need_filename_for_interaction = format_strings_args_occurence(
+        [*label_formats, mc.content_save_format], filename_format_occurences
+    ) > 0
+
+    mc.need_filename = mc.need_filename_for_interaction or format_strings_args_occurence(
+        output_formats, filename_format_occurences
     ) > 0
 
     mc.need_content = format_strings_args_occurence(
@@ -493,21 +502,11 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
             default_format = gen_default_format(mc)
             mc.filename_default_format = default_format + ".dat"
     else:
-        validate_format(
-            mc, ["filename_default_format"],
-            dummy_cm, True, False, False
-        )
+        fn = dummy_cm.filename
+        dummy_cm.filename = None
+        validate_format(mc, ["filename_default_format"], dummy_cm, True, False)
+        dummy_cm.filename = fn
 
-    if mc.label_default_format is None:
-        if mc.label_allow_missing and mc.need_label:
-            if default_format is None:
-                default_format = gen_default_format(mc)
-            mc.label_default_format = default_format
-    else:
-        validate_format(
-            mc, ["label_default_format"],
-            dummy_cm, True, False, False
-        )
     if not mc.has_content_matching and not mc.has_document_matching:
         if not (mc.chain_id == 0 and (mc.ctx.repl or mc.ctx.special_args_occured)):
             raise ScrSetupError(
@@ -964,9 +963,9 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
     return
 
 
-def gen_final_content_format(format_str: str, cm: 'content_match.ContentMatch', filename: Optional[str] = None) -> bytes:
+def gen_final_content_format(format_str: str, cm: 'content_match.ContentMatch') -> bytes:
     with BytesIO(b"") as buf:
-        of = OutputFormatter(format_str, cm, buf, None, filename)
+        of = OutputFormatter(format_str, cm, buf, None)
         while of.advance():
             pass
         buf.seek(0)
@@ -987,28 +986,26 @@ def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
     return di_ci_context
 
 
+def get_content_type_label(cm: 'content_match.ContentMatch') -> str:
+    return "content match" if cm.mc.content_raw else "content link"
+
+
 def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Optional[str]) -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.loc_content.apply_format_for_content_match(cm, cm.clm)
     cm.mc.ci += 1
 
-    if cm.llm is None:
-        if cm.mc.need_label:
-            cm.llm = locator.LocatorMatch()
-            cm.llm.fres = cast(str, cm.mc.label_default_format).format(
-                **content_match_build_format_args(cm)
-            )
-            cm.llm.result = cm.llm.fres
-    else:
-        cm.mc.loc_label.apply_format_for_content_match(cm, cm.llm)
-
     di_ci_context = get_ci_di_context(cm)
+    content_type = get_content_type_label(cm)
 
-    if cm.llm is not None:
-        label_context = f' (label "{cm.llm.result}")'
+    if cm.llm is not None and cm.llm.rmatch is not None:
+        label_context = f' (label match was "{cm.llm.rmatch}")'
     else:
-        label_context = ""
+        if cm.mc.need_label:
+            label_context = " (no label match)"
+        else:
+            label_context = ""
 
     while True:
         if not cm.mc.content_raw:
@@ -1017,7 +1014,7 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
                 cm.mc.ctx, cm.mc, cm.doc.document_type, cm.doc.path_parsed,
                 last_doc_path, cm.clm.result, cm.url_parsed
             )
-        content_type = "content match" if cm.mc.content_raw else "content link"
+
         if cm.mc.loc_content.interactive:
             prompt_options = [
                 (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
@@ -1062,49 +1059,11 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
                         cm.clm.result = cm.clm.result[:i]
                         break
         break
-    if cm.mc.loc_label.interactive:
-        assert cm.llm is not None
-        while True:
-            if not cm.mc.is_valid_label(cm.clm.result):
-                log(cm.mc.ctx, Verbosity.WARN,
-                    f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")')
-            else:
-                prompt_options = [
-                    (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
-                    (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
-                    (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
-                    (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
-                    (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
-                ]
-                if cm.mc.content_raw:
-                    prompt_options.append(
-                        (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
-                    inspect_opt_str = "/inspect"
-                    prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.llm.result}"'
-                else:
-                    inspect_opt_str = ""
-                    prompt_msg = f'"{cm.doc.path}": {content_type} {cm.clm.result}{di_ci_context}: accept content label "{cm.llm.result}"'
-
-                res = prompt(
-                    f'{prompt_msg} [Yes/no/edit/{inspect_opt_str}/chainskip/docskip]? ',
-                    prompt_options,
-                    InteractiveResult.ACCEPT
-                )
-                if res == InteractiveResult.ACCEPT:
-                    break
-                if res == InteractiveResult.INSPECT:
-                    print(
-                        f'"{cm.doc.path}": {content_type} for "{cm.llm.result}":\n' + cm.clm.result)
-                    continue
-                if res != InteractiveResult.EDIT:
-                    return res
-            cm.llm.result = input("enter new label: ")
 
     job = download_job.DownloadJob(cm)
-    if cm.mc.save_path_interactive:
-        res = job.handle_save_path()
-        if res != InteractiveResult.ACCEPT:
-            return res
+    res = job.handle_user_interaction()
+    if res != InteractiveResult.ACCEPT:
+        return res
     if cm.mc.ctx.dl_manager is not None:
         if job.requires_download():
             cm.mc.ctx.dl_manager.submit(job)

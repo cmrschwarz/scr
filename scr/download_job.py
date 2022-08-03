@@ -4,7 +4,8 @@ from .definitions import (
 )
 from .input_sequences import (
     YES_INDICATING_STRINGS, NO_INDICATING_STRINGS, EDIT_INDICATING_STRINGS,
-    CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS
+    CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS,
+    INSPECT_INDICATING_STRINGS
 )
 from typing import Optional, BinaryIO, Union, cast, Iterator
 import os
@@ -17,7 +18,7 @@ from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
 from . import (
-    progress_report, content_match, scr, utils, scr_context, selenium_setup
+    progress_report, content_match, scr, utils, scr_context, selenium_setup, locator
 )
 from collections import OrderedDict
 import threading
@@ -250,7 +251,6 @@ class DownloadJob:
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: Optional[ContentFormat] = None
-    filename: Optional[str] = None
     status_report: Optional['progress_report.DownloadStatusReport'] = None
 
     cm: 'content_match.ContentMatch'
@@ -278,16 +278,16 @@ class DownloadJob:
         )
 
     def gen_fallback_filename(self, dont_use_url: bool = False) -> bool:
-        if self.filename is not None or not self.cm.mc.need_filename:
+        if self.cm.filename is not None or not self.cm.mc.need_filename:
             return True
         if not dont_use_url:
             path = cast(urllib.parse.ParseResult, self.cm.url_parsed).path
-            self.filename = scr.sanitize_filename(urllib.parse.unquote(path))
-            if self.filename is not None and len(self.filename) < URL_FILENAME_MAX_LEN:
+            self.cm.filename = scr.sanitize_filename(urllib.parse.unquote(path))
+            if self.cm.filename is not None and len(self.cm.filename) < URL_FILENAME_MAX_LEN:
                 return True
         try:
-            self.filename = scr.gen_final_content_format(
-                cast(str, self.cm.mc.filename_default_format), self.cm, None
+            self.cm.filename = scr.gen_final_content_format(
+                cast(str, self.cm.mc.filename_default_format), self.cm
             ).decode("utf-8", errors="surrogateescape")
             return True
         except UnicodeDecodeError:
@@ -297,6 +297,67 @@ class DownloadJob:
                 + "generated default filename not valid utf-8"
             )
             return False
+
+    def handle_label_match(self) -> InteractiveResult:
+        cm = self.cm
+        if not cm.mc.need_label or (cm.llm is not None and cm.llm.fres is not None):
+            # this was already done during for interactive filename determination
+            return InteractiveResult.ACCEPT
+
+        if cm.mc.need_filename_for_interaction:
+            if not self.fetch_content():
+                return InteractiveResult.ERROR
+
+        if cm.llm is None:
+            if cm.mc.need_label:
+                cm.llm = locator.LocatorMatch()
+                cm.llm.fres = cast(str, cm.mc.label_default_format).format(
+                    **scr.content_match_build_format_args(cm)
+                )
+                cm.llm.result = cm.llm.fres
+        else:
+            cm.mc.loc_label.apply_format_for_content_match(cm, cm.llm)
+
+        if cm.mc.loc_label.interactive:
+            di_ci_context = scr.get_ci_di_context(cm)
+            content_type = scr.get_content_type_label(cm)
+            assert cm.llm is not None
+            while True:
+                if not cm.mc.is_valid_label(cm.llm.result):
+                    scr.log(cm.mc.ctx, Verbosity.WARN,
+                            f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")')
+                else:
+                    prompt_options = [
+                        (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
+                        (InteractiveResult.REJECT, NO_INDICATING_STRINGS),
+                        (InteractiveResult.EDIT, DOC_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.SKIP_CHAIN, CHAIN_SKIP_INDICATING_STRINGS),
+                        (InteractiveResult.SKIP_DOC, DOC_SKIP_INDICATING_STRINGS)
+                    ]
+                    if cm.mc.content_raw:
+                        prompt_options.append(
+                            (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
+                        inspect_opt_str = "/inspect"
+                        prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.llm.result}"'
+                    else:
+                        inspect_opt_str = ""
+                        prompt_msg = f'"{cm.doc.path}": {content_type} {cm.clm.result}{di_ci_context}: accept content label "{cm.llm.result}"'
+
+                    res = scr.prompt(
+                        f'{prompt_msg} [Yes/no/edit/{inspect_opt_str}/chainskip/docskip]? ',
+                        prompt_options,
+                        InteractiveResult.ACCEPT
+                    )
+                    if res == InteractiveResult.ACCEPT:
+                        break
+                    if res == InteractiveResult.INSPECT:
+                        print(
+                            f'"{cm.doc.path}": {content_type} for "{cm.llm.result}":\n' + cm.clm.result)
+                        continue
+                    if res != InteractiveResult.EDIT:
+                        return res
+                cm.llm.result = input("enter new label: ")
+        return InteractiveResult.ACCEPT
 
     def handle_save_path(self) -> 'InteractiveResult':
         if self.save_path is not None:
@@ -311,12 +372,10 @@ class DownloadJob:
                 f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
             )
             save_path = None
-        if cm.mc.need_filename:
+        if cm.mc.need_filename_for_interaction:
             if not self.fetch_content():
                 return InteractiveResult.ERROR
-        save_path_bytes = scr.gen_final_content_format(
-            cm.mc.content_save_format, cm, self.filename
-        )
+        save_path_bytes = scr.gen_final_content_format(cm.mc.content_save_format, cm)
         try:
             save_path = save_path_bytes.decode(
                 "utf-8", errors="surrogateescape"
@@ -360,6 +419,15 @@ class DownloadJob:
         self.save_path = save_path
         return InteractiveResult.ACCEPT
 
+    def handle_user_interaction(self) -> 'InteractiveResult':
+        res = InteractiveResult.ACCEPT
+
+        res = self.handle_label_match()
+        # TODO: handle skip chain/doc properly
+        if res.accepted():
+            return self.handle_save_path()
+        return res
+
     def selenium_download_from_local_file(self) -> bool:
         path = self.cm.clm.result
         self.content_format = ContentFormat.FILE
@@ -370,7 +438,7 @@ class DownloadJob:
                     offs += 1
             path = path[offs:]
         self.content = path
-        self.filename = os.path.basename(path)
+        self.cm.filename = os.path.basename(path)
         return True
 
     def selenium_download_external(self) -> bool:
@@ -391,7 +459,7 @@ class DownloadJob:
                 )
                 self.content = ResponseStreamWrapper(req)
                 self.content_format = ContentFormat.STREAM
-                self.filename = scr.request_try_get_filename(req)
+                self.cm.filename = scr.request_try_get_filename(req)
                 if self.status_report:
                     self.status_report.expected_size = (
                         scr.request_try_get_filesize(req)
@@ -523,7 +591,7 @@ class DownloadJob:
         self.content = binascii.a2b_base64(res["ok"])
         if self.status_report:
             self.status_report.expected_size = len(self.content)
-        self.filename = scr.try_get_filename_from_content_disposition(
+        self.cm.filename = scr.try_get_filename_from_content_disposition(
             res.get("content_disposition", "")
         )
         self.content_format = ContentFormat.BYTES
@@ -603,7 +671,7 @@ class DownloadJob:
                                 stream=True
                             )
                             self.content = ResponseStreamWrapper(res)
-                            self.filename = scr.request_try_get_filename(res)
+                            self.cm.filename = scr.request_try_get_filename(res)
                             if self.status_report:
                                 self.status_report.expected_size = (
                                     scr.request_try_get_filesize(res)
@@ -651,7 +719,7 @@ class DownloadJob:
 
         self.output_formatters.append(scr.OutputFormatter(
             cast(str, self.cm.mc.content_write_format),
-            self.cm, save_file, self.content, self.filename
+            self.cm, save_file, self.content
         ))
         return True
 
@@ -683,7 +751,7 @@ class DownloadJob:
             stream = sys.stdout.buffer
         self.output_formatters.append(scr.OutputFormatter(
             self.cm.mc.content_print_format, self.cm,
-            stream, self.content, self.filename
+            stream, self.content
         ))
         return True
 
@@ -694,12 +762,12 @@ class DownloadJob:
     def run_job(self) -> bool:
         if self.status_report:
             self.status_report.gen_display_name(
-                self.cm.url_parsed, self.filename, self.save_path
+                self.cm.url_parsed, self.cm.filename, self.save_path
             )
             self.status_report.enqueue()
         success = False
         try:
-            if self.handle_save_path() != InteractiveResult.ACCEPT:
+            if self.handle_user_interaction() != InteractiveResult.ACCEPT:
                 return False
             if not self.fetch_content():
                 return False
@@ -718,7 +786,7 @@ class DownloadJob:
             if self.status_report:
                 # try to generate a better name now that we have more information
                 self.status_report.gen_display_name(
-                    self.cm.url_parsed, self.filename, self.save_path
+                    self.cm.url_parsed, self.cm.filename, self.save_path
                 )
             if not self.setup_print_output():
                 return False

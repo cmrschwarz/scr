@@ -200,7 +200,7 @@ class Locator(ConfigDataClass):
         if self.format is None:
             return
         scr.validate_format(
-            self, ["format"], mc.gen_dummy_content_match(), True, False
+            self, ["format"], mc.gen_dummy_content_match(not mc.content_raw), True, False
         )
 
     def setup_js(self, mc: 'match_chain.MatchChain') -> None:
@@ -285,8 +285,7 @@ class Locator(ConfigDataClass):
                     lm.xmatch_xml = xm
             else:
                 try:
-                    lm.result = lxml.html.tostring(xm, encoding="unicode")
-                    lm.xmatch = lm.result
+                    lm.xmatch = lxml.html.tostring(xm, encoding="unicode")
                     if store_xml:
                         lm.xmatch_xml = xm
                 except (lxml.etree.LxmlError, UnicodeEncodeError) as ex1:

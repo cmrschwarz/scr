@@ -110,7 +110,7 @@ def run_scr(
         with open(of) as f:
             received = f.read()
         expected = output_files[of]
-        if received != expected:
+        if expected is not None and received != expected:
             raise ValueError(
                 f"output file '{of}' has wrong contents:\n{received_expected_strs(received, expected)}"
             )

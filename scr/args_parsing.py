@@ -45,7 +45,7 @@ def help(err: bool = False) -> None:
         cshp=<bool>           pipe the content into the stdin of the command specified by cshf
         cfc=<chain spec>      forward content match as a virtual document
         cff=<format string>   format of the virtual document forwarded to the cfc chains. defaults to \"{DEFAULT_CWF}\"
-        csin<bool>            give a prompt to edit the save path for a file
+        csin=<bool>            give a prompt to edit the save path for a file
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to \"{DEFAULT_ESCAPE_SEQUENCE}\"

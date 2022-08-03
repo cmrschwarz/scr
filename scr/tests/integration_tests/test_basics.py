@@ -28,6 +28,24 @@ def test_lic(cli_env: CliEnv) -> None:
     )
 
 
+def test_filename_in_interactive_label(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/content_disposition.html",
+            "cx=//iframe/@src",
+            "lf={fn}",
+            "cl",
+            "lin",
+            "cpf={l}\n",
+            "csf=dummy.txt",  # so we get a proper filename
+        ],
+        stdin="y\n",
+        output_files={"dummy.txt": None},
+        stdout='"../res/content_disposition.html": content link https://httpbin.org/response-headers?Access-Control-Expose-Headers=Content-Disposition&Content-Disposition=attachment;filename=content_disposition (ci=1): accept content label "content_disposition" [Yes/no/edit//chainskip/docskip]? content_disposition\n',
+    )
+
+
 def test_lic_with_text(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

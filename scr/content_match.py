@@ -8,6 +8,7 @@ class ContentMatch:
     llm: Optional['locator.LocatorMatch'] = None
     mc: 'match_chain.MatchChain'
     doc: 'document.Document'
+    filename: Optional[str] = None
 
     # these are set once we accept the CM, not during it's creation
     ci: Optional[int] = None

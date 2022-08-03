@@ -49,6 +49,9 @@ class InteractiveResult(Enum):
     ACCEPT_CHAIN = 6
     ERROR = 7
 
+    def accepted(self) -> bool:
+        return self == InteractiveResult.ACCEPT or self == InteractiveResult.ACCEPT_CHAIN
+
 
 class SeleniumVariant(Enum):
     DISABLED = 0

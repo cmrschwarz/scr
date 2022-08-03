@@ -76,6 +76,7 @@ class MatchChain(ConfigDataClass):
     need_content: bool = False
     need_label: bool = False
     need_filename: bool = False
+    need_filename_for_interaction: bool = False
     need_output_multipass: bool = False
     content_matches: list['content_match.ContentMatch']
     document_matches: list['document.Document']
@@ -110,7 +111,7 @@ class MatchChain(ConfigDataClass):
         d.encoding = ""
         return d
 
-    def gen_dummy_content_match(self) -> 'content_match.ContentMatch':
+    def gen_dummy_content_match(self, has_filename: bool) -> 'content_match.ContentMatch':
         clm = self.loc_content.gen_dummy_locator_match()
         if self.has_label_matching:
             llm = self.loc_label.gen_dummy_locator_match()
@@ -126,6 +127,7 @@ class MatchChain(ConfigDataClass):
             dcm.ci = 0
         if self.has_document_matching:
             dcm.di = 0
+        dcm.filename = "" if has_filename else None
         return dcm
 
     def accepts_content_matches(self) -> bool:
