@@ -1,3 +1,4 @@
+from typing import Any, NoReturn
 import pytest
 import shutil
 import os
@@ -21,3 +22,15 @@ def cli_env_root_dir(tmpdir_factory: pytest.TempdirFactory) -> str:
         # the whole res folder, which is luckily not that big
         shutil.copytree(res_dir, res_tgt)
     return root_dir
+
+
+# this makes sure that exceptions in tests are raise properly
+# see https://stackoverflow.com/questions/62419998/how-can-i-get-pytest-to-not-catch-exceptions
+if __debug__:
+    @pytest.hookimpl(tryfirst=True)  # type: ignore
+    def pytest_exception_interact(call: Any) -> NoReturn:
+        raise call.excinfo.value
+
+    @pytest.hookimpl(tryfirst=True)  # type: ignore
+    def pytest_internalerror(excinfo: Any) -> NoReturn:
+        raise excinfo.value
