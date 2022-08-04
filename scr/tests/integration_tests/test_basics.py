@@ -42,7 +42,11 @@ def test_filename_in_interactive_label(cli_env: CliEnv) -> None:
         ],
         stdin="y\n",
         output_files={"dummy.txt": None},
-        stdout='"../res/content_disposition.html": content link https://httpbin.org/response-headers?Access-Control-Expose-Headers=Content-Disposition&Content-Disposition=attachment;filename=content_disposition (ci=1): accept content label "content_disposition" [Yes/no/edit//chainskip/docskip]? content_disposition\n',
+        stdout='"../res/content_disposition.html": content link '
+        + 'https://httpbin.org/response-headers?Access-Control-Expose-Headers='
+        + 'Content-Disposition&Content-Disposition=attachment;filename=content_disposition'
+        + ' (ci=1): accept content label "content_disposition" '
+        + '[Yes/no/edit//chainskip/docskip]? content_disposition\n',
     )
 
 
