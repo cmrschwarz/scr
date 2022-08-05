@@ -65,7 +65,7 @@ def run_scr(
     stderr: Union[list[str], str] = "",
     ec: int = 0,
     stdin: Union[list[str], str] = "",
-    output_files: dict[str, str] = {},
+    output_files: dict[str, Optional[str]] = {},
     stdout_re: bool = False,
     stderr_re: bool = False
 ) -> None:

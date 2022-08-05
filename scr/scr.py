@@ -206,10 +206,6 @@ def content_match_build_format_args(
     return args_dict
 
 
-def log_raw(verbosity: Verbosity, msg: str) -> None:
-    sys.stderr.write(verbosities_display_dict[verbosity] + msg + "\n")
-
-
 BSE_U_REGEX_MATCH = re.compile("[0-9A-Fa-f]{4}")
 
 
@@ -264,11 +260,23 @@ def unescape_string(txt: str) -> str:
     return txt
 
 
-def log(ctx: 'scr_context.ScrContext', verbosity: Verbosity, msg: str) -> None:
+def check_log_message_needed(ctx: 'scr_context.ScrContext', verbosity: Verbosity) -> bool:
     if verbosity == Verbosity.ERROR:
         ctx.error_code = 1
-    if ctx.verbosity is None or ctx.verbosity >= verbosity:
-        log_raw(verbosity, msg)
+    return ctx.verbosity is None or ctx.verbosity >= verbosity
+
+
+def get_log_str(verbosity: Verbosity, msg: str) -> str:
+    return verbosities_display_dict[verbosity] + msg + "\n"
+
+
+def log_raw(msg: str) -> None:
+    sys.stderr.write(msg)
+
+
+def log(ctx: 'scr_context.ScrContext', verbosity: Verbosity, msg: str) -> None:
+    if check_log_message_needed(ctx, verbosity):
+        log_raw(get_log_str(verbosity, msg))
 
 
 def get_format_string_keys(fmt_string: str) -> list[str]:
@@ -1792,17 +1800,17 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
 def run_scr(args: list[str]) -> int:
     ctx = scr_context.ScrContext(blank=True)
     if len(args) < 2:
-        log_raw(
+        sys.stderr.write(get_log_str(
             Verbosity.ERROR,
             f"missing command line options. Consider {SCRIPT_NAME} --help"
-        )
+        ))
         return 1
 
     try:
         args_parsing.parse_args(ctx, args[1:])
         setup(ctx)
     except ScrSetupError as ex:
-        log_raw(Verbosity.ERROR, str(ex))
+        sys.stderr.write(get_log_str(Verbosity.ERROR, str(ex)))
         return 1
     if ctx.repl:
         ec = run_repl(ctx, args)

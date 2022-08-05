@@ -39,14 +39,37 @@ class ContentFormat(Enum):
     UNNEEDED = 5,
 
 
+class PrintOutputStream:
+    pom: 'PrintOutputManager'
+    id: int
+
+    def __init__(self, pom: 'PrintOutputManager') -> None:
+        self.pom = pom
+        self.id = pom.request_print_access()
+
+    def write(self, buffer: bytes, stderr: bool = False) -> int:
+        self.pom.print(self.id, buffer, stderr)
+        return len(buffer)
+
+    def write_str(self, buffer: str,  stderr: bool = False) -> int:
+        return self.write(buffer.encode("utf-8", errors="surrogateescape"), stderr)
+
+    def flush(self) -> None:
+        self.pom.flush(self.id)
+
+    def close(self) -> None:
+        self.pom.declare_done(self.id)
+
+
 class PrintOutputManager:
-    printing_buffers: OrderedDict[int, list[bytes]]
+    printing_buffers: OrderedDict[int, list[tuple[bytes, bool]]]
     finished_queues: set[int]
     lock: threading.Lock
     size_blocked: threading.Condition
     size_limit: int
     dl_ids: int = 0
     active_id: int = 0
+    active_id_stderr: bool = False
     main_thread_id: Optional[int] = None
 
     def __init__(self, max_buffer_size: int = DEFAULT_MAX_PRINT_BUFFER_CAPACITY) -> None:
@@ -58,6 +81,7 @@ class PrintOutputManager:
 
     def reset(self) -> None:
         self.active_id = 0
+        self.active_id_stderr = False
         self.dl_ids = 0
         self.main_thread_id = self.request_print_access()
 
@@ -66,7 +90,7 @@ class PrintOutputManager:
             self.declare_done(self.main_thread_id)
             self.main_thread_id = None
 
-    def print(self, id: int, buffer: bytes) -> None:
+    def print(self, id: int, buffer: bytes, stderr: bool) -> None:
         is_active = False
         with self.lock:
             while True:
@@ -74,19 +98,21 @@ class PrintOutputManager:
                     is_active = True
                     stored_buffers = self.printing_buffers.pop(id, [])
                     self.size_limit += sum(
-                        map(lambda b: len(b), stored_buffers)
+                        map(lambda b: len(b[0]), stored_buffers)
                     )
                     break
                 elif self.size_limit > len(buffer):
                     self.size_limit -= len(buffer)
-                    self.printing_buffers[id].append(buffer)
+                    self.printing_buffers[id].append((buffer, stderr))
                     break
                 self.size_blocked.wait()
         if is_active:
-            for b in stored_buffers:
-                sys.stdout.buffer.write(b)
-            sys.stdout.buffer.write(buffer)
-            if stored_buffers:
+            for (b, stderr) in [*stored_buffers, (buffer, stderr)]:
+                if stderr:
+                    sys.stderr.buffer.write(b)
+                else:
+                    sys.stdout.buffer.write(b)
+            if len(stored_buffers) != 0:
                 self.size_blocked.notifyAll()
 
     def request_print_access(self) -> int:
@@ -107,7 +133,7 @@ class PrintOutputManager:
 
     def declare_done(self, id: int) -> None:
         new_active_id = None
-        buffers_to_print: list[list[bytes]] = []
+        buffers_to_print: list[list[tuple[bytes, bool]]] = []
         with self.lock:
             if self.active_id != id:
                 self.finished_queues.add(id)
@@ -122,8 +148,11 @@ class PrintOutputManager:
                 new_active_id += 1
         while True:
             for bl in buffers_to_print:
-                for b in bl:
-                    sys.stdout.buffer.write(b)
+                for (b, stderr) in bl:
+                    if stderr:
+                        sys.stderr.buffer.write(b)
+                    else:
+                        sys.stdout.buffer.write(b)
             # after we printed and reacquire the lock, the job
             # that we want to give the active_id token to
             # might have finished already, in which case we have to print him too
@@ -149,25 +178,6 @@ class PrintOutputManager:
             if not id != self.active_id:
                 return
         sys.stdout.flush()
-
-
-class PrintOutputStream:
-    pom: PrintOutputManager
-    id: int
-
-    def __init__(self, pom: PrintOutputManager) -> None:
-        self.pom = pom
-        self.id = pom.request_print_access()
-
-    def write(self, buffer: bytes) -> int:
-        self.pom.print(self.id, buffer)
-        return len(buffer)
-
-    def flush(self) -> None:
-        self.pom.flush(self.id)
-
-    def close(self) -> None:
-        self.pom.declare_done(self.id)
 
 
 class MinimalInputStream(ABC):
@@ -248,6 +258,9 @@ class DownloadJob:
     temp_file_path: Optional[str] = None
     multipass_file: Optional[BinaryIO] = None
     print_stream: Optional[PrintOutputStream] = None
+    shell_out_stream: Optional[PrintOutputStream] = None
+    shell_err_stream: Optional[PrintOutputStream] = None
+    error_log_stream: Optional[PrintOutputStream] = None
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: Optional[ContentFormat] = None
@@ -265,8 +278,19 @@ class DownloadJob:
         )
         self.output_formatters = []
 
+    def log(self, verbosity: Verbosity, msg: str) -> None:
+        if scr.check_log_message_needed(self.cm.mc.ctx, verbosity):
+            log_msg = scr.get_log_str(verbosity, msg)
+            if self.error_log_stream is not None:
+                self.error_log_stream.write_str(log_msg, True)
+            else:
+                scr.log_raw(log_msg)
+
     def requires_download(self) -> bool:
         return self.cm.mc.need_content and not self.cm.mc.content_raw
+
+    def setup_log_stream(self, pom: 'PrintOutputManager') -> None:
+        self.error_log_stream = PrintOutputStream(pom)
 
     def setup_print_stream(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
@@ -291,8 +315,8 @@ class DownloadJob:
             ).decode("utf-8", errors="surrogateescape")
             return True
         except UnicodeDecodeError:
-            scr.log(
-                self.cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{self.cm.doc.path}{scr.get_ci_di_context(self.cm)}: "
                 + "generated default filename not valid utf-8"
             )
@@ -324,8 +348,10 @@ class DownloadJob:
             assert cm.llm is not None
             while True:
                 if not cm.mc.is_valid_label(cm.llm.result):
-                    scr.log(cm.mc.ctx, Verbosity.WARN,
-                            f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")')
+                    self.log(
+                        Verbosity.WARN,
+                        f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")'
+                    )
                 else:
                     prompt_options = [
                         (InteractiveResult.ACCEPT, YES_INDICATING_STRINGS),
@@ -367,8 +393,8 @@ class DownloadJob:
         if not cm.mc.content_save_format:
             return InteractiveResult.ACCEPT
         if cm.llm and not cm.mc.is_valid_label(cm.llm.result):
-            scr.log(
-                cm.mc.ctx, Verbosity.WARN,
+            self.log(
+                Verbosity.WARN,
                 f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
             )
             save_path = None
@@ -381,16 +407,17 @@ class DownloadJob:
                 "utf-8", errors="surrogateescape"
             )
         except UnicodeDecodeError:
-            scr.log(
-                cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{cm.doc.path}{scr.get_ci_di_context(cm)}: generated save path is not valid utf-8"
             )
             save_path = None
         while True:
             if save_path and not os.path.exists(os.path.dirname(os.path.abspath(save_path))):
-                scr.log(cm.mc.ctx, Verbosity.ERROR,
-                        f"{cm.doc.path}{scr.get_ci_di_context(cm)}: directory of generated save path does not exist"
-                        )
+                self.log(
+                    Verbosity.ERROR,
+                    f"{cm.doc.path}{scr.get_ci_di_context(cm)}: directory of generated save path does not exist"
+                )
                 save_path = None
             if not save_path and not cm.mc.save_path_interactive:
                 return InteractiveResult.ERROR
@@ -468,8 +495,8 @@ class DownloadJob:
             except requests.exceptions.RequestException as ex:
                 raise scr.request_exception_to_scr_fetch_error(ex)
         except ScrFetchError as ex:
-            scr.log(
-                self.cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{utils.truncate(self.cm.doc.path)}{scr.get_ci_di_context(self.cm)}: "
                 + f"failed to download '{utils.truncate(self.cm.clm.result)}': {str(ex)}"
             )
@@ -482,8 +509,8 @@ class DownloadJob:
         doc_url = urllib.parse.urlparse(doc_url_str)
 
         if doc_url.netloc != cast(urllib.parse.ParseResult, self.cm.url_parsed).netloc:
-            scr.log(
-                self.cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{self.cm.clm.result}{scr.get_ci_di_context(self.cm)}: "
                 + "failed to download: seldl=internal does not work across origins"
             )
@@ -507,8 +534,8 @@ class DownloadJob:
             if selenium_setup.selenium_has_died(self.cm.mc.ctx):
                 selenium_setup.report_selenium_died(self.cm.mc.ctx)
             else:
-                scr.log(
-                    self.cm.mc.ctx, Verbosity.ERROR,
+                self.log(
+                    Verbosity.ERROR,
                     f"{self.cm.clm.result}{scr.get_ci_di_context(self.cm)}: "
                     + f"selenium download failed: {str(ex)}"
                 )
@@ -582,8 +609,8 @@ class DownloadJob:
             cors_warn = ""
             if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(self.cm.clm.result).netloc:
                 cors_warn = " (potential CORS issue)"
-            scr.log(
-                self.cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{utils.truncate(self.cm.doc.path)}{scr.get_ci_di_context(self.cm)}: "
                 + f"selenium download of '{self.cm.clm.result}' failed{cors_warn}: {err}"
             )
@@ -684,8 +711,10 @@ class DownloadJob:
                             if self.status_report:
                                 self.status_report.error = str(fe)
                             else:
-                                scr.log(self.cm.mc.ctx, Verbosity.ERROR,
-                                        f"{self.context}: failed to download '{utils.truncate(self.cm.clm.result)}': {str(fe)}")
+                                self.log(
+                                    Verbosity.ERROR,
+                                    f"{self.context}: failed to download '{utils.truncate(self.cm.clm.result)}': {str(fe)}"
+                                )
                             return False
         return True
 
@@ -707,12 +736,14 @@ class DownloadJob:
             if use_as_multipass:
                 self.multipass_file = save_file
         except FileExistsError:
-            scr.log(self.cm.mc.ctx, Verbosity.ERROR,
-                    f"{self.context}: file already exists: {self.save_path}")
+            self.log(
+                Verbosity.ERROR,
+                f"{self.context}: file already exists: {self.save_path}"
+            )
             return False
         except OSError as ex:
-            scr.log(
-                self.cm.mc.ctx, Verbosity.ERROR,
+            self.log(
+                Verbosity.ERROR,
                 f"{self.context}: failed to write to file '{self.save_path}': {str(ex)}"
             )
             return False
@@ -732,8 +763,10 @@ class DownloadJob:
                 self.cm.mc.ctx, self.content, stream=True)
             )
         except ScrFetchError as ex:
-            scr.log(self.cm.mc.ctx, Verbosity.ERROR,
-                    f"{self.context}: failed to open file '{utils.truncate(self.content)}': {str(ex)}")
+            self.log(
+                Verbosity.ERROR,
+                f"{self.context}: failed to open file '{utils.truncate(self.content)}': {str(ex)}"
+            )
             return False
         if self.content_format == ContentFormat.TEMP_FILE:
             self.temp_file_path = self.content
@@ -760,13 +793,13 @@ class DownloadJob:
             raise InterruptedError
 
     def run_job(self) -> bool:
-        if self.status_report:
-            self.status_report.gen_display_name(
-                self.cm.url_parsed, self.cm.filename, self.save_path
-            )
-            self.status_report.enqueue()
         success = False
         try:
+            if self.status_report:
+                self.status_report.gen_display_name(
+                    self.cm.url_parsed, self.cm.filename, self.save_path
+                )
+                self.status_report.enqueue()
             if self.handle_user_interaction() != InteractiveResult.ACCEPT:
                 return False
             if not self.fetch_content():
@@ -815,8 +848,7 @@ class DownloadJob:
 
             if self.content_stream is not None:
                 while True:
-                    buf = self.content_stream.read(
-                        DEFAULT_RESPONSE_BUFFER_SIZE)
+                    buf = self.content_stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
                     self.check_abort()
                     if buf is None:
                         continue
@@ -860,9 +892,12 @@ class DownloadJob:
                 self.save_file.close()
             path = self.cm.clm.result
             if self.requires_download():
-                scr.log(self.cm.mc.ctx, Verbosity.DEBUG,
-                        f"finished downloading {path}" if success else f"failed to download {path}"
-                        )
+                self.log(
+                    Verbosity.DEBUG,
+                    f"finished downloading {path}" if success else f"failed to download {path}"
+                )
+            if self.error_log_stream is not None:
+                self.error_log_stream.close()
 
 
 class DownloadManager:
@@ -891,6 +926,7 @@ class DownloadManager:
             self.ctx, Verbosity.DEBUG,
             f"enqueuing download for {dj.cm.clm.result}"
         )
+        dj.setup_log_stream(self.pom)
         dj.setup_print_stream(self.pom)
         if self.enable_status_reports:
             dj.request_status_report(self)
