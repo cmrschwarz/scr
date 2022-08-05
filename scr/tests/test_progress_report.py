@@ -58,6 +58,7 @@ def dummy_status_reports(
             cast(download_job.DownloadManager, None)
         )
         dsr.name = f"dummy_dl_{i}"
+        dsr.has_cmd = False
         dsr.download_begin_time = FAKE_TIME_ORIGIN
         dsr.downloaded_size = i
         dsr.expected_size = i * 2

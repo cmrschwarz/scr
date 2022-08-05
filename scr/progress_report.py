@@ -15,6 +15,8 @@ DOWNLOAD_STATUS_BAR_LENGTH = 30
 DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.2
 DOWNLOAD_STATUS_KEEP_FINISHED = True
 
+CMD_RUNNING_HINT = "(cmd running...)"
+
 
 def get_byte_size_string(size: Union[int, float]) -> tuple[str, str]:
     if size < 2**10:
@@ -54,6 +56,7 @@ def pad(string: str, tgt_len: int) -> str:
 
 class DownloadStatusReport:
     name: str
+    has_cmd: bool
     expected_size: Optional[int] = None
     downloaded_size: int = 0
     download_begin_time: datetime.datetime
@@ -71,8 +74,10 @@ class DownloadStatusReport:
         self,
         url: Optional[urllib.parse.ParseResult],
         filename: Optional[str],
-        save_path: Optional[str]
+        save_path: Optional[str],
+        has_cmd: bool,
     ) -> None:
+        self.has_cmd = has_cmd
         if save_path:
             if len(save_path) < DOWNLOAD_STATUS_NAME_LENGTH:
                 self.name = save_path
@@ -117,6 +122,7 @@ class DownloadStatusReport:
 
 class StatusReportLine:
     name: str
+    has_cmd: bool
     expected_size: Optional[int]
     downloaded_size: int
     speed_calculatable: bool
@@ -203,6 +209,7 @@ class ProgressReportManager:
             rl = self.report_lines[i]
             dsr = dsr_list[i]
             rl.name = dsr.name
+            rl.has_cmd = dsr.has_cmd
             rl.expected_size = dsr.expected_size
             rl.downloaded_size = dsr.downloaded_size
             rl.download_begin = dsr.download_begin_time
@@ -246,8 +253,14 @@ class ProgressReportManager:
                 frac = float(rl.downloaded_size) / rl.expected_size
                 filled = int(frac * (DOWNLOAD_STATUS_BAR_LENGTH - 1))
                 empty = DOWNLOAD_STATUS_BAR_LENGTH - filled - 1
-                tip = ">" if rl.downloaded_size != rl.expected_size else "="
-                rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
+                done = rl.downloaded_size == rl.expected_size
+                if not rl.finished and rl.has_cmd and done and filled > len(CMD_RUNNING_HINT):
+                    filled -= len(CMD_RUNNING_HINT)
+                    filled_left = int(filled / 2)
+                    rl.bar_str = "[" + "=" * filled_left + CMD_RUNNING_HINT + "=" * (filled - filled_left) + "]"
+                else:
+                    tip = ">" if not done else "="
+                    rl.bar_str = "[" + "=" * filled + tip + " " * empty + "]"
             elif rl.finished:
                 rl.bar_str = "[" + "=" * DOWNLOAD_STATUS_BAR_LENGTH + "]"
             else:

@@ -287,6 +287,8 @@ class DownloadJob:
     def log(self, verbosity: Verbosity, msg: str) -> None:
         if scr.check_log_message_needed(self.cm.mc.ctx, verbosity):
             log_msg = scr.get_log_str(verbosity, msg)
+            if self.error_log_stream is None and self.cm.mc.ctx.dl_manager is not None:
+                self.error_log_stream = PrintOutputStream(self.cm.mc.ctx.dl_manager.pom)
             if self.error_log_stream is not None:
                 self.error_log_stream.write_str(log_msg, True)
             else:
@@ -300,7 +302,6 @@ class DownloadJob:
             self.print_stream = PrintOutputStream(pom)
         if self.cm.mc.content_shell_command_format is not None and self.cm.mc.content_shell_command_print_output:
             self.shell_cmd_stream = PrintOutputStream(pom)
-        self.error_log_stream = PrintOutputStream(pom)
 
     def request_status_report(self, download_manager: 'DownloadManager') -> None:
         self.status_report = progress_report.DownloadStatusReport(
@@ -859,7 +860,8 @@ class DownloadJob:
         try:
             if self.status_report:
                 self.status_report.gen_display_name(
-                    self.cm.url_parsed, self.cm.filename, self.save_path
+                   self.cm.url_parsed, self.cm.filename, self.save_path,
+                   self.cm.mc.content_shell_command_format is not None
                 )
                 self.status_report.enqueue()
             if self.handle_user_interaction() != InteractiveResult.ACCEPT:
@@ -881,7 +883,8 @@ class DownloadJob:
             if self.status_report:
                 # try to generate a better name now that we have more information
                 self.status_report.gen_display_name(
-                    self.cm.url_parsed, self.cm.filename, self.save_path
+                    self.cm.url_parsed, self.cm.filename, self.save_path,
+                    self.cm.mc.content_shell_command_format is not None
                 )
             if not self.setup_print_output():
                 return False
@@ -1038,12 +1041,12 @@ class DownloadManager:
                 x.result()
             self.pending_jobs = results.not_done
             prm.load_status(self)
-            if not prm.updates_remaining() or not prm.prev_report_line_count:
-                if not self.pending_jobs:
-                    # this happens when we got main thread print access
-                    # but everybody is already done and never downloaded anything
-                    # we don't want any progress reports here
-                    break
+            if prm.prev_report_line_count == 0 and not self.pending_jobs:
+                # this happens when we got main thread print access
+                # but everybody is already done and never downloaded anything
+                # we don't want any progress reports here
+                break
+            if not prm.updates_remaining():
                 continue
             prm.print_status_report()
             if not self.pending_jobs:
