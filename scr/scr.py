@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from datetime import datetime
-from typing import Any, Optional, BinaryIO, Union, cast
+from typing import IO, Any, Optional, BinaryIO, Union, cast
 
 import shutil
 from io import BytesIO
@@ -65,13 +65,13 @@ class OutputFormatter:
     _args_list: list[Any]
     _format_parts: list[tuple[str, Union[str, None],
                               Union[str, None], Union[str, None]]]
-    _out_stream: Union[BinaryIO, 'download_job.PrintOutputStream']
+    _out_stream: Union[BinaryIO, 'download_job.PrintOutputStream', IO[bytes]]
     _found_stream: bool = False
     _input_buffer_sizes: int
 
     def __init__(
         self, format_str: str, cm: 'content_match.ContentMatch',
-        out_stream: Union[BinaryIO, 'download_job.PrintOutputStream'],
+        out_stream: Union[BinaryIO, 'download_job.PrintOutputStream', IO[bytes]],
         content: Union[str, bytes, 'download_job.MinimalInputStream', BinaryIO, None],
     ) -> None:
         self._args_dict = content_match_build_format_args(cm, content)
@@ -437,13 +437,18 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_raw = False
 
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
-    if mc.content_print_format:
+    if mc.content_print_format is not None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
-    if mc.content_shell_command_format:
-        validate_format(mc, ["content_command_format"], dummy_cm, True, True)
-
-    if mc.content_forward_format:
+    if mc.content_shell_command_format is not None:
+        validate_format(mc, ["content_shell_command_format"], dummy_cm, True, False)
+        if mc.content_shell_command_stdin_format is not None:
+            validate_format(mc, ["content_shell_command_stdin_format"], dummy_cm, True, True)
+    elif mc.content_shell_command_stdin_format is not None:
+        raise ScrSetupError(
+            f"{mc_context(mc, ctx)}cannot specify cshif without cshf: {mc.get_configuring_argument(['content_shell_command_stdin_format'])}"
+        )
+    if mc.content_forward_format is not None:
         validate_format(mc, ["content_forward_format"], dummy_cm, True, True)
 
     if mc.content_save_format is not None:
@@ -1076,7 +1081,7 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
         if job.requires_download():
             cm.mc.ctx.dl_manager.submit(job)
         else:
-            job.setup_print_stream(cm.mc.ctx.dl_manager.pom)
+            job.request_print_streams(cm.mc.ctx.dl_manager.pom)
             job.run_job()
     else:
         job.run_job()

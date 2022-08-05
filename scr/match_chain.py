@@ -19,10 +19,11 @@ class MatchChain(ConfigDataClass):
     content_print_format: Optional[str] = None
     content_write_format: Optional[str] = None
     content_shell_command_format: Optional[str] = None
+    content_shell_command_stdin_format: Optional[str] = None
     content_forward_format: Optional[str] = None
     content_forward_chains: list['MatchChain'] = []
     content_raw: bool = True
-    content_shell_command_pipe_stdin: bool = False
+
     content_input_encoding: str = "utf-8"
     content_forced_input_encoding: Optional[str] = None
     save_path_interactive: bool = False

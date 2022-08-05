@@ -1,3 +1,5 @@
+from subprocess import PIPE
+import subprocess
 from .definitions import (
     DocumentType, URL_FILENAME_MAX_LEN, Verbosity, InteractiveResult,
     SeleniumDownloadStrategy, ScrFetchError, SeleniumVariant, DEFAULT_CWF
@@ -7,7 +9,7 @@ from .input_sequences import (
     CHAIN_SKIP_INDICATING_STRINGS, DOC_SKIP_INDICATING_STRINGS,
     INSPECT_INDICATING_STRINGS
 )
-from typing import Optional, BinaryIO, Union, cast, Iterator
+from typing import Any, Optional, BinaryIO, Union, cast, Iterator
 import os
 import urllib
 import time
@@ -139,6 +141,9 @@ class PrintOutputManager:
                 self.finished_queues.add(id)
                 return
 
+            if id in self.printing_buffers:
+                buffers_to_print.append(self.printing_buffers.pop(id))
+
             new_active_id = self.active_id + 1
             while new_active_id in self.finished_queues:
                 self.finished_queues.remove(new_active_id)
@@ -146,6 +151,7 @@ class PrintOutputManager:
                     self.printing_buffers.pop(new_active_id)
                 )
                 new_active_id += 1
+
         while True:
             for bl in buffers_to_print:
                 for (b, stderr) in bl:
@@ -258,14 +264,14 @@ class DownloadJob:
     temp_file_path: Optional[str] = None
     multipass_file: Optional[BinaryIO] = None
     print_stream: Optional[PrintOutputStream] = None
-    shell_out_stream: Optional[PrintOutputStream] = None
-    shell_err_stream: Optional[PrintOutputStream] = None
+    shell_cmd_stream: Optional[PrintOutputStream] = None
     error_log_stream: Optional[PrintOutputStream] = None
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: Optional[ContentFormat] = None
     status_report: Optional['progress_report.DownloadStatusReport'] = None
-
+    shell_proc: Optional[subprocess.Popen[Any]] = None
+    shell_output_handlers: list[concurrent.futures.Future[None]] = []
     cm: 'content_match.ContentMatch'
     save_path: Optional[str] = None
     context: str
@@ -289,12 +295,12 @@ class DownloadJob:
     def requires_download(self) -> bool:
         return self.cm.mc.need_content and not self.cm.mc.content_raw
 
-    def setup_log_stream(self, pom: 'PrintOutputManager') -> None:
-        self.error_log_stream = PrintOutputStream(pom)
-
-    def setup_print_stream(self, pom: 'PrintOutputManager') -> None:
+    def request_print_streams(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(pom)
+        if self.cm.mc.content_shell_command_format is not None:
+            self.shell_cmd_stream = PrintOutputStream(pom)
+        self.error_log_stream = PrintOutputStream(pom)
 
     def request_status_report(self, download_manager: 'DownloadManager') -> None:
         self.status_report = progress_report.DownloadStatusReport(
@@ -788,6 +794,53 @@ class DownloadJob:
         ))
         return True
 
+    def process_shell_output(self, stderr: bool) -> None:
+        assert self.shell_proc is not None
+        if stderr:
+            stream = self.shell_proc.stderr
+        else:
+            stream = self.shell_proc.stdout
+        pos = self.shell_cmd_stream
+        assert stream is not None
+        assert pos is not None
+        try:
+            while True:
+                if self.cm.mc.ctx.abort:
+                    break
+                buffer = stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+                pos.write(buffer)
+                if len(buffer) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                    break
+        finally:
+            pos.close()
+
+    def setup_shell_cmd_output(self) -> bool:
+        if self.cm.mc.content_shell_command_format is None:
+            return True
+        shell_cmd = scr.gen_final_content_format(self.cm.mc.content_shell_command_format, self.cm)
+        if self.cm.mc.content_shell_command_stdin_format:
+            stdin = PIPE
+        else:
+            stdin = None
+        self.shell_proc = subprocess.Popen(
+            shell_cmd, shell=True,
+            stdin=stdin, stdout=PIPE, stderr=PIPE,
+        )
+        if self.cm.mc.content_shell_command_stdin_format is not None:
+            assert self.shell_proc.stdin is not None
+            self.output_formatters.append(scr.OutputFormatter(
+                self.cm.mc.content_shell_command_stdin_format, self.cm,
+                self.shell_proc.stdin, self.content
+            ))
+        # TODO: this breaks if we do not have a download manager
+        # so make sure we always have one
+        assert self.cm.mc.ctx.dl_manager is not None
+        excecutor = self.cm.mc.ctx.dl_manager.shell_output_handling_executor
+        self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, False))
+        self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, True))
+
+        return True
+
     def check_abort(self) -> None:
         if self.cm.mc.ctx.abort:
             raise InterruptedError
@@ -822,6 +875,8 @@ class DownloadJob:
                     self.cm.url_parsed, self.cm.filename, self.save_path
                 )
             if not self.setup_print_output():
+                return False
+            if not self.setup_shell_cmd_output():
                 return False
             self.check_abort()
 
@@ -876,8 +931,12 @@ class DownloadJob:
             success = True
             return True
         except InterruptedError:
+            if self.shell_proc is not None:
+                self.shell_proc.terminate()
             return False
         finally:
+            if self.shell_proc is not None:
+                self.shell_proc.wait()
             if self.status_report:
                 self.status_report.finished()
             if self.print_stream is not None:
@@ -898,6 +957,8 @@ class DownloadJob:
                 )
             if self.error_log_stream is not None:
                 self.error_log_stream.close()
+            for r in concurrent.futures.wait(self.shell_output_handlers).done:
+                r.result()  # trigger exceptions
 
 
 class DownloadManager:
@@ -906,6 +967,7 @@ class DownloadManager:
     pending_jobs: set[concurrent.futures.Future[bool]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
+    shell_output_handling_executor: concurrent.futures.ThreadPoolExecutor
     status_report_lock: threading.Lock
     download_status_reports: list['progress_report.DownloadStatusReport']
     enable_status_reports: bool
@@ -915,6 +977,9 @@ class DownloadManager:
         self.pending_jobs = set()
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_threads
+        )
+        self.shell_output_handling_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2 * max_threads
         )
         self.pom = PrintOutputManager()
         self.status_report_lock = threading.Lock()
@@ -926,8 +991,7 @@ class DownloadManager:
             self.ctx, Verbosity.DEBUG,
             f"enqueuing download for {dj.cm.clm.result}"
         )
-        dj.setup_log_stream(self.pom)
-        dj.setup_print_stream(self.pom)
+        dj.request_print_streams(self.pom)
         if self.enable_status_reports:
             dj.request_status_report(self)
         self.pending_jobs.add(self.executor.submit(dj.run_job))
@@ -941,7 +1005,7 @@ class DownloadManager:
         if not self.enable_status_reports or not may_print:
             results = concurrent.futures.wait(self.pending_jobs)
             for x in results.done:
-                x.result()
+                x.result()  # trigger exceptions
             self.pending_jobs.clear()
         self.pom.request_print_access()
         prm = progress_report.ProgressReportManager()
