@@ -438,7 +438,8 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
 
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
     if not mc.needs_document_content:
-        dummy_cm.clm.result = None
+        # to remove "{cm}" from the available matches
+        dummy_cm.clm.result = None  # type: ignore
     if mc.content_print_format is not None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
