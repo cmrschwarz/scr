@@ -9,14 +9,14 @@ import re
 
 class CliEnv():
     tmpdir: str
-    capsys: pytest.CaptureFixture[str]
+    capfd: pytest.CaptureFixture[str]
     monkeypatch: pytest.MonkeyPatch
     stdin_file: Optional[TextIOWrapper]
     special_files: set[str]
 
-    def __init__(self, cli_env_dir: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
+    def __init__(self, cli_env_dir: str, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch):
         self.tmpdir = tempfile.mkdtemp(dir=cli_env_dir)
-        self.capsys = capsys
+        self.capfd = capfd
         self.monkeypatch = monkeypatch
         os.chdir(self.tmpdir)
         self.special_files = set()
@@ -42,8 +42,8 @@ class CliEnv():
 
 
 @pytest.fixture()
-def cli_env(cli_env_root_dir: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> Generator[CliEnv, None, None]:
-    cli_env = CliEnv(cli_env_root_dir, capsys, monkeypatch)
+def cli_env(cli_env_root_dir: str, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> Generator[CliEnv, None, None]:
+    cli_env = CliEnv(cli_env_root_dir, capfd, monkeypatch)
     yield cli_env
     cli_env.close()
 
@@ -75,7 +75,7 @@ def run_scr(
     env.set_stdin(stdin)
     env.monkeypatch.setattr("sys.stdin", env.stdin_file)
     exit_code = scr.run_scr(["scr"] + args)
-    cap = env.capsys.readouterr()
+    cap = env.capfd.readouterr()
     if (
         (stderr_re and not re.match(stderr, cap.err, re.DOTALL))
         or

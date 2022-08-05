@@ -149,7 +149,7 @@ class Locator(ConfigDataClass):
     def is_active(self) -> bool:
         return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_script])
 
-    def parses_documents(self) -> bool:
+    def needs_document_content(self) -> bool:
         return any(x is not None for x in [self.xpath, self.regex, self.js_script])
 
     def setup_xpath(self, mc: 'match_chain.MatchChain') -> None:
@@ -336,6 +336,8 @@ class Locator(ConfigDataClass):
         lms_new: list[LocatorMatch] = []
         for lm in lms:
             args_dict: dict[str, Any] = {}
+            # TODO: make ci work here by checking whether we are interactive
+            # or not skipping cis in general
             scr.apply_general_format_args(doc, mc, args_dict, ci=None)
             scr.apply_locator_match_format_args(self.name, lm, args_dict)
             try:

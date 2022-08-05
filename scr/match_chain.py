@@ -20,6 +20,7 @@ class MatchChain(ConfigDataClass):
     content_write_format: Optional[str] = None
     content_shell_command_format: Optional[str] = None
     content_shell_command_stdin_format: Optional[str] = None
+    content_shell_command_print_output: Optional[bool] = None
     content_forward_format: Optional[str] = None
     content_forward_chains: list['MatchChain'] = []
     content_raw: bool = True
@@ -72,7 +73,7 @@ class MatchChain(ConfigDataClass):
     # TODO: this should include if this is the target of any doc=...
     has_document_matching: bool = False
     has_content_matching: bool = False
-    parses_documents = False  # used for the document as content optimization
+    needs_document_content = False  # used for the document as content optimization
     has_interactive_matching: bool = False
     need_content: bool = False
     need_label: bool = False

@@ -298,7 +298,7 @@ class DownloadJob:
     def request_print_streams(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
             self.print_stream = PrintOutputStream(pom)
-        if self.cm.mc.content_shell_command_format is not None:
+        if self.cm.mc.content_shell_command_format is not None and self.cm.mc.content_shell_command_print_output:
             self.shell_cmd_stream = PrintOutputStream(pom)
         self.error_log_stream = PrintOutputStream(pom)
 
@@ -803,16 +803,13 @@ class DownloadJob:
         pos = self.shell_cmd_stream
         assert stream is not None
         assert pos is not None
-        try:
-            while True:
-                if self.cm.mc.ctx.abort:
-                    break
-                buffer = stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
-                pos.write(buffer)
-                if len(buffer) < DEFAULT_RESPONSE_BUFFER_SIZE:
-                    break
-        finally:
-            pos.close()
+        while True:
+            if self.cm.mc.ctx.abort:
+                break
+            buffer = stream.read(DEFAULT_RESPONSE_BUFFER_SIZE)
+            pos.write(buffer)
+            if len(buffer) < DEFAULT_RESPONSE_BUFFER_SIZE:
+                break
 
     def setup_shell_cmd_output(self) -> bool:
         if self.cm.mc.content_shell_command_format is None:
@@ -822,9 +819,22 @@ class DownloadJob:
             stdin = PIPE
         else:
             stdin = None
+
+        need_output_handlers = False
+        if self.cm.mc.content_shell_command_print_output:
+            if self.cm.mc.ctx.dl_manager:
+                stdout = PIPE
+                stderr = PIPE
+                need_output_handlers = True
+            else:
+                stdout = None
+                stderr = None
+        else:
+            stdout = subprocess.DEVNULL
+            stderr = subprocess.DEVNULL
         self.shell_proc = subprocess.Popen(
             shell_cmd, shell=True,
-            stdin=stdin, stdout=PIPE, stderr=PIPE,
+            stdin=stdin, stdout=stdout, stderr=stderr,
         )
         if self.cm.mc.content_shell_command_stdin_format is not None:
             assert self.shell_proc.stdin is not None
@@ -832,12 +842,11 @@ class DownloadJob:
                 self.cm.mc.content_shell_command_stdin_format, self.cm,
                 self.shell_proc.stdin, self.content
             ))
-        # TODO: this breaks if we do not have a download manager
-        # so make sure we always have one
-        assert self.cm.mc.ctx.dl_manager is not None
-        excecutor = self.cm.mc.ctx.dl_manager.shell_output_handling_executor
-        self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, False))
-        self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, True))
+        if need_output_handlers:
+            assert self.cm.mc.ctx.dl_manager is not None
+            excecutor = self.cm.mc.ctx.dl_manager.shell_output_handling_executor
+            self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, False))
+            self.shell_output_handlers.append(excecutor.submit(self.process_shell_output, True))
 
         return True
 
@@ -934,8 +943,14 @@ class DownloadJob:
             if self.shell_proc is not None:
                 self.shell_proc.terminate()
             return False
+        except Exception as ex:
+            if self.shell_proc is not None:
+                self.shell_proc.terminate()
+            raise ex
         finally:
             if self.shell_proc is not None:
+                if self.shell_proc.stdin is not None:
+                    self.shell_proc.stdin.close()
                 self.shell_proc.wait()
             if self.status_report:
                 self.status_report.finished()
@@ -957,8 +972,12 @@ class DownloadJob:
                 )
             if self.error_log_stream is not None:
                 self.error_log_stream.close()
-            for r in concurrent.futures.wait(self.shell_output_handlers).done:
-                r.result()  # trigger exceptions
+            try:
+                for r in concurrent.futures.wait(self.shell_output_handlers).done:
+                    r.result()  # trigger exceptions
+            finally:
+                if self.shell_cmd_stream is not None:
+                    self.shell_cmd_stream.close()
 
 
 class DownloadManager:
@@ -1019,7 +1038,7 @@ class DownloadManager:
                 x.result()
             self.pending_jobs = results.not_done
             prm.load_status(self)
-            if not prm.updates_remaining():
+            if not prm.updates_remaining() or not prm.prev_report_line_count:
                 if not self.pending_jobs:
                     # this happens when we got main thread print access
                     # but everybody is already done and never downloaded anything

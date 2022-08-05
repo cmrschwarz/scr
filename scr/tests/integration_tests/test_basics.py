@@ -500,3 +500,30 @@ def test_tree_dfs(cli_env: CliEnv) -> None:
             f"{normpath('../res/iframe_tree_r.html')}"
         ]
     )
+
+
+def test_cshp(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file=../res/a.txt",
+            "cshf=python -c 'import sys; sys.stdout.write(sys.stdin.read())'",
+            "cshif={c}b\n",
+            "cshp"
+        ],
+        stdout="a\nb\n"
+    )
+
+
+def test_cshp_single_threaded(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file=../res/a.txt",
+            "cshf=python -c 'import sys; sys.stdout.write(sys.stdin.read())'",
+            "cshif={c}b\n",
+            "cshp",
+            "mt=0"
+        ],
+        stdout="a\nb\n"
+    )

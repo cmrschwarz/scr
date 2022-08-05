@@ -400,8 +400,8 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     locators = [mc.loc_content, mc.loc_label, mc.loc_document]
     for loc in locators:
         loc.setup(mc)
-        if loc.parses_documents():
-            mc.parses_documents = True
+        if loc.is_active():
+            mc.needs_document_content = True
 
     if any(lc.xpath is not None for lc in locators):
         mc.has_xpath_matching = True
@@ -411,7 +411,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.has_content_xpaths = True
     if mc.loc_document.is_active():
         mc.has_document_matching = True
-        mc.parses_documents = True
+        mc.needs_document_content = True
     if mc.loc_label.interactive or mc.loc_content.interactive:
         mc.has_interactive_matching = True
 
@@ -431,12 +431,14 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_print_format = DEFAULT_CPF
 
     if not mc.content_raw:
-        mc.parses_documents = True
-    if not mc.parses_documents:
+        mc.needs_document_content = True
+    if not mc.needs_document_content:
         # prepare chain to be used in the document -> content link optimization
         mc.content_raw = False
 
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
+    if not mc.needs_document_content:
+        dummy_cm.clm.result = None
     if mc.content_print_format is not None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
@@ -481,8 +483,9 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     output_formats = [
         mc.content_print_format,
         mc.content_shell_command_format,
+        mc.content_shell_command_stdin_format,
         mc.content_save_format,
-        mc.content_write_format  # this is none if save is None
+        mc.content_write_format
     ]
 
     label_formats = [mc.loc_label.format, mc.label_default_format]
@@ -507,7 +510,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     ) > 0
 
     mc.need_output_multipass = any(
-        format_string_arg_occurence(of, "c") for of in output_formats
+        format_string_arg_occurence(of, "c") > 1 for of in output_formats
     )
 
     if mc.filename_default_format is None:
@@ -1528,7 +1531,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
         doc_as_content_opt_possible = not ctx.selenium_variant.enabled()
         for mc in doc.match_chains:
             if mc.need_document_matches(False) or mc.need_content_matches():
-                if mc.parses_documents:
+                if mc.needs_document_content:
                     doc_as_content_opt_possible = False
                 unsatisfied_chains += 1
                 mc.satisfied = False

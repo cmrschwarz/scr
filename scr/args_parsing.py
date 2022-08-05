@@ -43,6 +43,7 @@ def help(err: bool = False) -> None:
                               defaults to \"{DEFAULT_CPF}\" if cpf, csf and cfc are unspecified
         cshf=<format string>  execute a shell command resulting from the given format string
         cshif=<format string> format for the stdin of cshf
+        cshp=<bool>           print the output of the shell commands on stdout and stderr
         cfc=<chain spec>      forward content match as a virtual document
         cff=<format string>   format of the virtual document forwarded to the cfc chains. defaults to \"{DEFAULT_CWF}\"
         csin=<bool>            give a prompt to edit the save path for a file
@@ -588,6 +589,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         if apply_mc_arg(ctx, "cshf", ["content_shell_command_format"], arg):
             continue
         if apply_mc_arg(ctx, "cshif", ["content_shell_command_stdin_format"], arg):
+            continue
+        if apply_mc_arg(ctx, "cshp", ["content_shell_command_print_output"], arg, parse_bool_arg, True):
             continue
         if apply_mc_arg(ctx, "csin", ["save_path_interactive"], arg, parse_bool_arg, True):
             continue
