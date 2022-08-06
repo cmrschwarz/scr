@@ -265,7 +265,6 @@ class DownloadJob:
     multipass_file: Optional[BinaryIO] = None
     print_stream: Optional[PrintOutputStream] = None
     shell_cmd_stream: Optional[PrintOutputStream] = None
-    error_log_stream: Optional[PrintOutputStream] = None
     content_stream: Union[BinaryIO, MinimalInputStream, None] = None
     content: Union[str, bytes, BinaryIO, MinimalInputStream, None] = None
     content_format: Optional[ContentFormat] = None
@@ -286,13 +285,10 @@ class DownloadJob:
 
     def log(self, verbosity: Verbosity, msg: str) -> None:
         if scr.check_log_message_needed(self.cm.mc.ctx, verbosity):
-            log_msg = scr.get_log_str(verbosity, msg)
-            if self.error_log_stream is None and self.cm.mc.ctx.dl_manager is not None:
-                self.error_log_stream = PrintOutputStream(self.cm.mc.ctx.dl_manager.pom)
-            if self.error_log_stream is not None:
-                self.error_log_stream.write_str(log_msg, True)
+            if self.status_report is not None:
+                self.status_report.error = msg
             else:
-                scr.log_raw(log_msg)
+                scr.log(self.cm.mc.ctx, verbosity, msg)
 
     def requires_download(self) -> bool:
         return self.cm.mc.need_content and not self.cm.mc.content_raw
@@ -860,8 +856,8 @@ class DownloadJob:
         try:
             if self.status_report:
                 self.status_report.gen_display_name(
-                   self.cm.url_parsed, self.cm.filename, self.save_path,
-                   self.cm.mc.content_shell_command_format is not None
+                    self.cm.url_parsed, self.cm.filename, self.save_path,
+                    self.cm.mc.content_shell_command_format is not None
                 )
                 self.status_report.enqueue()
             if self.handle_user_interaction() != InteractiveResult.ACCEPT:
@@ -973,8 +969,6 @@ class DownloadJob:
                     Verbosity.DEBUG,
                     f"finished downloading {path}" if success else f"failed to download {path}"
                 )
-            if self.error_log_stream is not None:
-                self.error_log_stream.close()
             try:
                 for r in concurrent.futures.wait(self.shell_output_handlers).done:
                     r.result()  # trigger exceptions
@@ -1045,6 +1039,9 @@ class DownloadManager:
                 # this happens when we got main thread print access
                 # but everybody is already done and never downloaded anything
                 # we don't want any progress reports here
+                for fr in prm.newly_finished_report_lines:
+                    if fr.error:
+                        scr.log(self.ctx, Verbosity.ERROR, fr.error)
                 break
             if not prm.updates_remaining():
                 continue

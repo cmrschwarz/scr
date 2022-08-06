@@ -285,7 +285,7 @@ class Locator(ConfigDataClass):
                     lm.xmatch_xml = xm
             else:
                 try:
-                    lm.xmatch = lxml.html.tostring(xm, encoding="unicode")
+                    lm.xmatch = lxml.html.tostring(xm, encoding="unicode").strip()
                     if store_xml:
                         lm.xmatch_xml = xm
                 except (lxml.etree.LxmlError, UnicodeEncodeError) as ex1:

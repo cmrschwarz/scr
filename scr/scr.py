@@ -21,7 +21,6 @@ import pyparsing.exceptions
 import pathlib
 
 from http.cookiejar import MozillaCookieJar
-
 from selenium.webdriver.remote.webelement import WebElement as SeleniumWebElement
 import selenium.webdriver.common.by
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
@@ -49,7 +48,7 @@ from .input_sequences import (
 )
 from . import (
     document, selenium_setup, utils, config_data_class, args_parsing, download_job,
-    locator, content_match, match_chain, scr_context
+    locator, content_match, match_chain, scr_context,
 )
 
 if utils.is_windows():
@@ -430,7 +429,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.has_content_matching and all(cov is None for cov in content_output_variants):
         mc.content_print_format = DEFAULT_CPF
 
-    if not mc.content_raw:
+    if not mc.content_raw or ctx.selenium_variant.enabled():
         mc.needs_document_content = True
     if not mc.needs_document_content:
         # prepare chain to be used in the document -> content link optimization
@@ -852,12 +851,68 @@ def get_child_iframes(elem: 'lxml.html.HtmlElement') -> list['lxml.html.HtmlElem
     return cast(list[lxml.html.HtmlElement], elem.xpath("//iframe"))
 
 
-def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
+def insert_shadow_roots(
+    ctx: 'scr_context.ScrContext', doc_xml: lxml.html.HtmlElement,
+    shadow_root_tree: Any, nested: bool = False
+) -> None:
+    xpath = shadow_root_tree[0]
+    inner_html = shadow_root_tree[1]
+    children = shadow_root_tree[2]
+    if nested:
+        xpath = "/html/" + xpath
+    elem = doc_xml.xpath(xpath)
+    if len(elem) != 1:
+        log(ctx, Verbosity.WARN, "failed to match up shadow roots")
+        return
+    elem = elem[0]
+    shadow_root_xml = cast(
+        lxml.html.HtmlElement, lxml.html.fromstring(inner_html)
+    )
+    for c in children:
+        insert_shadow_roots(ctx, shadow_root_xml, c, True)
+    elem.append(shadow_root_xml)
+
+
+def expand_shadow_roots(
+    ctx: 'scr_context.ScrContext', doc_xml: lxml.html.HtmlElement
+) -> bool:
+    script = """
+    function build_xpath(el) {
+        const tag_name = el.tagName.toLowerCase();
+        if (el.parentElement === null) return "/" + tag_name;
+        var ci = 0;
+        for (const c of el.parentNode.childNodes) {
+            if (c === el) return build_xpath(el.parentNode) + '/' + tag_name + '[' + (ci + 1) + ']';
+            if (c.nodeType == Node.ELEMENT_NODE && c.tagName.toLowerCase() == tag_name) ci++;
+        }
+    }
+    function collect_shadow_roots(node) {
+        var res = [];
+        for (const e of node.querySelectorAll('*')) {
+            if (e.shadowRoot === null) continue;
+            res.push([build_xpath(e), e.shadowRoot.innerHTML, collect_shadow_roots(e.shadowRoot)]);
+        }
+        return res;
+    }
+    return collect_shadow_roots(document);
+    """
+    shadow_root_tree = selenium_setup.selenium_exec_script(ctx, script)
+    if len(shadow_root_tree) == 0:
+        return False
+    for srt in shadow_root_tree:
+        insert_shadow_roots(ctx, doc_xml, srt)
+    return True
+
+
+def expand_iframes(
+    ctx: 'scr_context.ScrContext', text: str, doc_xml: lxml.html.HtmlElement
+) -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
-    text = drv.page_source
-    doc_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
+    roots_expanded = expand_shadow_roots(ctx, doc_xml)
     iframes: list[lxml.html.HtmlElement] = get_child_iframes(doc_xml)
     if not iframes:
+        if roots_expanded:
+            text = cast(str, lxml.html.tostring(doc_xml))
         return text, doc_xml
     depth = 0
     curr_xml = doc_xml
@@ -873,9 +928,7 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
                     value=iframe_xpath
                 )
                 if len(iframes_sel) != 1:
-                    log(
-                        ctx, Verbosity.WARN, "failed to match up iframe contents"
-                    )
+                    log(ctx, Verbosity.WARN, "failed to match up iframe contents")
                 else:
                     iframe_stack.append((iframes_sel[0], depth + 1, iframe))
             if not iframe_stack:
@@ -889,6 +942,7 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
             iframe_xml = cast(
                 lxml.html.HtmlElement, lxml.html.fromstring(drv.page_source)
             )
+            expand_shadow_roots(ctx, iframe_xml)
             iframes = get_child_iframes(iframe_xml)
             curr_xml.append(iframe_xml)
             curr_xml = iframe_xml
@@ -901,6 +955,12 @@ def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, l
         return text, doc_xml
     finally:
         drv.switch_to.default_content()
+
+
+def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
+    text = cast(SeleniumWebDriver, ctx.selenium_driver).page_source
+    doc_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
+    return expand_iframes(ctx, text, doc_xml)
 
 
 def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:

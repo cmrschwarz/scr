@@ -116,6 +116,22 @@ def test_recursive_iframes(cli_env: CliEnv) -> None:
 
 
 @pytest.mark.selenium()
+def test_recursive_shadow_roots(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file=../res/shadow_root.html", "cx=//div", "sel", "selh"
+        ],
+        stdout=[
+            '<div id="a">a<div id="b">b<div id="c">c<div id="a">d</div></div></div></div>',
+            '<div id="b">b<div id="c">c<div id="a">d</div></div></div>',
+            '<div id="c">c<div id="a">d</div></div>',
+            '<div id="a">d</div>'
+        ]
+    )
+
+
+@pytest.mark.selenium()
 @pytest.mark.repl()
 def test_repl_selenium(cli_env: CliEnv) -> None:
     run_scr(

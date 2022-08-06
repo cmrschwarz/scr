@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>js_content</title>
+</head>
+
+<body>
+    <script>
+        const a = document.createElement("div");
+        a.innerText = "a";
+        a.id = "a";
+        a.attachShadow({
+            mode: 'open'
+        });
+
+        const b = document.createElement("div");
+        b.innerText = "b";
+        b.id = "b";
+        b.attachShadow({
+            mode: 'open'
+        });
+
+        const c = document.createElement("div");
+        c.innerText = "c";
+        c.id = "c";
+        c.attachShadow({
+            mode: 'open'
+        });
+
+        const d = document.createElement("div");
+        d.innerText = "d";
+        d.id = "a"
+
+        a.shadowRoot.appendChild(b);
+        b.shadowRoot.appendChild(c);
+        c.shadowRoot.appendChild(d);
+        document.body.appendChild(a);
+    </script>
+</body>
+
+</html>
