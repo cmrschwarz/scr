@@ -73,17 +73,21 @@ scr [OPTIONS]
         cr=<regex>            regex for content matching
         cjs=<js string>       javascript to execute on the page, format args are available as js variables (selenium only)
         cf=<format string>    content format string (args: <cr capture groups>, xmatch, rmatch, di, ci)
+        cxs=<int|empty>       also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
         cmm=<bool>            allow multiple content matches in one document instead of picking the first (defaults to true)
-        cimin=<number>        initial content index, each successful match gets one index
-        cimax=<number>        max content index, matching stops here
+        cimin=<int>           initial content index, each successful match gets one index
+        cimax=<int>           max content index, matching stops here
         cicont=<bool>         don't reset the content index for each document
         csf=<format string>   save content to file at the path resulting from the format string, empty to enable
         cwf=<format string>   format to write to file. defaults to "{c}"
         cpf=<format string>   print the result of this format string for each content, empty to disable
                               defaults to "{c}\n" if cpf, csf and cfc are unspecified
+        cshf=<format string>  execute a shell command resulting from the given format string
+        cshif=<format string> format for the stdin of cshf
+        cshp=<bool>           print the output of the shell commands on stdout and stderr
         cfc=<chain spec>      forward content match as a virtual document
         cff=<format string>   format of the virtual document forwarded to the cfc chains. defaults to "{c}"
-        csin<bool>            give a promt to edit the save path for a file
+        csin=<bool>            give a prompt to edit the save path for a file
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to "<END>"
@@ -95,6 +99,7 @@ scr [OPTIONS]
         lr=<regex>           regex for label matching
         ljs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         lf=<format string>   label format string
+        lxs=<int|empty>      also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
         lic=<bool>           match for the label within the content match instead of the hole document
         las=<bool>           allow slashes in labels
         lmm=<bool>           allow multiple label matches in one document instead of picking the first (for all content matches)
@@ -107,8 +112,9 @@ scr [OPTIONS]
         dr=<regex>           regex for document matching
         djs=<js string>      javascript to execute on the page, format args are available as js variables (selenium only)
         df=<format string>   document format string
-        dimin=<number>       initial document index, each successful match gets one index
-        dimax=<number>       max document index, matching stops here
+        dxs=<int|empty>      also match siblings of xpath match in parents up to this number of levels (empty means any, default: 0)
+        dimin=<int>          initial document index, each successful match gets one index
+        dimax=<int>          max document index, matching stops here
         dmm=<bool>           allow multiple document matches in one document instead of picking the first
         din=<bool>           give a prompt to ignore a potential document match
         denc=<encoding>      default document encoding to use for following documents, default is utf-8
@@ -117,7 +123,7 @@ scr [OPTIONS]
         dpsch=<bool>         use the parent documents scheme if available, defaults to true unless dsch is specified
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
-
+        dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
     Initial Documents:
         url=<url>            fetch a document from a url, derived document matches are (relative) urls
         file=<path>          fetch a document from a file, derived documents matches are (relative) file pathes
@@ -184,15 +190,15 @@ scr [OPTIONS]
         version                print version information
 
     Global Options:
-        timeout=<seconds>      seconds before a web request timeouts (default 30)
+        timeout=<float>        seconds before a web request timeouts (default 30)
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
         ua=<string>            user agent to pass in the html header for url GETs
         uar=<bool>             use a rangom user agent
         selkeep=<bool>         keep selenium instance alive after the command finished
         cookiefile=<path>      path to a netscape cookie file. cookies are passed along for url GETs
-        sel=<browser|bool>     use selenium (default is firefox) to load urls into an interactive browser session
-                               (default: disabled, values: tor, chrome, firefox, disabled)
+        sel=<browser|empty>    use selenium to load urls into an interactive browser session
+                               (empty means firefox, default: disabled, values: tor, chrome, firefox, disabled)
         selh=<bool>            use selenium in headless mode, implies sel
         tbdir=<path>           root directory of the tor browser installation, implies sel=tor
                                (default: environment variable TOR_BROWSER_DIR)

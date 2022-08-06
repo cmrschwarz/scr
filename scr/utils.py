@@ -1,3 +1,4 @@
+import inspect
 from . import windows
 from typing import Optional, Callable
 import platform
@@ -77,3 +78,16 @@ def remove_file_scheme_from_url(url: str) -> str:
     if is_windows() and re.match("/[A-Za-z]:/", url):
         url = url[1:]
     return url
+
+
+def is_debugger_attached() -> bool:
+    debugger_frames = [
+        "pydevd.py",
+        "pydevd_runpy.py"
+    ]
+    stack = inspect.stack()
+    for frame in stack:
+        for df in debugger_frames:
+            if frame[1].endswith(df):
+                return True
+    return False

@@ -830,7 +830,7 @@ class DownloadJob:
             stdout = subprocess.DEVNULL
             stderr = subprocess.DEVNULL
         self.shell_proc = subprocess.Popen(
-            shell_cmd, shell=True,
+            shell_cmd.decode("utf-8", errors="surrogateescape"), shell=True,
             stdin=stdin, stdout=stdout, stderr=stderr,
         )
         if self.cm.mc.content_shell_command_stdin_format is not None:
