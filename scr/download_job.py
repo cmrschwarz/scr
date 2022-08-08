@@ -1,3 +1,4 @@
+import shlex
 from subprocess import PIPE
 import subprocess
 from .definitions import (
@@ -846,7 +847,6 @@ class DownloadJob:
     def setup_shell_cmd_output(self) -> bool:
         if self.cm.mc.content_shell_command_format is None:
             return True
-        shell_cmd = scr.gen_final_content_format(self.cm.mc.content_shell_command_format, self.cm)
         if self.cm.mc.content_shell_command_stdin_format:
             stdin = PIPE
         else:
@@ -864,9 +864,10 @@ class DownloadJob:
         else:
             stdout = subprocess.DEVNULL
             stderr = subprocess.DEVNULL
+        shell_cmd = scr.gen_final_content_format(self.cm.mc.content_shell_command_format, self.cm)
+        shell_args = shlex.split(shell_cmd.decode("utf-8", errors="surrogateescape"))
         self.shell_proc = subprocess.Popen(
-            shell_cmd.decode("utf-8", errors="surrogateescape"), shell=True,
-            stdin=stdin, stdout=stdout, stderr=stderr,
+            shell_args, stdin=stdin, stdout=stdout, stderr=stderr,
         )
         if self.cm.mc.content_shell_command_stdin_format is not None:
             assert self.shell_proc.stdin is not None

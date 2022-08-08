@@ -1,3 +1,4 @@
+import os
 from .cli_env import CliEnv, run_scr
 import pytest
 from os.path import normpath
@@ -526,7 +527,7 @@ def test_cshp(cli_env: CliEnv) -> None:
             "cshif={c}b\n",
             "cshp"
         ],
-        stdout="a\nb\n"
+        stdout=f"a{os.linesep}b{os.linesep}"
     )
 
 
@@ -540,5 +541,5 @@ def test_cshp_single_threaded(cli_env: CliEnv) -> None:
             "cshp",
             "mt=0"
         ],
-        stdout="a\nb\n"
+        stdout=f"a{os.linesep}b{os.linesep}"
     )
