@@ -20,7 +20,8 @@ from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 import binascii
 import requests
 from . import (
-    progress_report, content_match, scr, utils, scr_context, selenium_setup, locator
+    progress_report, content_match, scr, utils, scr_context, selenium_setup, locator,
+    document
 )
 from collections import OrderedDict
 import threading
@@ -39,6 +40,29 @@ class ContentFormat(Enum):
     FILE = 3,
     TEMP_FILE = 4,
     UNNEEDED = 5,
+
+
+class ByteBuffer:
+    buffer: bytearray
+
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, buffer: bytes, stderr: bool = False) -> int:
+        self.buffer.extend(buffer)
+        return len(buffer)
+
+    def write_str(self, buffer: str,  stderr: bool = False) -> int:
+        return self.write(buffer.encode("utf-8", errors="surrogateescape"), stderr)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def to_bytes(self) -> bytearray:
+        return self.buffer
 
 
 class PrintOutputStream:
@@ -271,6 +295,7 @@ class DownloadJob:
     status_report: Optional['progress_report.DownloadStatusReport'] = None
     shell_proc: Optional[subprocess.Popen[Any]] = None
     shell_output_handlers: list[concurrent.futures.Future[None]] = []
+    forward_buffer: Optional['ByteBuffer'] = None
     cm: 'content_match.ContentMatch'
     save_path: Optional[str] = None
     context: str
@@ -791,6 +816,16 @@ class DownloadJob:
         ))
         return True
 
+    def setup_forward_chain(self) -> bool:
+        if self.cm.mc.content_forward_format is None:
+            return True
+        self.forward_buffer = ByteBuffer()
+        self.output_formatters.append(scr.OutputFormatter(
+            self.cm.mc.content_forward_format, self.cm,
+            self.forward_buffer, self.content
+        ))
+        return True
+
     def process_shell_output(self, stderr: bool) -> None:
         assert self.shell_proc is not None
         if stderr:
@@ -851,7 +886,27 @@ class DownloadJob:
         if self.cm.mc.ctx.abort:
             raise InterruptedError
 
-    def run_job(self) -> bool:
+    def gen_output_doc(self) -> Optional['document.Document']:
+        if self.forward_buffer is not None:
+            if self.cm.mc.content_raw:
+                path = "<forwarded content match>"
+                path_parsed = None
+            else:
+                path = self.cm.clm.result
+                path_parsed = self.cm.url_parsed
+            doc = document.Document(
+                DocumentType.CONTENT_MATCH,
+                path, self.cm.mc, self.cm.doc,
+                self.cm.mc.content_forward_chains, None, None,
+                path_parsed
+            )
+            data = self.forward_buffer.to_bytes()
+            doc.encoding = self.cm.mc.default_document_encoding
+            doc.text = data.decode(doc.encoding, errors="surrogateescape")
+            return doc
+        return None
+
+    def run_job(self) -> Optional['document.Document']:
         success = False
         try:
             if self.status_report:
@@ -861,9 +916,9 @@ class DownloadJob:
                 )
                 self.status_report.enqueue()
             if self.handle_user_interaction() != InteractiveResult.ACCEPT:
-                return False
+                return None
             if not self.fetch_content():
-                return False
+                return None
 
             self.check_abort()
             self.content_stream: Union[BinaryIO, MinimalInputStream, None] = (
@@ -873,9 +928,9 @@ class DownloadJob:
             )
 
             if not self.setup_content_file():
-                return False
+                return None
             if not self.setup_save_file():
-                return False
+                return None
             if self.status_report:
                 # try to generate a better name now that we have more information
                 self.status_report.gen_display_name(
@@ -883,9 +938,11 @@ class DownloadJob:
                     self.cm.mc.content_shell_command_format is not None
                 )
             if not self.setup_print_output():
-                return False
+                return None
             if not self.setup_shell_cmd_output():
-                return False
+                return None
+            if not self.setup_forward_chain():
+                return None
             self.check_abort()
 
             if self.content_stream is None:
@@ -897,7 +954,7 @@ class DownloadJob:
                     assert not res
                     self.check_abort()
                 success = True
-                return True
+                return self.gen_output_doc()
 
             if self.cm.mc.need_output_multipass and self.multipass_file is None:
                 try:
@@ -905,7 +962,7 @@ class DownloadJob:
                         self.cm.mc.ctx, self.save_path)
                     self.temp_file = open(self.temp_file_path, "xb+")
                 except IOError:
-                    return False
+                    return None
                 self.multipass_file = self.temp_file
                 self.check_abort()
 
@@ -937,11 +994,11 @@ class DownloadJob:
                         if len(buf) < DEFAULT_RESPONSE_BUFFER_SIZE:
                             break
             success = True
-            return True
+            return self.gen_output_doc()
         except InterruptedError:
             if self.shell_proc is not None:
                 self.shell_proc.terminate()
-            return False
+            return None
         except Exception as ex:
             if self.shell_proc is not None:
                 self.shell_proc.terminate()
@@ -980,7 +1037,7 @@ class DownloadJob:
 class DownloadManager:
     ctx: 'scr_context.ScrContext'
     max_threads: int
-    pending_jobs: set[concurrent.futures.Future[bool]]
+    pending_jobs: set[concurrent.futures.Future[Optional['document.Document']]]
     pom: PrintOutputManager
     executor: concurrent.futures.ThreadPoolExecutor
     shell_output_handling_executor: concurrent.futures.ThreadPoolExecutor
@@ -1021,7 +1078,7 @@ class DownloadManager:
         if not self.enable_status_reports or not may_print:
             results = concurrent.futures.wait(self.pending_jobs)
             for x in results.done:
-                x.result()  # trigger exceptions
+                scr.forward_document(self.ctx, x.result())
             self.pending_jobs.clear()
         self.pom.request_print_access()
         prm = progress_report.ProgressReportManager()
@@ -1032,22 +1089,22 @@ class DownloadManager:
                 else progress_report.DOWNLOAD_STATUS_REFRESH_INTERVAL
             )
             for x in results.done:
-                x.result()
+                scr.forward_document(self.ctx, x.result())
             self.pending_jobs = results.not_done
             prm.load_status(self)
             if prm.prev_report_line_count == 0 and not self.pending_jobs:
                 # this happens when we got main thread print access
                 # but everybody is already done and never downloaded anything
                 # we don't want any progress reports here
-                for fr in prm.newly_finished_report_lines:
-                    if fr.error:
-                        scr.log(self.ctx, Verbosity.ERROR, fr.error)
                 break
             if not prm.updates_remaining():
                 continue
             prm.print_status_report()
             if not self.pending_jobs:
                 break
+        for rl in prm.finished_report_lines + prm.newly_finished_report_lines:
+            if rl.error:
+                scr.log(self.ctx, Verbosity.ERROR, rl.error)
 
     def reset(self) -> None:
         self.pom.reset()

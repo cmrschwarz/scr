@@ -118,7 +118,7 @@ document_type_display_dict: dict[DocumentType, str] = {
     DocumentType.URL: "url",
     DocumentType.FILE: "file",
     DocumentType.RFILE: "rfile",
-    DocumentType.CONTENT_MATCH: "content match from"
+    DocumentType.CONTENT_MATCH: "content match"
 }
 
 selenium_variants_dict: dict[str, SeleniumVariant] = {

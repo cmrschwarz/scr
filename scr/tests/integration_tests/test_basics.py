@@ -1,7 +1,6 @@
 from .cli_env import CliEnv, run_scr
 import pytest
 from os.path import normpath
-import os
 
 
 def test_basic_xpath(cli_env: CliEnv) -> None:
@@ -47,7 +46,7 @@ def test_filename_in_interactive_label(cli_env: CliEnv) -> None:
         + 'https://httpbin.org/response-headers?Access-Control-Expose-Headers='
         + 'Content-Disposition&Content-Disposition=attachment;filename=content_disposition'
         + ' (ci=1): accept content label "content_disposition" '
-        + '[Yes/no/edit//chainskip/docskip]? content_disposition' + os.linesep
+        + '[Yes/no/edit//chainskip/docskip]? content_disposition\n'
     )
 
 
@@ -135,6 +134,21 @@ def test_connection_failed(cli_env: CliEnv) -> None:
         ],
         ec=1,
         stderr="[ERROR]: Failed to fetch https://xxx: connection failed\n",
+    )
+
+
+def test_cfc(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file0=../res/foo+bar+baz.html",
+            "cx0=//li/@id",
+            "cfc0=1",
+            "cpf0=match: {c}\n",
+            "cr1=^(bar)$",
+            "cpf1=fwd: {cg1}\n"
+        ],
+        stdout=["match: foo", "match: bar", "match: baz", "fwd: bar"],
     )
 
 

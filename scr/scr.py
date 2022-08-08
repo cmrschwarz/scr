@@ -64,13 +64,13 @@ class OutputFormatter:
     _args_list: list[Any]
     _format_parts: list[tuple[str, Union[str, None],
                               Union[str, None], Union[str, None]]]
-    _out_stream: Union[BinaryIO, 'download_job.PrintOutputStream', IO[bytes]]
+    _out_stream: Union['download_job.PrintOutputStream', 'download_job.ByteBuffer', IO[bytes]]
     _found_stream: bool = False
     _input_buffer_sizes: int
 
     def __init__(
         self, format_str: str, cm: 'content_match.ContentMatch',
-        out_stream: Union[BinaryIO, 'download_job.PrintOutputStream', IO[bytes]],
+        out_stream: Union['download_job.PrintOutputStream', 'download_job.ByteBuffer', IO[bytes]],
         content: Union[str, bytes, 'download_job.MinimalInputStream', BinaryIO, None],
     ) -> None:
         self._args_dict = content_match_build_format_args(cm, content)
@@ -390,6 +390,9 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.content_write_format is not None and mc.content_save_format is None:
         mc.content_save_format = DEFAULT_CSF
 
+    if mc.content_forward_chains and mc.content_forward_format is None:
+        mc.content_forward_format = DEFAULT_CWF
+
     if not mc.document_output_chains:
         mc.document_output_chains = [mc]
 
@@ -485,7 +488,8 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_shell_command_format,
         mc.content_shell_command_stdin_format,
         mc.content_save_format,
-        mc.content_write_format
+        mc.content_write_format,
+        mc.content_forward_format
     ]
 
     label_formats = [mc.loc_label.format, mc.label_default_format]
@@ -1014,6 +1018,8 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
         ctx.reused_doc = None
         if doc.text and not ctx.changed_selenium:
             return
+    if doc.document_type == DocumentType.CONTENT_MATCH:
+        return
     if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
         log(
             ctx, Verbosity.INFO,
@@ -1065,6 +1071,12 @@ def get_ci_di_context(cm: 'content_match.ContentMatch') -> str:
 
 def get_content_type_label(cm: 'content_match.ContentMatch') -> str:
     return "content match" if cm.mc.content_raw else "content link"
+
+
+def forward_document(ctx: 'scr_context.ScrContext', doc: Optional['document.Document']) -> None:
+    if doc is None:
+        return
+    ctx.docs.append(doc)
 
 
 def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Optional[str]) -> InteractiveResult:
@@ -1146,9 +1158,9 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
             cm.mc.ctx.dl_manager.submit(job)
         else:
             job.request_print_streams(cm.mc.ctx.dl_manager.pom)
-            job.run_job()
+            forward_document(cm.mc.ctx, job.run_job())
     else:
-        job.run_job()
+        forward_document(cm.mc.ctx, job.run_job())
 
     return InteractiveResult.ACCEPT
 

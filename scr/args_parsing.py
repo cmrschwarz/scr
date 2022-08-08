@@ -568,9 +568,6 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
         if apply_mc_arg(ctx, "cin", ["loc_content", "interactive"], arg, parse_bool_arg, True):
             continue
-        if apply_mc_arg(ctx, "cfc", ["loc_content"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
-            continue
-
         if apply_mc_arg(ctx, "cimin", ["cimin"], arg, parse_int_arg):
             continue
         if apply_mc_arg(ctx, "cimax", ["cimax"], arg, parse_int_arg):
@@ -579,6 +576,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
 
         if apply_mc_arg(ctx, "cff", ["content_forward_format"], arg):
+            continue
+        if apply_mc_arg(ctx, "cfc", ["content_forward_chains"], arg, lambda v, arg: parse_mc_arg_as_range(ctx, arg, v)):
             continue
         if apply_mc_arg(ctx, "cpf", ["content_print_format"], arg):
             continue
