@@ -141,6 +141,17 @@ def test_no_url_error(cli_env: CliEnv) -> None:
     )
 
 
+def test_invalid_range(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "cr1-0=.",
+        ],
+        ec=1,
+        stderr="[ERROR]: second value must be larger than first for range 1-0 in match chain specification of 'cr1-0'\n"
+    )
+
+
 @pytest.mark.repl()
 def test_no_url_error_repl(cli_env: CliEnv) -> None:
     run_scr(

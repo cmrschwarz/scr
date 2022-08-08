@@ -73,7 +73,6 @@ class MatchChain(ConfigDataClass):
     # TODO: this should include if this is the target of any doc=...
     has_document_matching: bool = False
     has_content_matching: bool = False
-    needs_document_content = False  # used for the document as content optimization
     has_interactive_matching: bool = False
     need_content: bool = False
     need_label: bool = False

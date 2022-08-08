@@ -7,6 +7,8 @@ import urllib
 
 class Document:
     document_type: DocumentType
+    # since this is used for logging a lot, we put "<content match>"
+    # for documents without a path
     path: str
     path_parsed: urllib.parse.ParseResult
     encoding: Optional[str]
@@ -48,8 +50,13 @@ class Document:
                 match_chains, key=lambda mc: mc.chain_id)
         self.expand_match_chains_above = expand_match_chains_above
 
-    def __key__(self) -> tuple[DocumentType, str]:
-        return (self.document_type, self.path)
+    def __key__(self) -> tuple[DocumentType, int,  Optional[str], Optional[str]]:
+        return (
+            self.document_type,
+            self.src_mc.chain_id if self.src_mc else -1,
+            self.path,
+            self.text if not self.path else None
+        )
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(self, other.__class__) and self.__key__() == other.__key__()

@@ -322,7 +322,7 @@ def test_connection_timeout(cli_env: CliEnv) -> None:
             "timeout=0.5"
         ],
         stderr=[
-            "[ERROR]: http://httpbin.org/delay/5 (ci=1): failed to download 'http://httpbin.org/delay/5': connection timeout"
+            "[ERROR]: Failed to fetch http://httpbin.org/delay/5: connection timeout"
         ],
         ec=1
     )
@@ -542,4 +542,39 @@ def test_cshp_single_threaded(cli_env: CliEnv) -> None:
             "mt=0"
         ],
         stdout=f"a{os.linesep}b{os.linesep}"
+    )
+
+
+def test_implicit_range_begin(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "cmatch=x",
+            "cr-2=.+",
+        ],
+        stdout="x\nx\nx\n"
+    )
+
+
+def test_indoc_rfile(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "indoc=rfile",
+            "cpf={c}"
+        ],
+        stdin="../res/a.txt",
+        stdout="a\n"
+    )
+
+
+def test_indoc_implicit_cmatch(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "indoc",
+            "cpf={c}"
+        ],
+        stdin="x",
+        stdout="x"
     )

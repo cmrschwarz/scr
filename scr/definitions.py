@@ -99,13 +99,10 @@ class DocumentType(Enum):
     FILE = 2
     RFILE = 3
     CONTENT_MATCH = 4
-    CONTENT_FILE = 999  # special type for the document as content optimization
 
     def derived_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.URL
-        if self == DocumentType.CONTENT_FILE:
-            return DocumentType.FILE
         return self
 
     def url_handling_type(self) -> 'DocumentType':
@@ -113,6 +110,13 @@ class DocumentType(Enum):
             return DocumentType.FILE
         return self
 
+
+document_type_dict: dict[str, DocumentType] = {
+    "url": DocumentType.URL,
+    "file": DocumentType.FILE,
+    "rfile": DocumentType.RFILE,
+    "cmatch": DocumentType.CONTENT_MATCH
+}
 
 document_type_display_dict: dict[DocumentType, str] = {
     DocumentType.URL: "url",

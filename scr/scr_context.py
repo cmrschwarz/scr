@@ -36,6 +36,7 @@ class ScrContext(ConfigDataClass):
     cookie_jar: Optional[MozillaCookieJar] = None
     cookie_dict: dict[str, dict[str, dict[str, Any]]]
     selenium_driver: Optional[SeleniumWebDriver] = None
+    stdin_text: Optional[str] = None
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(

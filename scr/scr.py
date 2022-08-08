@@ -402,8 +402,6 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     locators = [mc.loc_content, mc.loc_label, mc.loc_document]
     for loc in locators:
         loc.setup(mc)
-        if loc.is_active():
-            mc.needs_document_content = True
 
     if any(lc.xpath is not None for lc in locators):
         mc.has_xpath_matching = True
@@ -413,7 +411,6 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.has_content_xpaths = True
     if mc.loc_document.is_active():
         mc.has_document_matching = True
-        mc.needs_document_content = True
     if mc.loc_label.interactive or mc.loc_content.interactive:
         mc.has_interactive_matching = True
 
@@ -432,16 +429,7 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.has_content_matching and all(cov is None for cov in content_output_variants):
         mc.content_print_format = DEFAULT_CPF
 
-    if not mc.content_raw or ctx.selenium_variant.enabled():
-        mc.needs_document_content = True
-    if not mc.needs_document_content:
-        # prepare chain to be used in the document -> content link optimization
-        mc.content_raw = False
-
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
-    if not mc.needs_document_content:
-        # to remove "{cm}" from the available matches
-        dummy_cm.clm.result = None  # type: ignore
     if mc.content_print_format is not None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
 
@@ -1187,25 +1175,8 @@ def handle_document_match(mc: 'match_chain.MatchChain', doc: 'document.Document'
 
 
 def gen_content_matches(
-    mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str, doc_as_content: bool
+    mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str
 ) -> tuple[list['content_match.ContentMatch'], int]:
-    if doc_as_content:
-        dummy_llm = None
-        if mc.has_label_matching:
-            dummy_llm = locator.LocatorMatch()
-        dummy_clm = locator.LocatorMatch()
-        dummy_clm.result = doc.path
-        dummy_doc = doc
-        if doc.document_type.derived_type() == DocumentType.FILE:
-            # - we need normalize url to not change relative pathes
-            # - we also need the derived type FILE even for rfiles
-            # - we can't just change the document_type because this messes
-            #   with last_doc for the repl
-            dummy_doc = document.Document(
-                DocumentType.CONTENT_FILE, path=doc.path, src_mc=doc.src_mc, parent_doc=doc,
-                locator_match=doc.locator_match, path_parsed=doc.path_parsed
-            )
-        return [content_match.ContentMatch(dummy_clm, dummy_llm, mc, dummy_doc)], 0
     text = cast(str, doc.text)
     content_matches: list[content_match.ContentMatch] = []
     content_lms_xp: list[locator.LocatorMatch] = mc.loc_content.match_xpath(
@@ -1434,10 +1405,10 @@ def match_chain_was_satisfied(mc: 'match_chain.MatchChain') -> tuple[bool, bool]
     return satisfied, interactive
 
 
-def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str, doc_as_content: bool) -> None:
+def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str) -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc, last_doc_path, doc_as_content
+            mc, doc, last_doc_path
         )
     else:
         content_matches = []
@@ -1515,8 +1486,6 @@ def normalize_link(
     src_doc_type: 'DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
     last_doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
-    if src_doc_type == DocumentType.CONTENT_FILE:
-        return link, link_parsed
     if last_doc_path is not None:
         doc_url_parsed = urllib.parse.urlparse(last_doc_path)
     elif src_doc_path is not None:
@@ -1601,11 +1570,8 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
         last_doc_path = doc.path
         unsatisfied_chains = 0
         have_xpath_matching = 0
-        doc_as_content_opt_possible = not ctx.selenium_variant.enabled()
         for mc in doc.match_chains:
             if mc.need_document_matches(False) or mc.need_content_matches():
-                if mc.needs_document_content:
-                    doc_as_content_opt_possible = False
                 unsatisfied_chains += 1
                 mc.satisfied = False
                 if mc.has_xpath_matching:
@@ -1616,8 +1582,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
 
         try_number = 0
         try:
-            if not doc_as_content_opt_possible:
-                fetch_doc(ctx, doc)
+            fetch_doc(ctx, doc)
         except SeleniumWebDriverException as ex:
             if selenium_setup.selenium_has_died(ctx):
                 selenium_setup.report_selenium_died(ctx)
@@ -1666,8 +1631,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
                     if mc.satisfied:
                         continue
                     mc.js_executed = False
-                    handle_match_chain(mc, doc, last_doc_path,
-                                       doc_as_content_opt_possible)
+                    handle_match_chain(mc, doc, last_doc_path)
                     satisfied, interactive = match_chain_was_satisfied(mc)
                     if satisfied:
                         log(

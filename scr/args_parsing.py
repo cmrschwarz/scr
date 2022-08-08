@@ -5,7 +5,7 @@ import copy
 from .definitions import (
     T, ScrSetupError, DocumentType, SeleniumVariant, selenium_variants_dict,
     selenium_strats_dict, selenium_download_strategies_dict, verbosities_dict,
-    document_duplication_dict,
+    document_duplication_dict, document_type_dict,
     VERSION, SCRIPT_NAME, DEFAULT_ESCAPE_SEQUENCE, DEFAULT_CPF, DEFAULT_CWF,
     DEFAULT_TIMEOUT_SECONDS
 )
@@ -283,7 +283,7 @@ def parse_mc_arg(
             if not MATCH_CHAIN_ARGUMENT_REGEX.match(mc_spec):
                 return None
         elif not support_blank:
-            raise ScrSetupError("missing equals sign in argument '{arg}'")
+            raise ScrSetupError(f"missing equals sign in argument '{arg}'")
         pre_eq_arg = arg
         value = None
     else:
@@ -417,32 +417,23 @@ def verify_encoding(encoding: str) -> bool:
         return False
 
 
-def apply_doc_arg(
-    ctx: 'scr_context.ScrContext', argname: str, doctype: 'DocumentType', arg: str
-) -> bool:
-    parse_result = parse_mc_arg(ctx, argname, arg)
-    if parse_result is None:
-        return False
-    mcs, path = parse_result
-    assert path is not None
-    mcs = list(mcs)
-    if mcs == [ctx.defaults_mc]:
-        extend_chains_above = len(ctx.match_chains)
-        mcs = list(ctx.match_chains)
-    elif ctx.origin_mc in mcs:
-        mcs.remove(ctx.origin_mc)
-        extend_chains_above = len(ctx.match_chains)
+def gen_doc_from_arg(
+    ctx: 'scr_context.ScrContext',
+    mcs: list['match_chain.MatchChain'], extend_chains_above: Optional[int],
+    doctype: DocumentType, value: str
+) -> 'document.Document':
+    if doctype == DocumentType.CONTENT_MATCH:
+        path, path_parsed = "<content match>", None
     else:
-        extend_chains_above = None
-    path, path_parsed = scr.normalize_link(
-        ctx,
-        None,
-        doctype.url_handling_type(),
-        None,
-        None,
-        path,
-        urllib.parse.urlparse(path)
-    )
+        path, path_parsed = scr.normalize_link(
+            ctx,
+            None,
+            doctype.url_handling_type(),
+            None,
+            None,
+            value,
+            urllib.parse.urlparse(value)
+        )
     doc = document.Document(
         doctype,
         path,
@@ -452,7 +443,54 @@ def apply_doc_arg(
         extend_chains_above,
         path_parsed=path_parsed
     )
-    ctx.docs.append(doc)
+    if doctype == DocumentType.CONTENT_MATCH:
+        doc.text = value
+    return doc
+
+
+def parse_doc_arg(
+    ctx: 'scr_context.ScrContext', argname: str, arg: str, supports_blank: bool
+) -> Optional[tuple[list['match_chain.MatchChain'], Optional[int], Optional[str]]]:
+    parse_result = parse_mc_arg(ctx, argname, arg, supports_blank)
+    if parse_result is None:
+        return None
+    mcs, value = parse_result
+    mcs = list(mcs)
+    if mcs == [ctx.defaults_mc]:
+        extend_chains_above = len(ctx.match_chains)
+        mcs = list(ctx.match_chains)
+    elif ctx.origin_mc in mcs:
+        mcs.remove(ctx.origin_mc)
+        extend_chains_above = len(ctx.match_chains)
+    else:
+        extend_chains_above = None
+    return (mcs, extend_chains_above, value)
+
+
+def apply_doc_arg(
+    ctx: 'scr_context.ScrContext', argname: str, doctype: 'DocumentType', arg: str
+) -> bool:
+    parse_result = parse_doc_arg(ctx, argname, arg, False)
+    if parse_result is None:
+        return False
+    mcs, extend_chains_above, value = parse_result
+    assert value is not None
+    ctx.docs.append(gen_doc_from_arg(ctx, mcs, extend_chains_above, doctype, value))
+    return True
+
+
+def apply_doc_arg_stdin(ctx: 'scr_context.ScrContext', argname: str, arg: str) -> bool:
+    parse_result = parse_doc_arg(ctx, argname, arg, True)
+    if parse_result is None:
+        return False
+    mcs, extend_chains_above, value = parse_result
+    if value is None:
+        doctype = DocumentType.CONTENT_MATCH
+    else:
+        doctype = parse_variant_arg(value, document_type_dict, arg)
+    if ctx.stdin_text is None:
+        ctx.stdin_text = sys.stdin.read()
+    ctx.docs.append(gen_doc_from_arg(ctx, mcs, extend_chains_above, doctype, ctx.stdin_text))
     return True
 
 
@@ -687,7 +725,10 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
         if apply_doc_arg(ctx, "file", DocumentType.FILE, arg):
             continue
-
+        if apply_doc_arg(ctx, "cmatch", DocumentType.CONTENT_MATCH, arg):
+            continue
+        if apply_doc_arg_stdin(ctx, "indoc", arg):
+            continue
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):
             continue
 
