@@ -71,40 +71,6 @@ def test_disallow_option_reassignment(cli_env: CliEnv) -> None:
     )
 
 
-def test_disallow_unused_match_chain_first(cli_env: CliEnv) -> None:
-    run_scr(
-        cli_env,
-        args=[
-            "url3=xxx"
-        ],
-        ec=1,
-        stderr="[ERROR]: match chain 0 is unused, it has neither document nor content matching\n"
-    )
-
-
-def test_disallow_unused_match_chain_multichain(cli_env: CliEnv) -> None:
-    run_scr(
-        cli_env,
-        args=[
-            "url=xxx"
-        ],
-        ec=1,
-        stderr="[ERROR]: match chain 0 is unused, it has neither document nor content matching\n"
-    )
-
-
-def test_disallow_unused_match_chain(cli_env: CliEnv) -> None:
-    run_scr(
-        cli_env,
-        args=[
-            "url0=xxx",
-            "cr1=.*"
-        ],
-        ec=1,
-        stderr="[ERROR]: match chain 0 is unused, it has neither document nor content matching\n"
-    )
-
-
 def test_label_format_unavailable_in_label_format(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

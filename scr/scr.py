@@ -429,6 +429,12 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.has_content_matching and all(cov is None for cov in content_output_variants):
         mc.content_print_format = DEFAULT_CPF
 
+    if not mc.has_content_matching and not mc.has_document_matching:
+        if not (mc.chain_id == 0 and (mc.ctx.repl or mc.ctx.special_args_occured)):
+            # if the whole document is printed, we don't want an additional newline
+            mc.content_print_format = DEFAULT_CWF
+            mc.has_content_matching = True
+
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
     if mc.content_print_format is not None:
         validate_format(mc, ["content_print_format"], dummy_cm, True, True)
@@ -515,12 +521,6 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         validate_format(mc, ["filename_default_format"], dummy_cm, True, False)
         dummy_cm.filename = fn
 
-    if not mc.has_content_matching and not mc.has_document_matching:
-        if not (mc.chain_id == 0 and (mc.ctx.repl or mc.ctx.special_args_occured)):
-            raise ScrSetupError(
-                f"match chain {mc.chain_id} is unused, it has neither document nor content matching"
-            )
-
 
 def load_cookie_jar(ctx: 'scr_context.ScrContext') -> None:
     if ctx.cookie_file is None:
@@ -567,8 +567,6 @@ def get_random_user_agent() -> UserAgent:
 
 
 def setup(ctx: 'scr_context.ScrContext') -> None:
-    global DEFAULT_CPF
-
     if ctx.tor_browser_dir:
         if ctx.selenium_variant is None:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
