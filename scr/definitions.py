@@ -4,7 +4,7 @@ from enum import Enum, IntEnum
 # because for python, sys.argv[0] does not reflect what the user typed anyways,
 # we just use this fixed value for --help etc.
 SCRIPT_NAME = "scr"
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
