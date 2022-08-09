@@ -178,14 +178,23 @@ def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:
 
 
 def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
-    def preexec_function() -> None:
-        if sys.platform != "win32":  # make mypy happy
-            # this makes sure that the selenium instance does not die on SIGINT
-            os.setpgrp()
     original_p_open = subprocess.Popen
-    subprocess.Popen = functools.partial(  # type: ignore
-        subprocess.Popen, preexec_fn=preexec_function
-    )
+    if sys.platform == "win32":
+        # https://msdn.microsoft.com/en-us/library/windows/desktop/ms684863(v=vs.85).aspx
+        # prevents CTRL+C propagation
+        CREATE_NEW_PROCESS_GROUP = 0x200
+
+        def popen_wrapper(*args: Any, **kwargs: Any) -> Any:
+            kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_NEW_PROCESS_GROUP
+            return original_p_open(*args, **kwargs)
+        new_popen = popen_wrapper
+    else:
+        def preexec_function() -> None:
+            os.setpgrp()
+        new_popen = functools.partial(
+            subprocess.Popen, preexec_fn=preexec_function
+        )
+    subprocess.Popen = new_popen  # type: ignore
     try:
         selenium_start_wrapper.original_start(*args, **kwargs)  # type: ignore
     finally:
@@ -193,9 +202,6 @@ def selenium_start_wrapper(*args: Any, **kwargs: Any) -> None:
 
 
 def prevent_selenium_sigint() -> None:
-    if utils.is_windows():
-        # TODO
-        return
     if selenium.webdriver.common.service.Service.start is selenium_start_wrapper:
         return
     selenium_start_wrapper.original_start = selenium.webdriver.common.service.Service.start  # type: ignore
