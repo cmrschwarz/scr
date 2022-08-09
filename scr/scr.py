@@ -1493,21 +1493,19 @@ def normalize_link(
 def parse_xml(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
     try:
         text = cast(str, doc.text)
-        src_bytes = text.encode(cast(str, doc.encoding),
-                                errors="surrogateescape")
         if text.strip() == "":
             src_xml = lxml.html.Element("html")
         elif doc.forced_encoding:
+            src_bytes = text.encode(cast(str, doc.encoding), errors="surrogateescape")
             src_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(
                 src_bytes,
                 parser=lxml.html.HTMLParser(encoding=doc.encoding)
             ))
         else:
-            src_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(src_bytes))
+            src_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
         doc.xml = src_xml
     except (lxml.etree.LxmlError, UnicodeEncodeError, UnicodeDecodeError) as ex:
-        log(ctx, Verbosity.ERROR,
-            f"{doc.path}: failed to parse as xml: {str(ex)}")
+        log(ctx, Verbosity.ERROR, f"{doc.path}: failed to parse as xml: {str(ex)}")
 
 
 def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.Document']:

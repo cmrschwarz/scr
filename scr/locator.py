@@ -237,6 +237,8 @@ class Locator(ConfigDataClass):
         if self.xpath is None:
             lm = LocatorMatch()
             lm.result = src_text
+            if store_xml:
+                lm.xmatch_xml = src_xml
             return [lm]
         assert src_xml is not None
         try:
