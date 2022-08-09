@@ -1,6 +1,9 @@
 import re
 from typing import Union
 
+# in some cases pytest's attemt to highlight string differences makes the output
+# pretty unreadable, so we rust raise a ValueError
+# with the expected and received strings in the exception message instead
 USE_PYTEST_ASSERTIONS = False
 
 

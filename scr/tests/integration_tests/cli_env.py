@@ -5,6 +5,7 @@ import pytest
 from typing import Optional, cast, Generator, Union
 from ... import scr
 from ..utils import USE_PYTEST_ASSERTIONS, received_expected_strs, validate_text, join_lines
+from ...utils import is_windows
 
 
 class CliEnv():
@@ -22,7 +23,8 @@ class CliEnv():
         self.special_files = set()
 
     def set_stdin(self, stdin: str) -> None:
-        if stdin:
+        # can't use devnull on windows because it reports as a tty...
+        if stdin or is_windows():
             stdin_file_path = str(os.path.join(self.tmpdir, "_pytest_stdin"))
             stdin_mode = "w+"
             self.special_files.add("_pytest_stdin")
@@ -90,13 +92,8 @@ class ScrRunResults:
             with open(of) as f:
                 received = f.read()
             expected = expected_files[of]
-            if expected is not None and expected != received:
-                if USE_PYTEST_ASSERTIONS:
-                    assert expected == received, f"output file '{of}' has wrong contents"
-                else:
-                    raise ValueError(
-                        f"output file '{of}' has wrong contents:\n{received_expected_strs(received, expected)}"
-                    )
+            if expected is not None:
+                validate_text(f"output file '{of}' has wrong contents", expected, received, False)
 
 
 def run_scr_raw(
