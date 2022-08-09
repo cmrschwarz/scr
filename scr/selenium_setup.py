@@ -125,12 +125,9 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
 
     options = selenium.webdriver.ChromeOptions()
     options.binary_location = ""
-    browser_path = selenium_driver_download.find_chrome_binary()
     if ctx.selenium_headless:
         options.headless = True
     options.add_argument("--incognito")
-    if browser_path is not None:
-        options.binary_location = browser_path
     if ctx.user_agent is not None:
         options.add_argument(f"user-agent={ctx.user_agent}")
     if ctx.downloads_temp_dir is not None:
@@ -141,20 +138,28 @@ def setup_selenium_chrome(ctx: 'scr_context.ScrContext') -> None:
         }
         options.add_experimental_option("prefs", prefs)
     options.add_experimental_option("excludeSwitches", ["enable-logging"])
-    try:
-        ctx.selenium_driver = selenium.webdriver.Chrome(
-            options=options,
-            service=SeleniumChromeService(  # type: ignore
-                log_path=ctx.selenium_log_path
+    browser_paths = selenium_driver_download.find_chrome_binaries()
+    err_msg = None
+    for bp in [*browser_paths, None]:
+        if bp is not None:
+            options.binary_location = bp
+        try:
+            ctx.selenium_driver = selenium.webdriver.Chrome(
+                options=options,
+                service=SeleniumChromeService(  # type: ignore
+                    log_path=ctx.selenium_log_path
+                )
             )
-        )
-    except (SeleniumWebDriverException, OSError) as ex:
-        err_msg = f"failed to start chromedriver: {utils.truncate(str(ex))}"
+            return
+        except (SeleniumWebDriverException, OSError) as ex:
+            if err_msg is not None:
+                continue
+            err_msg = f"failed to start chromedriver: {utils.truncate(str(ex))}"
+            if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.CHROME) is None:
+                # same hack as for firefox
+                err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=chrome'"
 
-        if selenium_driver_download.try_get_local_selenium_driver_path(SeleniumVariant.CHROME) is None:
-            # same hack as for firefox
-            err_msg += f"\n{verbosities_display_dict[Verbosity.INFO]}consider running '{SCRIPT_NAME} selinstall=chrome'"
-        raise ScrSetupError(err_msg)
+    raise ScrSetupError(err_msg)
 
 
 def selenium_add_cookies_through_get(ctx: 'scr_context.ScrContext') -> None:

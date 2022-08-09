@@ -530,7 +530,7 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
         ctx.user_agent = SCR_USER_AGENT
 
     if ctx.enable_status_reports is None:
-        ctx.enable_status_reports = sys.stdin.isatty()
+        ctx.enable_status_reports = sys.stdout.isatty()
 
     # if no chains are specified, use the origin chain as chain 0
     if not ctx.match_chains:
@@ -1727,7 +1727,7 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
         if not utils.is_windows():
             readline.set_auto_history(False)
         readline.add_history(shlex.join(args[1:]))
-        tty = sys.stdin.isatty()
+        tty = sys.stdout.isatty()
         stable_ctx = initial_ctx
         ctx: Optional['scr_context.ScrContext'] = initial_ctx
         while True:

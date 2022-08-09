@@ -129,14 +129,14 @@ selenium_variants_dict: dict[str, SeleniumVariant] = {
     "disabled": SeleniumVariant.DISABLED,
     "tor": SeleniumVariant.TORBROWSER,
     "firefox": SeleniumVariant.FIREFOX,
-    "chrome": SeleniumVariant.CHROME
+    "chrome": SeleniumVariant.CHROME,
 }
 
 selenium_variants_display_dict: dict[SeleniumVariant, str] = {
     SeleniumVariant.DISABLED: "disabled",
     SeleniumVariant.TORBROWSER: "Tor Browser",
     SeleniumVariant.FIREFOX: "Firefox",
-    SeleniumVariant.CHROME: "Chrome"
+    SeleniumVariant.CHROME: "Chrome",
 }
 
 

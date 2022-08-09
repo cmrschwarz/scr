@@ -13,22 +13,24 @@ from functools import cache
 SELENIUM_DRIVER_DIR_ADDED_TO_PATH: bool = False
 
 
-def try_resolve_executable_names(exec_names: list[str]) -> Optional[str]:
+def try_resolve_executable_names(exec_names: list[str]) -> list[str]:
+    res = set()
     for x in exec_names:
         path = shutil.which(x)
         if path is not None:
-            return path
-    return None
+            res.add(path)
+    return list(res)
 
 
-def accept_first_existing_path(paths: list[str]) -> Optional[str]:
+def accept_existing_paths(paths: list[str]) -> list[str]:
+    res = set()
     for path in paths:
         if os.path.exists(path):
-            return path
-    return None
+            res.add(path)
+    return list(res)
 
 
-def find_chrome_binary() -> Optional[str]:
+def find_chrome_binaries() -> list[str]:
     if utils.is_linux():
         return try_resolve_executable_names([
             "chromium",
@@ -37,19 +39,19 @@ def find_chrome_binary() -> Optional[str]:
             "google-chrome"
         ])
     if utils.is_osx():
-        return accept_first_existing_path([
+        return accept_existing_paths([
             "/Applications/Chromium.app/Contents/MacOS/Chromium",
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         ])
     if not utils.is_windows():
-        return None
+        return []
 
-    return utils.choose_first_not_none(
-        lambda: windows.try_get_app_path_from_reg_uninstall_path("Chromium", "chrome.exe"),
-        lambda: windows.try_get_app_path_from_reg_start_menu_internet("Chromium"),
-        lambda: windows.try_get_app_path_from_reg_app_paths("chrome.exe"),
-        lambda: windows.try_get_app_path_from_reg_uninstall_path("Google Chrome", "chrome.exe"),
-        lambda: windows.try_get_app_path_from_reg_start_menu_internet("Google Chrome"),
+    return utils.unique_not_none(
+        windows.try_get_app_path_from_reg_uninstall_path("Chromium", "chrome.exe"),
+        windows.try_get_app_path_from_reg_start_menu_internet("Chromium"),
+        windows.try_get_app_path_from_reg_app_paths("chrome.exe"),
+        windows.try_get_app_path_from_reg_uninstall_path("Google Chrome", "chrome.exe"),
+        windows.try_get_app_path_from_reg_start_menu_internet("Google Chrome"),
     )
 
 

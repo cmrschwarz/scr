@@ -5,7 +5,6 @@ import pytest
 from typing import Optional, cast, Generator, Union
 from ... import scr
 from ..utils import USE_PYTEST_ASSERTIONS, received_expected_strs, validate_text, join_lines
-from ...utils import is_windows
 
 
 class CliEnv():
@@ -23,8 +22,7 @@ class CliEnv():
         self.special_files = set()
 
     def set_stdin(self, stdin: str) -> None:
-        # can't use devnull on windows because it reports as a tty...
-        if stdin or is_windows():
+        if stdin:
             stdin_file_path = str(os.path.join(self.tmpdir, "_pytest_stdin"))
             stdin_mode = "w+"
             self.special_files.add("_pytest_stdin")
@@ -131,7 +129,7 @@ def run_scr(
     stdout = join_lines(stdout)
     stderr = join_lines(stderr)
     res = run_scr_raw(env, args, stdin)
-    res.validate_stdout(stdout, stdout_re)
     res.validate_stderr(stderr, stderr_re)
+    res.validate_stdout(stdout, stdout_re)
     res.validate_file_results(output_files)
     res.validate_exit_code(ec)

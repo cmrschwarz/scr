@@ -52,6 +52,15 @@ def choose_first_not_none(*tries: Callable[[], Optional[T]]) -> Optional[T]:
     return None
 
 
+def unique_not_none(*values: Optional[T]) -> list[T]:
+    # since mypy complains about lambdas in filters, we use this
+    res = set()
+    for v in values:
+        if v is not None:
+            res.add(v)
+    return list(res)
+
+
 def stdin_has_content(timeout: float) -> bool:
     assert timeout >= 0
     if sys.platform != 'win32':
