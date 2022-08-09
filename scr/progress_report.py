@@ -21,8 +21,8 @@ CMD_RUNNING_HINT = "(cmd running...)"
 def get_byte_size_string(size: Union[int, float]) -> tuple[str, str]:
     if size < 2**10:
         if type(size) is int:
-            return f"{size}", "B"
-        return f"{size:.2f}", "B"
+            return f"{size}", " B"
+        return f"{size:.2f}", " B"
     units = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
     unit = int(math.log(size, 1024))
     if unit >= len(units):
@@ -56,8 +56,8 @@ def pad(string: str, tgt_len: int) -> str:
 
 class DownloadStatusReport:
     name: str
-    has_dl: bool
-    has_cmd: bool
+    has_dl: bool = False
+    has_cmd: bool = False
     expected_size: Optional[int] = None
     downloaded_size: int = 0
     download_begin_time: datetime.datetime
@@ -325,7 +325,7 @@ class ProgressReportManager:
                         get_byte_size_string(rl.expected_size)
                     )
                 else:
-                    rl.expected_size_str, rl.expected_size_u_str = "???", " B"
+                    rl.expected_size_str, rl.expected_size_u_str = "???", ""
 
                 rl.size_separator_str = " / "
                 if rl.speed_calculatable:
@@ -337,12 +337,12 @@ class ProgressReportManager:
                     if duration < sys.float_info.epsilon:
                         rl.speed_str, rl.speed_u_str = "???", " B/s"
                         if not rl.finished:
-                            rl.eta_str, rl.eta_u_str = "???", " s"
+                            rl.eta_str, rl.eta_u_str = "???", ""
                     else:
                         if handled_size == 0:
                             speed = 0.0
                             if not rl.finished:
-                                rl.eta_str, rl.eta_u_str = "???", " s"
+                                rl.eta_str, rl.eta_u_str = "???", ""
                         else:
                             speed = float(handled_size) / duration
                             if not rl.finished:
@@ -351,14 +351,14 @@ class ProgressReportManager:
                                         (rl.expected_size - rl.downloaded_size) / speed
                                     )
                                 else:
-                                    rl.eta_str, rl.eta_u_str = "???", " s"
+                                    rl.eta_str, rl.eta_u_str = "???", ""
                         rl.speed_str, rl.speed_u_str = get_byte_size_string(speed)
                         rl.speed_u_str = rl.speed_u_str + "/s"
                 else:
                     rl.speed_frame_time_end = now
                     rl.speed_str, rl.speed_u_str = "???", " B/s"
                     if not rl.finished:
-                        rl.eta_str, rl.eta_u_str = "???", " s"
+                        rl.eta_str, rl.eta_u_str = "???", ""
                 rl.speed_str = " " + rl.speed_str
 
             rl.total_time_str, rl.total_time_u_str = get_timespan_string(
@@ -415,7 +415,7 @@ class ProgressReportManager:
             line += lpad(rl.eta_str, self.eta_lm)
             line += rpad(rl.eta_u_str, self.eta_u_lm)
 
-            line += "   "
+            line += "  "
             line += rl.name
 
             if len(line) < rl.last_line_length:
