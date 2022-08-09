@@ -87,7 +87,7 @@ scr [OPTIONS]
         cshp=<bool>           print the output of the shell commands on stdout and stderr
         cfc=<chain spec>      forward content match as a virtual document
         cff=<format string>   format of the virtual document forwarded to the cfc chains. defaults to "{c}"
-        csin=<bool>            give a prompt to edit the save path for a file
+        csin=<bool>           give a prompt to edit the save path for a file
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to "<END>"
@@ -193,6 +193,7 @@ scr [OPTIONS]
         timeout=<float>        seconds before a web request timeouts (default 30)
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
+        prog=<bool>            whether to display progress bars for content downloads (defaults to true if stdout is a tty)
         ua=<string>            user agent to pass in the html header for url GETs
         uar=<bool>             use a rangom user agent
         selkeep=<bool>         keep selenium instance alive after the command finished
