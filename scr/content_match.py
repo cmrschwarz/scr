@@ -14,7 +14,7 @@ class ContentMatch:
     ci: Optional[int] = None
     di: Optional[int] = None
 
-    url_parsed: Optional[urllib.parse.ParseResult]
+    url_parsed: Optional[urllib.parse.ParseResult] = None
 
     def __init__(
         self,

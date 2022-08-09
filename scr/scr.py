@@ -1140,7 +1140,7 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
     if res != InteractiveResult.ACCEPT:
         return res
     if cm.mc.ctx.dl_manager is not None:
-        if job.requires_download():
+        if job.warrants_background_task():
             cm.mc.ctx.dl_manager.submit(job)
         else:
             job.request_print_streams(cm.mc.ctx.dl_manager.pom)
@@ -1490,7 +1490,7 @@ def normalize_link(
         doc_url_parsed = src_doc_path
     else:
         doc_url_parsed = None
-    if src_doc_type.derived_type() == DocumentType.FILE:
+    if src_doc_type.derived_type() in [DocumentType.FILE, DocumentType.CONTENT_MATCH]:
         if not link_parsed.scheme:
             handle_windows_paths: bool = False
             if not os.path.isabs(link):
@@ -1797,7 +1797,8 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
                     ctx = None
                 try:
                     line = input(f"{SCRIPT_NAME}> " if tty else "")
-                    readline.add_history(line)
+                    if line.strip():
+                        readline.add_history(line)
                 except EOFError:
                     if tty:
                         print("")

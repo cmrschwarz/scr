@@ -140,7 +140,8 @@ class PrintOutputManager:
                 else:
                     sys.stdout.buffer.write(b)
             if len(stored_buffers) != 0:
-                self.size_blocked.notifyAll()
+                with self.lock:
+                    self.size_blocked.notifyAll()
 
     def request_print_access(self) -> int:
         with self.lock:
@@ -295,6 +296,7 @@ class DownloadJob:
     content_format: Optional[ContentFormat] = None
     status_report: Optional['progress_report.DownloadStatusReport'] = None
     shell_proc: Optional[subprocess.Popen[Any]] = None
+    shell_cmd: Optional[str] = None
     shell_output_handlers: list[concurrent.futures.Future[None]] = []
     forward_buffer: Optional['ByteBuffer'] = None
     cm: 'content_match.ContentMatch'
@@ -318,6 +320,11 @@ class DownloadJob:
 
     def requires_download(self) -> bool:
         return self.cm.mc.need_content and not self.cm.mc.content_raw
+
+    def warrants_background_task(self) -> bool:
+        if self.cm.mc.content_shell_command_format is not None:
+            return True
+        return self.requires_download()
 
     def request_print_streams(self, pom: 'PrintOutputManager') -> None:
         if self.cm.mc.content_print_format is not None:
@@ -864,11 +871,26 @@ class DownloadJob:
         else:
             stdout = subprocess.DEVNULL
             stderr = subprocess.DEVNULL
-        shell_cmd = scr.gen_final_content_format(self.cm.mc.content_shell_command_format, self.cm)
-        shell_args = shlex.split(shell_cmd.decode("utf-8", errors="surrogateescape"))
-        self.shell_proc = subprocess.Popen(
-            shell_args, stdin=stdin, stdout=stdout, stderr=stderr,
-        )
+        shell_cmd_bytes = scr.gen_final_content_format(self.cm.mc.content_shell_command_format, self.cm)
+        self.shell_cmd = shell_cmd_bytes.decode("utf-8", errors="surrogateescape")
+        try:
+            shell_args = shlex.split(self.shell_cmd)
+        except ValueError:
+            self.log(
+                Verbosity.ERROR,
+                f"{self.context}: failed to parse command: {self.shell_cmd}"
+            )
+            return False
+        try:
+            self.shell_proc = subprocess.Popen(
+                shell_args, stdin=stdin, stdout=stdout, stderr=stderr,
+            )
+        except FileNotFoundError:
+            self.log(
+                Verbosity.ERROR,
+                f"{self.context}: failed to run executable '{shell_args[0]}'"
+            )
+            return False
         if self.cm.mc.content_shell_command_stdin_format is not None:
             assert self.shell_proc.stdin is not None
             self.output_formatters.append(scr.OutputFormatter(
@@ -913,9 +935,10 @@ class DownloadJob:
             if self.status_report:
                 self.status_report.gen_display_name(
                     self.cm.url_parsed, self.cm.filename, self.save_path,
-                    self.cm.mc.content_shell_command_format is not None
+                    self.shell_cmd
                 )
                 self.status_report.enqueue()
+
             if self.handle_user_interaction() != InteractiveResult.ACCEPT:
                 return None
             if not self.fetch_content():
@@ -932,18 +955,18 @@ class DownloadJob:
                 return None
             if not self.setup_save_file():
                 return None
-            if self.status_report:
-                # try to generate a better name now that we have more information
-                self.status_report.gen_display_name(
-                    self.cm.url_parsed, self.cm.filename, self.save_path,
-                    self.cm.mc.content_shell_command_format is not None
-                )
             if not self.setup_print_output():
                 return None
             if not self.setup_shell_cmd_output():
                 return None
             if not self.setup_forward_chain():
                 return None
+            if self.status_report:
+                # try to generate a better name now that we have more information
+                self.status_report.gen_display_name(
+                    self.cm.url_parsed, self.cm.filename, self.save_path,
+                    self.shell_cmd
+                )
             self.check_abort()
 
             if self.content_stream is None:
@@ -1025,7 +1048,7 @@ class DownloadJob:
             if self.requires_download():
                 self.log(
                     Verbosity.DEBUG,
-                    f"finished downloading {path}" if success else f"failed to download {path}"
+                    f"finished handling {path}" if success else f"failed to download {path}"
                 )
             try:
                 for r in concurrent.futures.wait(self.shell_output_handlers).done:
