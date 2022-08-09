@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from typing import Optional, cast, Generator, Union
 from ... import scr
-import re
+from ..utils import USE_PYTEST_ASSERTIONS, received_expected_strs, validate_text, join_lines
 
 
 class CliEnv():
@@ -48,14 +48,76 @@ def cli_env(cli_env_root_dir: str, capfd: pytest.CaptureFixture[str], monkeypatc
     cli_env.close()
 
 
-def received_expected_strs(received: str, expected: str) -> str:
-    return f"{'-' * 36}received{'-' * 36}\n{received}{'-' * 36}expected{'-' * 36}\n{expected}{'-' * 80}"
+class ScrRunResults:
+    exit_code: int
+    stdout: str
+    stderr: str
+    received_files: dict[str, str]
+
+    def __init__(self) -> None:
+        self.received_files = {}
+
+    def validate_exit_code(self, expected: int) -> None:
+        if expected != self.exit_code:
+            if USE_PYTEST_ASSERTIONS:
+                assert expected == self.exit_code, "wrong exit code"
+            else:
+                raise ValueError(
+                    f"wrong exit code: expected {expected}, received {self.exit_code}"
+                )
+
+    def validate_stdout(self, expected: str, regex: bool = False) -> None:
+        validate_text("wrong stdout", expected, self.stdout, regex)
+
+    def validate_stderr(self, expected: str, regex: bool = False) -> None:
+        validate_text("wrong stderr", expected, self.stderr, regex)
+
+    def validate_file_results(self, expected_files: dict[str, Optional[str]]) -> None:
+        expected_file_names = sorted(expected_files.keys())
+        received_file_names = sorted(self.received_files.keys())
+        if expected_file_names != received_file_names:
+            if USE_PYTEST_ASSERTIONS:
+                assert expected_file_names == received_file_names, "wrong files created"
+            else:
+                rec_ex_strs = received_expected_strs(
+                    "\n".join(expected_file_names) + "\n" if expected_file_names else "",
+                    "\n".join(received_file_names) + "\n" if received_file_names else ""
+                )
+                raise ValueError(
+                    f"incorrect file results:\n{rec_ex_strs}"
+                )
+        for of in expected_files.keys():
+            with open(of) as f:
+                received = f.read()
+            expected = expected_files[of]
+            if expected is not None and expected != received:
+                if USE_PYTEST_ASSERTIONS:
+                    assert expected == received, f"output file '{of}' has wrong contents"
+                else:
+                    raise ValueError(
+                        f"output file '{of}' has wrong contents:\n{received_expected_strs(received, expected)}"
+                    )
 
 
-def join_lines(lines: Union[list[str], str]) -> str:
-    if not isinstance(lines, list):
-        return lines
-    return "\n".join(lines) + "\n"
+def run_scr_raw(
+    env: CliEnv,
+    args: list[str],
+    stdin: Union[list[str], str] = ""
+) -> ScrRunResults:
+    stdin = join_lines(stdin)
+    env.set_stdin(stdin)
+    env.monkeypatch.setattr("sys.stdin", env.stdin_file)
+    exit_code = scr.run_scr(["scr"] + args)
+    cap = env.capfd.readouterr()
+    res = ScrRunResults()
+    res.stdout = cap.out
+    res.stderr = cap.err
+    res.exit_code = exit_code
+    received_files = sorted({*os.listdir(env.tmpdir)} - env.special_files)
+    for rf in received_files:
+        with open(rf) as f:
+            res.received_files[rf] = f.read()
+    return res
 
 
 def run_scr(
@@ -69,48 +131,10 @@ def run_scr(
     stdout_re: bool = False,
     stderr_re: bool = False
 ) -> None:
-    stdin = join_lines(stdin)
     stdout = join_lines(stdout)
     stderr = join_lines(stderr)
-    env.set_stdin(stdin)
-    env.monkeypatch.setattr("sys.stdin", env.stdin_file)
-    exit_code = scr.run_scr(["scr"] + args)
-    cap = env.capfd.readouterr()
-    if (
-        (stderr_re and not re.match(stderr, cap.err, re.DOTALL))
-        or
-        (not stderr_re and stderr != cap.err)
-    ):
-        raise ValueError(
-            f"wrong stderr:\n{received_expected_strs(cap.err, stderr)}"
-        )
-    if (
-        (stdout_re and not re.match(stdout, cap.out, re.DOTALL))
-        or
-        (not stdout_re and stdout != cap.out)
-    ):
-        raise ValueError(
-            f"wrong stdout:\n{received_expected_strs(cap.out, stdout)}"
-        )
-    if ec != exit_code:
-        raise ValueError(
-            f"wrong exit code: expected {ec}, received {exit_code}"
-        )
-    expected_files = sorted(output_files.keys())
-    received_files = sorted({*os.listdir(env.tmpdir)} - env.special_files)
-    if expected_files != received_files:
-        res = received_expected_strs(
-            "\n".join(received_files) + "\n" if received_files else "",
-            "\n".join(expected_files) + "\n" if expected_files else ""
-        )
-        raise ValueError(
-            f"incorrect file results:\n{res}"
-        )
-    for of in output_files.keys():
-        with open(of) as f:
-            received = f.read()
-        expected = output_files[of]
-        if expected is not None and received != expected:
-            raise ValueError(
-                f"output file '{of}' has wrong contents:\n{received_expected_strs(received, expected)}"
-            )
+    res = run_scr_raw(env, args, stdin)
+    res.validate_stdout(stdout, stdout_re)
+    res.validate_stderr(stderr, stderr_re)
+    res.validate_file_results(output_files)
+    res.validate_exit_code(ec)

@@ -1,5 +1,6 @@
 import os
 from .cli_env import CliEnv, run_scr
+from ...download_job import DEFAULT_RESPONSE_BUFFER_SIZE
 import pytest
 from os.path import normpath
 
@@ -135,6 +136,19 @@ def test_connection_failed(cli_env: CliEnv) -> None:
         ],
         ec=1,
         stderr="[ERROR]: Failed to fetch https://xxx: connection failed\n",
+    )
+
+
+def test_broken_pipe(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            f"cmatch={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
+            "cshif={c}",
+            "cshf=python -c 'import time; time.sleep(1)'"
+        ],
+        ec=1,
+        stderr="[ERROR]: broken pipe\n",
     )
 
 

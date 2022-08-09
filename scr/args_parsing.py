@@ -152,6 +152,7 @@ def help(err: bool = False) -> None:
         timeout=<float>        seconds before a web request timeouts (default {DEFAULT_TIMEOUT_SECONDS})
         bfs=<bool>             traverse the matched documents in breadth first order instead of depth first
         v=<verbosity>          output verbosity levels (default: warn, values: info, warn, error)
+        prog=<bool>            whether to display progress bars for content downloads (defaults to true if stdin is a tty)
         ua=<string>            user agent to pass in the html header for url GETs
         uar=<bool>             use a rangom user agent
         selkeep=<bool>         keep selenium instance alive after the command finished
@@ -752,6 +753,8 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
         if apply_ctx_arg(ctx, "uar", "user_agent_random", arg, parse_bool_arg, True):
             continue
         if apply_ctx_arg(ctx, "v", "verbosity", arg, lambda v, arg: parse_variant_arg(v, verbosities_dict, arg)):
+            continue
+        if apply_ctx_arg(ctx, "prog", "enable_status_reports", arg, parse_bool_arg, True):
             continue
 
         if apply_ctx_arg(ctx, "repl", "repl", arg,  parse_bool_arg, True):

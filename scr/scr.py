@@ -566,7 +566,7 @@ def get_random_user_agent() -> UserAgent:
     ).get_random_user_agent()
 
 
-def setup(ctx: 'scr_context.ScrContext') -> None:
+def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
     if ctx.tor_browser_dir:
         if ctx.selenium_variant is None:
             ctx.selenium_variant = SeleniumVariant.TORBROWSER
@@ -582,6 +582,9 @@ def setup(ctx: 'scr_context.ScrContext') -> None:
         ctx.user_agent = get_random_user_agent()
     elif ctx.user_agent is None and not ctx.selenium_variant.enabled():
         ctx.user_agent = SCR_USER_AGENT
+
+    if ctx.enable_status_reports is None:
+        ctx.enable_status_reports = sys.stdin.isatty()
 
     # if no chains are specified, use the origin chain as chain 0
     if not ctx.match_chains:
@@ -630,7 +633,7 @@ def setup(ctx: 'scr_context.ScrContext') -> None:
 
     if ctx.dl_manager is None and ctx.max_download_threads != 0:
         ctx.dl_manager = download_job.DownloadManager(
-            ctx, ctx.max_download_threads, sys.stdout.isatty()
+            ctx, ctx.max_download_threads
         )
     if ctx.dl_manager is not None:
         ctx.dl_manager.pom.reset()
@@ -1824,7 +1827,7 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
                 ctx = ctx_new
 
                 try:
-                    setup(ctx)
+                    setup_ctx(ctx)
                 except ScrSetupError as ex:
                     log(ctx, Verbosity.ERROR, str(ex))
                     if ctx.exit:
@@ -1852,7 +1855,7 @@ def run_scr(args: list[str]) -> int:
 
     try:
         args_parsing.parse_args(ctx, args[1:])
-        setup(ctx)
+        setup_ctx(ctx)
     except ScrSetupError as ex:
         sys.stderr.write(get_log_str(Verbosity.ERROR, str(ex)))
         return 1
@@ -1879,6 +1882,7 @@ def main() -> None:
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
+
         sys.exit(run_scr(sys.argv))
     except BrokenPipeError:
         # Python flushes standard streams on exit; redirect remaining output

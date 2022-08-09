@@ -14,6 +14,7 @@ DOWNLOAD_STATUS_NAME_LENGTH = 80
 DOWNLOAD_STATUS_BAR_LENGTH = 30
 DOWNLOAD_STATUS_REFRESH_INTERVAL = 0.2
 DOWNLOAD_STATUS_KEEP_FINISHED = True
+DEFAULT_MAX_TERMINAL_LINE_LENGTH = 120
 
 CMD_RUNNING_HINT = "(cmd running...)"
 
@@ -91,8 +92,10 @@ class DownloadStatusReport:
             self.name = url.geturl()
         elif shell_cmd is not None:
             self.name = shell_cmd
-        else:
+        elif self.has_dl:
             self.name = "<unnamed download>"
+        else:
+            self.name = "<shell command>"
         self.name = utils.truncate(
             self.name, DOWNLOAD_STATUS_NAME_LENGTH
         )
@@ -428,10 +431,14 @@ class ProgressReportManager:
             report.append(line)
 
     def print_status_report(self) -> None:
-        max_cols = os.get_terminal_size().columns
-        if max_cols < 5:
-            # don't bother
-            return
+        try:
+            max_cols = os.get_terminal_size().columns
+            if max_cols < 5:
+                # don't bother
+                return
+        except IOError:
+            max_cols = DEFAULT_MAX_TERMINAL_LINE_LENGTH
+
         # even if the size just grew we are doing this since the terminal
         # might have messed up our output
         update_finished = (max_cols != self.prev_terminal_column_count)

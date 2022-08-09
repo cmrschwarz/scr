@@ -15,6 +15,7 @@ class ScrContext(ConfigDataClass):
     exit: bool = False
     selenium_variant: SeleniumVariant = SeleniumVariant.DISABLED
     selenium_headless: bool = False
+    enable_status_reports: Optional[bool] = None
     tor_browser_dir: Optional[str] = None
     user_agent_random: Optional[bool] = False
     user_agent: Optional[str] = None

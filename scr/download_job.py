@@ -1020,14 +1020,14 @@ class DownloadJob:
             success = True
             return self.gen_output_doc()
         except InterruptedError:
-            if self.shell_proc is not None:
-                self.shell_proc.terminate()
             return None
-        except Exception as ex:
-            if self.shell_proc is not None:
-                self.shell_proc.terminate()
-            raise ex
+        except BrokenPipeError:
+            self.log(Verbosity.ERROR, "broken pipe")
+            return None
         finally:
+            if not success:
+                if self.shell_proc is not None:
+                    self.shell_proc.terminate()
             if self.shell_proc is not None:
                 if self.shell_proc.stdin is not None:
                     self.shell_proc.stdin.close()
@@ -1067,9 +1067,8 @@ class DownloadManager:
     shell_output_handling_executor: concurrent.futures.ThreadPoolExecutor
     status_report_lock: threading.Lock
     download_status_reports: list['progress_report.DownloadStatusReport']
-    enable_status_reports: bool
 
-    def __init__(self, ctx: 'scr_context.ScrContext', max_threads: int, enable_status_reports: bool) -> None:
+    def __init__(self, ctx: 'scr_context.ScrContext', max_threads: int) -> None:
         self.ctx = ctx
         self.pending_jobs = set()
         self.executor = concurrent.futures.ThreadPoolExecutor(
@@ -1081,7 +1080,6 @@ class DownloadManager:
         self.pom = PrintOutputManager()
         self.status_report_lock = threading.Lock()
         self.download_status_reports = []
-        self.enable_status_reports = enable_status_reports
 
     def submit(self, dj: DownloadJob) -> None:
         scr.log(
@@ -1089,7 +1087,7 @@ class DownloadManager:
             f"enqueuing download for {dj.cm.clm.result}"
         )
         dj.request_print_streams(self.pom)
-        if self.enable_status_reports:
+        if self.ctx.enable_status_reports:
             dj.request_status_report(self)
         self.pending_jobs.add(self.executor.submit(dj.run_job))
 
@@ -1099,7 +1097,7 @@ class DownloadManager:
         may_print = False
         if self.pom:
             may_print = self.pom.try_reaquire_main_thread_print_access()
-        if not self.enable_status_reports or not may_print:
+        if not self.ctx.enable_status_reports or not may_print:
             results = concurrent.futures.wait(self.pending_jobs)
             for x in results.done:
                 scr.forward_document(self.ctx, x.result())
@@ -1126,7 +1124,7 @@ class DownloadManager:
             prm.print_status_report()
             if not self.pending_jobs:
                 break
-        for rl in prm.finished_report_lines + prm.newly_finished_report_lines:
+        for rl in prm.newly_finished_report_lines:
             if rl.error:
                 scr.log(self.ctx, Verbosity.ERROR, rl.error)
 
