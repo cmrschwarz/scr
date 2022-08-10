@@ -15,7 +15,6 @@ class ContentMatch:
     ci: Optional[int] = None
     di: Optional[int] = None
 
-    url: Optional[str]
     url_parsed: Optional[urllib.parse.ParseResult] = None
 
     def __init__(
@@ -23,7 +22,7 @@ class ContentMatch:
         clm: 'locator.LocatorMatch',
         llm: Optional['locator.LocatorMatch'],
         mc: 'match_chain.MatchChain',
-        doc: 'document.Document'
+        doc: 'document.Document',
     ) -> None:
         self.llm = llm
         self.clm = clm

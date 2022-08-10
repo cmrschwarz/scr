@@ -11,9 +11,8 @@ from .definitions import (
 
 from . import (
     match_chain, document, input_sequences,
-    selenium_driver_download, scr_context, utils
+    selenium_driver_download, scr_context
 )
-
 import sys
 import re
 
@@ -239,7 +238,7 @@ def parse_simple_mc_range(ctx: 'scr_context.ScrContext', mc_spec: str, arg: str)
 def match_traditional_cli_arg(arg: str, true_opt_name: str, aliases: set[str]) -> Optional[bool]:
     tolen = len(true_opt_name)
     arglen = len(arg)
-    if utils.begins(arg, f"{true_opt_name}"):
+    if arg.startswith(f"{true_opt_name}"):
         if arglen > tolen:
             if arg[tolen] != "=":
                 return None
@@ -279,7 +278,7 @@ def parse_mc_arg(
     ctx: 'scr_context.ScrContext', argname: str, arg: str,
     support_blank: bool = False
 ) -> Optional[tuple[Iterable['match_chain.MatchChain'], Optional[str]]]:
-    if not utils.begins(arg, argname):
+    if not arg.startswith(argname):
         return None
     argname_len = len(argname)
     eq_pos = arg.find("=")
@@ -397,7 +396,7 @@ def select_variant(val: str, variants_dict: dict[str, T], default: Optional[T] =
         return variants_dict[val]
     match = None
     for k, v in variants_dict.items():
-        if utils.begins(k, val):
+        if k.startswith(val):
             if match is not None:
                 return None  # we have two conflicting matches
             match = v
@@ -429,9 +428,9 @@ def gen_doc_from_arg(
     doctype: DocumentType, value: str
 ) -> 'document.Document':
     if doctype.non_r_type() == DocumentType.STRING:
-        path, path_parsed = None, None
+        path = None
     else:
-        path, path_parsed = value, None
+        path = value
     doc = document.Document(
         doctype,
         path=path,
@@ -439,7 +438,6 @@ def gen_doc_from_arg(
         parent_doc=None,
         match_chains=mcs,
         expand_match_chains_above=extend_chains_above,
-        path_parsed=path_parsed,
     )
     if doctype.non_r_type() == DocumentType.STRING:
         doc.text = value
@@ -498,7 +496,7 @@ def parse_plain_arg(
     support_blank: bool = False,
     blank_val: Optional[Any] = None
 ) -> Optional[Any]:
-    if not utils.begins(arg, optname):
+    if not arg.startswith(optname):
         return None
     if len(optname) == len(arg):
         if support_blank:

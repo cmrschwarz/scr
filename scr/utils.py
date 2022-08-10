@@ -40,10 +40,6 @@ def notnull(val: Optional[T]) -> T:
     return val
 
 
-def begins(string: str, begin: str) -> bool:
-    return len(string) >= len(begin) and string[0:len(begin)] == begin
-
-
 def empty_string_to_none(string: Optional[str]) -> Optional[str]:
     if string == "":
         return None

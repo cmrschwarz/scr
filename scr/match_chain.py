@@ -51,8 +51,8 @@ class MatchChain(ConfigDataClass):
 
     document_output_chains: list['MatchChain']
 
-    file_base: Optional['urllib.parse.ParseResult'] = None
-    url_base: Optional['urllib.parse.ParseResult'] = None
+    file_base: Optional[Union['urllib.parse.ParseResult', str]] = None
+    url_base: Optional[Union['urllib.parse.ParseResult', str]] = None
     force_mc_base: Optional[bool] = None
 
     __annotations__: dict[str, type]

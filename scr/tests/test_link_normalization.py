@@ -3,7 +3,6 @@ from ..definitions import DocumentType
 from ..scr import normalize_link
 from .utils import validate_text
 from .. import utils
-import urllib.parse
 
 
 def test_windows_file_scheme_removal(pretend_windows: bool) -> None:

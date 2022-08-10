@@ -343,6 +343,18 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
 
     if mc.file_base is None:
         mc.file_base = urllib.parse.urlparse(".")
+    else:
+        _, mc.file_base = normalize_link(
+            cast(str, mc.file_base), urllib.parse.urlparse("."),
+            DocumentType.FILE, mc.default_document_scheme,
+            mc.prefer_parent_document_scheme is True, mc.force_document_scheme is None, False
+        )
+    if mc.url_base is not None:
+        _, mc.url_base = normalize_link(
+            cast(str, mc.url_base), None, DocumentType.URL, mc.default_document_scheme,
+            mc.prefer_parent_document_scheme is True,
+            mc.force_document_scheme is None, True
+        )
 
     if not mc.document_output_chains:
         mc.document_output_chains = [mc]
@@ -547,29 +559,24 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
             d.match_chains.extend(
                 ctx.match_chains[d.expand_match_chains_above:]
             )
-        canonical_url = d.canonical_url()
-        for mc in d.match_chains:
-            mc.requested_document_urls.add(canonical_url)
-
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
 
     for d in ctx.docs:
+        mc0 = d.match_chains[0]
         force_mc_base = d.match_chains[0].force_mc_base
         use_path_as_base = not force_mc_base and d.document_type in [DocumentType.URL, DocumentType.FILE]
-        if use_path_as_base:
-            assert d.path_parsed is not None
-            d.base = get_path_base(d.path_parsed)
-        else:
-            use_file_base = d.document_type in [DocumentType.FILE, DocumentType.STRING]
+        use_file_base = d.document_type in [DocumentType.FILE, DocumentType.STRING]
+        if not use_path_as_base:
             if use_file_base:
-                d.base = d.match_chains[0].file_base
+                mc0_base = cast(Optional[urllib.parse.ParseResult],  mc0.file_base)
             else:
-                d.base = d.match_chains[0].url_base
+                mc0_base = cast(Optional[urllib.parse.ParseResult], mc0.url_base)
+            d.base = mc0_base
         for mc in d.match_chains[1:]:
             if mc.force_mc_base != force_mc_base:
                 raise ScrSetupError(
-                    f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different fbase values while sharing documents"
+                    f"match chains {mc0.chain_id} and {mc.chain_id} can't have different fbase values while sharing documents"
                 )
             if use_path_as_base:
                 continue
@@ -579,8 +586,30 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
                 base = mc.url_base
             if d.base != base:
                 raise ScrSetupError(
-                    f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different {'' if use_file_base else 'r'}base values while sharing documents"
+                    f"match chains {mc0.chain_id} and {mc.chain_id} can't have different {'' if use_file_base else 'r'}base values while sharing documents"
                 )
+        if d.path is not None:
+            linktype = d.document_type
+            if linktype != DocumentType.URL:
+                linktype = DocumentType.FILE
+
+            if d.document_type.non_r_type() in [DocumentType.FILE, DocumentType.STRING]:
+                doc_base = cast(Optional[urllib.parse.ParseResult],  mc0.file_base)
+            else:
+                doc_base = cast(Optional[urllib.parse.ParseResult],  mc0.url_base)
+            d.path, d.path_parsed = normalize_link(
+                d.path, doc_base, linktype,
+                mc0.default_document_scheme,
+                mc0.prefer_parent_document_scheme is True,
+                mc.force_document_scheme is True, True
+            )
+            if use_path_as_base:
+                assert d.path_parsed is not None
+                d.base = get_path_base(d.path_parsed)
+
+        canonical_url = d.canonical_url()
+        for mc in d.match_chains:
+            mc.requested_document_urls.add(canonical_url)
 
     if len(ctx.docs) == 0:
         report = True
@@ -1074,8 +1103,8 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
 
     while True:
         if not cm.mc.content_raw:
-            cm.url, cm.url_parsed = normalize_link(
-                cm.clm.result, cm.base, cm.doc.document_type,
+            cm.clm.result, cm.url_parsed = normalize_link(
+                cm.clm.result, cm.base, cm.doc.document_type.derived_link_type(),
                 cm.mc.default_document_scheme,
                 cm.mc.prefer_parent_document_scheme is True,
                 cm.mc.force_document_scheme is True, False
@@ -1167,6 +1196,7 @@ def gen_content_matches(
     mc: 'match_chain.MatchChain', doc: 'document.Document',
     last_doc_path: Optional[str]
 ) -> tuple[list['content_match.ContentMatch'], int]:
+    # TODO: properly set content match base respecting iframes
     text = cast(str, doc.text)
     content_matches: list[content_match.ContentMatch] = []
     content_lms_xp: list[locator.LocatorMatch] = mc.loc_content.match_xpath(
@@ -1220,7 +1250,8 @@ def gen_content_matches(
                     llm = None
 
             content_matches.append(
-                content_match.ContentMatch(clm, llm, mc, doc))
+                content_match.ContentMatch(clm, llm, mc, doc)
+            )
         match_index += 1
     return content_matches, labels_none_for_n
 
@@ -1237,10 +1268,11 @@ def gen_document_matches(
     document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms, last_doc_path)
     for dlm in document_lms:
         mc.loc_document.apply_format_for_document_match(doc, mc, dlm)
+        link_type = doc.document_type.derived_link_type()
         path, path_parsed = normalize_link(
-            mc.ctx, mc, doc.document_type.derived_link_type(), doc.path_parsed,
-            last_doc_path, dlm.result,
-            urllib.parse.urlparse(dlm.result)
+            dlm.result, doc.base, link_type, mc.default_document_scheme,
+            mc.prefer_parent_document_scheme is True,
+            mc.force_document_scheme is True, False
         )
         if mc.document_duplication != DocumentDuplication.ALLOWED:
             canonical_url = urllib.parse.urlunparse(path_parsed)
@@ -1264,14 +1296,15 @@ def gen_document_matches(
                 mc.requested_document_urls.add(canonical_url)
 
         document_matches.append(document.Document(
-            doc.document_type.derived_link_type(),
-            path,
-            mc,
-            doc,
-            mc.document_output_chains,
-            None,
-            dlm,
-            path_parsed
+            document_type=link_type,
+            path=path,
+            src_mc=mc,
+            parent_doc=doc,
+            match_chains=mc.document_output_chains,
+            expand_match_chains_above=None,
+            locator_match=dlm,
+            base=get_path_base(path_parsed),
+            path_parsed=path_parsed
         ))
 
     return document_matches
@@ -1483,13 +1516,15 @@ def get_path_base(link: urllib.parse.ParseResult) -> Optional[urllib.parse.Parse
 def normalize_link(
     link: str,
     base: Optional[urllib.parse.ParseResult],
-    base_doc_type: 'DocumentType',
+    link_type: 'DocumentType',
     default_scheme: str,
     prefer_parent_scheme: bool,
     force_default_scheme: bool,
     treat_path_without_slashes_as_domain: bool,
 ) -> tuple[str, urllib.parse.ParseResult]:
-    link_type = base_doc_type.derived_link_type()
+    link = link.strip()
+    if link.startswith("data:"):
+        return link, urllib.parse.urlparse(link)
     if link_type == DocumentType.FILE:
         assert base is not None
         if link.startswith("file:"):
@@ -1500,7 +1535,7 @@ def normalize_link(
                 if os.path.abspath(base.path) == os.path.abspath(link):
                     link = base.path
                 else:
-                    link = os.path.normpath(os.path.join(os.path.dirname(base.path), link))
+                    link = os.path.normpath(os.path.join(base.path, link))
             else:
                 link = os.path.normpath(link)
         return link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
@@ -1746,7 +1781,7 @@ def resolve_repl_defaults(
                 selenium_setup.report_selenium_died(ctx_new)
                 last_doc = None
         if doc_url:
-            if utils.begins(doc_url, "file:"):
+            if doc_url.startswith("file:"):
                 path = utils.remove_file_scheme_from_url(doc_url)
                 if not last_doc or os.path.abspath(notnull(last_doc.path)) != os.path.abspath(path):
                     doctype = DocumentType.FILE

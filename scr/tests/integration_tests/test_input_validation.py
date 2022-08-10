@@ -212,7 +212,7 @@ def test_diverging_base(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "str=foo",
-            "dbase1=x",
+            "base1=x",
         ],
         ec=1,
         stderr="[ERROR]: match chains 0 and 1 can't have different base values while sharing documents\n"
