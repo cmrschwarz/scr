@@ -538,7 +538,7 @@ class DownloadJob:
         except ScrFetchError as ex:
             self.log(
                 Verbosity.ERROR,
-                f"{utils.truncate(self.cm.doc.path)}{scr.get_ci_di_context(self.cm)}: "
+                f"{self.cm.doc.path_for_context()}{scr.get_ci_di_context(self.cm)}: "
                 + f"failed to download '{utils.truncate(self.cm.clm.result)}': {str(ex)}"
             )
             return False
@@ -652,7 +652,7 @@ class DownloadJob:
                 cors_warn = " (potential CORS issue)"
             self.log(
                 Verbosity.ERROR,
-                f"{utils.truncate(self.cm.doc.path)}{scr.get_ci_di_context(self.cm)}: "
+                f"{self.cm.doc.path_for_context()}{scr.get_ci_di_context(self.cm)}: "
                 + f"selenium download of '{self.cm.clm.result}' failed{cors_warn}: {err}"
             )
             return False
@@ -717,7 +717,7 @@ class DownloadJob:
                             self.status_report.expected_size = len(data)
                         if not self.gen_fallback_filename(dont_use_url=True):
                             return False
-                    elif self.cm.doc.document_type.derived_type() is DocumentType.FILE:
+                    elif self.cm.doc.document_type.derived_link_type() is DocumentType.FILE:
                         self.content = self.cm.clm.result
                         self.content_format = ContentFormat.FILE
                         if self.status_report:

@@ -1,6 +1,6 @@
 from typing import Optional, Any
 from .definitions import (DocumentType)
-from . import locator, match_chain, scr_context
+from . import locator, match_chain, scr_context, utils
 import lxml.html
 import urllib
 
@@ -93,3 +93,9 @@ class Document:
             assert self.text is not None
             return self.text
         return urllib.parse.urlunparse(self.path_parsed)
+
+    def path_for_context(self) -> str:
+        if self.path is None:
+            return "<document string>"
+        else:
+            return utils.truncate(self.path)

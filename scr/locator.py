@@ -322,7 +322,7 @@ class Locator(ConfigDataClass):
 
     def apply_js_matches(
         self, doc: 'document.Document', mc: 'match_chain.MatchChain', lms: list['LocatorMatch'],
-        multimatch: Optional[bool] = None
+        last_doc_path: Optional[str], multimatch: Optional[bool] = None
     ) -> list['LocatorMatch']:
         if self.js_script is None:
             return lms
@@ -343,9 +343,13 @@ class Locator(ConfigDataClass):
             except SeleniumJavascriptException as ex:
                 arg = cast(str, self.get_configuring_argument(['js_script']))
                 name = arg[0: arg.find("=")]
+                if last_doc_path:
+                    on = f" on {last_doc_path}"
+                else:
+                    on = ""
                 scr.log(
                     mc.ctx, Verbosity.WARN,
-                    f"{name}: js exception:\n{textwrap.indent(str(ex), '    ')}"
+                    f"{name}: js exception{on}:\n{textwrap.indent(str(ex), '    ')}"
                 )
                 continue
             except (SeleniumWebDriverException, SeleniumMaxRetryError):

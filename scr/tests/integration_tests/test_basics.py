@@ -588,21 +588,33 @@ def test_stdin_doc_twice(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "stdin",
+            "stdin",
             "cl",
-            "cpf={c}"
         ],
         stdin="../res/a.txt",
-        stdout="a\n"
+        stdout="a\na\n"
     )
 
 
-def test_indoc_implicit_cmatch(cli_env: CliEnv) -> None:
+def test_rstdin(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "indoc",
-            "cpf={c}"
+            "rstdin",
+            "cl",
         ],
-        stdin="x",
-        stdout="x"
+        stdin="https://httpbin.org/base64/b2s=",
+        stdout="ok"
+    )
+
+
+def test_rstdin_no_cl(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rstdin",
+            "rstdin",
+        ],
+        stdin="foo",
+        stdout="foofoo"
     )

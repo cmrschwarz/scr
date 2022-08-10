@@ -429,7 +429,7 @@ def gen_doc_from_arg(
     mcs: list['match_chain.MatchChain'], extend_chains_above: Optional[int],
     doctype: DocumentType, value: str
 ) -> 'document.Document':
-    if doctype in [DocumentType.STRING, DocumentType.RSTRING]:
+    if doctype.non_r_type() == DocumentType.STRING:
         path, path_parsed = None, None
     else:
         path, path_parsed = scr.normalize_link(
@@ -450,7 +450,7 @@ def gen_doc_from_arg(
         expand_match_chains_above=extend_chains_above,
         path_parsed=path_parsed,
     )
-    if doctype == DocumentType.STRING:
+    if doctype.non_r_type() == DocumentType.STRING:
         doc.text = value
     return doc
 
@@ -749,7 +749,7 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
         if apply_doc_arg_stdin(ctx, "stdin", arg, DocumentType.STRING):
             continue
-        if apply_doc_arg_stdin(ctx, "rstdin", arg, DocumentType.STRING):
+        if apply_doc_arg_stdin(ctx, "rstdin", arg, DocumentType.RSTRING):
             continue
 
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):

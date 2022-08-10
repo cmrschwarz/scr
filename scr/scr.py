@@ -1074,7 +1074,7 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
         if not cm.mc.content_raw:
             cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
             cm.clm.result, cm.url_parsed = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc.document_type.derived_type(), cm.doc.path_parsed,
+                cm.mc.ctx, cm.mc, cm.doc.document_type.derived_link_type(), cm.doc.path_parsed,
                 last_doc_path, cm.clm.result, cm.url_parsed
             )
 
@@ -1173,7 +1173,7 @@ def gen_content_matches(
     if mc.has_label_matching and not mc.labels_inside_content:
         label_lms = mc.loc_label.match_xpath(text, doc.xml, False)
         label_lms = mc.loc_label.apply_regex_matches(label_lms)
-        label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
+        label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms, last_doc_path)
     match_index = 0
     labels_none_for_n = 0
     for clm_xp in content_lms_xp:
@@ -1185,10 +1185,10 @@ def gen_content_matches(
             # will be done on the LABEL xpath result, not the content one
             # even for lic = y
             label_lms = mc.loc_label.apply_regex_matches(label_lms)
-            label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
+            label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms, last_doc_path)
 
         content_lms = mc.loc_content.apply_regex_matches([clm_xp])
-        content_lms = mc.loc_content.apply_js_matches(doc, mc, content_lms)
+        content_lms = mc.loc_content.apply_js_matches(doc, mc, content_lms, last_doc_path)
         for clm in content_lms:
             llm: Optional[locator.LocatorMatch] = None
             if mc.labels_inside_content:
@@ -1197,7 +1197,7 @@ def gen_content_matches(
                     llm.result = clm.result
                     label_lms = mc.loc_label.apply_regex_matches([llm], False)
                     label_lms = mc.loc_label.apply_js_matches(
-                        doc, mc, label_lms, False
+                        doc, mc, label_lms, last_doc_path, False
                     )
                 if len(label_lms) == 0:
                     if not mc.label_allow_missing:
@@ -1231,11 +1231,11 @@ def gen_document_matches(
         cast(str, doc.text), doc.xml, False
     )
     document_lms = mc.loc_document.apply_regex_matches(document_lms)
-    document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms)
+    document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms, last_doc_path)
     for dlm in document_lms:
         mc.loc_document.apply_format_for_document_match(doc, mc, dlm)
         path, path_parsed = normalize_link(
-            mc.ctx, mc, doc.document_type.derived_type(), doc.path_parsed,
+            mc.ctx, mc, doc.document_type.derived_link_type(), doc.path_parsed,
             last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
         )
@@ -1261,7 +1261,7 @@ def gen_document_matches(
                 mc.requested_document_urls.add(canonical_url)
 
         document_matches.append(document.Document(
-            doc.document_type.derived_type(),
+            doc.document_type.derived_link_type(),
             path,
             mc,
             doc,

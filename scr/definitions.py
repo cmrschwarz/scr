@@ -101,12 +101,14 @@ class DocumentType(Enum):
     STRING = 4
     RSTRING = 5
 
-    def derived_type(self) -> 'DocumentType':
-        if self == DocumentType.RFILE:
-            return DocumentType.URL
-        if self == DocumentType.RSTRING:
-            return DocumentType.STRING
-        return self
+    def derived_link_type(self) -> 'DocumentType':
+        return {
+            DocumentType.URL: DocumentType.URL,
+            DocumentType.FILE: DocumentType.FILE,
+            DocumentType.RFILE: DocumentType.URL,
+            DocumentType.STRING: DocumentType.FILE,
+            DocumentType.RSTRING: DocumentType.URL,
+        }[self]
 
     def non_r_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
