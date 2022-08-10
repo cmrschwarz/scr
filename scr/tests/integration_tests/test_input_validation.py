@@ -205,3 +205,38 @@ def test_unknown_variant(cli_env: CliEnv) -> None:
         ec=1,
         stderr="[ERROR]: illegal argument 'v=', valid options for v are: debug, error, info, warn\n"
     )
+
+
+def test_diverging_base(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "str=foo",
+            "dbase1=x",
+        ],
+        ec=1,
+        stderr="[ERROR]: match chains 0 and 1 can't have different base values while sharing documents\n"
+    )
+
+
+def test_inconsequential_diverging_rbase(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "str=foo",
+            "drbase1=x",
+        ],
+        stdout="foofoo",
+    )
+
+
+def test_diverging_rbase(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rstr=foo",
+            "drbase1=x",
+        ],
+        ec=1,
+        stderr="[ERROR]: match chains 0 and 1 can't have different rbase values while sharing documents\n",
+    )

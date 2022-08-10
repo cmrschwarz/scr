@@ -89,8 +89,8 @@ def help(err: bool = False) -> None:
         url=<url>            fetch document from url
         rfile=<path>         read document from path
         file=<path>          read document from path, urls without scheme are treated as relative file pathes
-        rstring=<string>     treat string as document
-        string=<string>      treat string as document, urls without scheme are treated as relative file pathes
+        rstr=<string>        treat string as document
+        str=<string>         treat string as document, urls without scheme are treated as relative file pathes
         rstdin               read document from stdin
         stdin                read document from stdin, urls without scheme are treated as relative file pathes
 
@@ -743,9 +743,9 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
         if apply_doc_arg(ctx, "file", DocumentType.FILE, arg):
             continue
-        if apply_doc_arg(ctx, "string", DocumentType.STRING, arg):
+        if apply_doc_arg(ctx, "str", DocumentType.STRING, arg):
             continue
-        if apply_doc_arg(ctx, "string", DocumentType.RSTRING, arg):
+        if apply_doc_arg(ctx, "rstr", DocumentType.RSTRING, arg):
             continue
         if apply_doc_arg_stdin(ctx, "stdin", arg, DocumentType.STRING):
             continue

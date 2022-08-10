@@ -122,14 +122,16 @@ document_type_dict: dict[str, DocumentType] = {
     "url": DocumentType.URL,
     "file": DocumentType.FILE,
     "rfile": DocumentType.RFILE,
-    "string": DocumentType.STRING
+    "str": DocumentType.STRING,
+    "rstr": DocumentType.RSTRING
 }
 
 document_type_display_dict: dict[DocumentType, str] = {
     DocumentType.URL: "url",
     DocumentType.FILE: "file",
     DocumentType.RFILE: "rfile",
-    DocumentType.STRING: "string"
+    DocumentType.STRING: "str",
+    DocumentType.STRING: "rstr"
 }
 
 selenium_variants_dict: dict[str, SeleniumVariant] = {

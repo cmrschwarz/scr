@@ -8,7 +8,7 @@ def test_broken_pipe_status_report(cli_env: CliEnv) -> None:
     res = run_scr_raw(
         cli_env,
         args=[
-            f"string={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
+            f"str={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
             "cshif={c}",
             "cshf=python -c 'import time; time.sleep(0.1)'",
             "prog"

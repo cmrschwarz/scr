@@ -156,7 +156,7 @@ def test_broken_pipe(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            f"string={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
+            f"str={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
             "cshif={c}",
             "cshf=python -c 'import time; time.sleep(1)'"
         ],
@@ -576,7 +576,7 @@ def test_implicit_range_begin(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "string=x",
+            "str=x",
             "cr-2=.+",
         ],
         stdout="x\nx\nx\n"

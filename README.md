@@ -130,8 +130,8 @@ scr [OPTIONS]
         url=<url>            fetch document from url
         rfile=<path>         read document from path
         file=<path>          read document from path, urls without scheme are treated as relative file pathes
-        rstring=<string>     treat string as document
-        string=<string>      treat string as document, urls without scheme are treated as relative file pathes
+        rstr=<string>        treat string as document
+        str=<string>         treat string as document, urls without scheme are treated as relative file pathes
         rstdin               read document from stdin
         stdin                read document from stdin, urls without scheme are treated as relative file pathes
 
