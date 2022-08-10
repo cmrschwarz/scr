@@ -49,6 +49,11 @@ class MatchChain(ConfigDataClass):
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
 
     document_output_chains: list['MatchChain']
+
+    file_base: Optional[str] = None
+    url_base: Optional[str] = None
+    force_mc_base: Optional[bool] = None
+
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
         ConfigDataClass._previous_annotations_as_config_slots(

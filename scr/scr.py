@@ -32,7 +32,7 @@ import time
 import tempfile
 import warnings
 import urllib.request
-
+from .utils import notnull
 from .definitions import (
     T, K, DocumentDuplication, ScrSetupError, ScrFetchError, ScrMatchError, Verbosity, SCRIPT_NAME,
     SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
@@ -139,7 +139,7 @@ def apply_general_format_args(
     args_dict: dict[str, Any], ci: Optional[int]
 ) -> None:
     dict_update_unless_none(args_dict, {
-        "cenc": doc.encoding,
+        "denc": doc.encoding,
         "cesc": mc.content_escape_sequence,
         "dl":   doc.path,
         "chain": mc.chain_id,
@@ -323,7 +323,6 @@ def mc_context(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> s
 
 
 def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext') -> None:
-
     mc.apply_defaults(ctx.defaults_mc)
     mc.ci = mc.cimin
     mc.di = mc.dimin
@@ -338,6 +337,9 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
 
     if mc.content_forward_chains and mc.content_forward_format is None:
         mc.content_forward_format = DEFAULT_CWF
+
+    if mc.file_base is None:
+        mc.file_base = os.getcwd()
 
     if not mc.document_output_chains:
         mc.document_output_chains = [mc]
@@ -540,13 +542,43 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
     for d in ctx.docs:
         if d.expand_match_chains_above is not None:
             d.match_chains.extend(
-                ctx.match_chains[d.expand_match_chains_above:])
+                ctx.match_chains[d.expand_match_chains_above:]
+            )
         canonical_url = d.canonical_url()
         for mc in d.match_chains:
             mc.requested_document_urls.add(canonical_url)
 
     for mc in ctx.match_chains:
         setup_match_chain(mc, ctx)
+
+    for d in ctx.docs:
+        force_mc_base = d.match_chains[0].force_mc_base
+        use_path_as_base = not force_mc_base and d.document_type in [DocumentType.URL, DocumentType.FILE]
+        if use_path_as_base:
+            assert d.path_parsed is not None
+            d.base_parsed = d.path_parsed._replace(path=os.path.normpath(d.path_parsed.path + "/.."))
+            d.base = urllib.parse.urlunparse(d.base_parsed)
+        else:
+            use_file_base = d.document_type in [DocumentType.FILE, DocumentType.STRING]
+            if use_file_base:
+                d.base = d.match_chains[0].file_base
+            else:
+                d.base = d.match_chains[0].url_base
+        for mc in d.match_chains[1:]:
+            if use_path_as_base:
+                if mc.force_mc_base:
+                    raise ScrSetupError(
+                        f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different dfbase values while sharing documents"
+                    )
+                continue
+            if use_file_base:
+                base = mc.file_base
+            else:
+                base = mc.url_base
+            if d.base != base:
+                raise ScrSetupError(
+                    f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different {'' if use_file_base else 'r'}base values while sharing documents"
+                )
 
     if len(ctx.docs) == 0:
         report = True
@@ -910,6 +942,9 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
                 f"getting selenium page source for {document_type_display_dict[doc.document_type]} '{doc.path}'"
             )
             selpath = doc.path
+            # TODO: handle string docs
+            assert selpath is not None
+            assert doc.path_parsed is not None
             if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
                 selpath = "file:" + os.path.abspath(selpath)
 
@@ -953,9 +988,13 @@ def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:
         ctx.reused_doc = None
         if doc.text and not ctx.changed_selenium:
             return
-    if doc.document_type == DocumentType.CONTENT_MATCH:
+
+    doc_base_type = doc.document_type.non_r_type()
+    if doc_base_type == DocumentType.STRING:
         return
-    if doc.document_type in [DocumentType.FILE, DocumentType.RFILE]:
+    assert doc.path is not None
+    assert doc.path_parsed is not None
+    if doc_base_type == DocumentType.FILE:
         log(
             ctx, Verbosity.INFO,
             f"reading {document_type_display_dict[doc.document_type]} '{doc.path}'"
@@ -1035,7 +1074,7 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
         if not cm.mc.content_raw:
             cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
             cm.clm.result, cm.url_parsed = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc.document_type, cm.doc.path_parsed,
+                cm.mc.ctx, cm.mc, cm.doc.document_type.derived_type(), cm.doc.path_parsed,
                 last_doc_path, cm.clm.result, cm.url_parsed
             )
 
@@ -1122,16 +1161,17 @@ def handle_document_match(mc: 'match_chain.MatchChain', doc: 'document.Document'
 
 
 def gen_content_matches(
-    mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str
+    mc: 'match_chain.MatchChain', doc: 'document.Document',
+    last_doc_path: Optional[str]
 ) -> tuple[list['content_match.ContentMatch'], int]:
     text = cast(str, doc.text)
     content_matches: list[content_match.ContentMatch] = []
     content_lms_xp: list[locator.LocatorMatch] = mc.loc_content.match_xpath(
-        text, doc.xml, doc.path, mc.has_content_xpaths
+        text, doc.xml, mc.has_content_xpaths
     )
     label_lms: list[locator.LocatorMatch] = []
     if mc.has_label_matching and not mc.labels_inside_content:
-        label_lms = mc.loc_label.match_xpath(text, doc.xml, doc.path, False)
+        label_lms = mc.loc_label.match_xpath(text, doc.xml, False)
         label_lms = mc.loc_label.apply_regex_matches(label_lms)
         label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
     match_index = 0
@@ -1139,7 +1179,7 @@ def gen_content_matches(
     for clm_xp in content_lms_xp:
         if mc.labels_inside_content and mc.loc_label.xpath:
             label_lms = mc.loc_label.match_xpath(
-                clm_xp.result, clm_xp.xmatch_xml, doc.path, False
+                clm_xp.result, clm_xp.xmatch_xml, False
             )
             # in case we have label xpath matching, the label regex matching
             # will be done on the LABEL xpath result, not the content one
@@ -1184,18 +1224,18 @@ def gen_content_matches(
 
 def gen_document_matches(
     mc: 'match_chain.MatchChain', doc: 'document.Document',
-    last_doc_path: str
+    last_doc_path: Optional[str]
 ) -> list['document.Document']:
     document_matches = []
     document_lms = mc.loc_document.match_xpath(
-        cast(str, doc.text), doc.xml, doc.path, False
+        cast(str, doc.text), doc.xml, False
     )
     document_lms = mc.loc_document.apply_regex_matches(document_lms)
     document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms)
     for dlm in document_lms:
         mc.loc_document.apply_format_for_document_match(doc, mc, dlm)
         path, path_parsed = normalize_link(
-            mc.ctx, mc, doc.document_type, doc.path_parsed,
+            mc.ctx, mc, doc.document_type.derived_type(), doc.path_parsed,
             last_doc_path, dlm.result,
             urllib.parse.urlparse(dlm.result)
         )
@@ -1248,7 +1288,7 @@ def handle_interactive_chains(
     ctx: 'scr_context.ScrContext',
     interactive_chains: list['match_chain.MatchChain'],
     doc: 'document.Document',
-    last_doc_path: str,
+    last_doc_path: Optional[str],
     try_number: int, last_msg: str
 ) -> tuple[Optional[InteractiveResult], str]:
     content_count = 0
@@ -1352,7 +1392,10 @@ def match_chain_was_satisfied(mc: 'match_chain.MatchChain') -> tuple[bool, bool]
     return satisfied, interactive
 
 
-def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document', last_doc_path: str) -> None:
+def handle_match_chain(
+    mc: 'match_chain.MatchChain', doc: 'document.Document',
+    last_doc_path: Optional[str]
+) -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
             mc, doc, last_doc_path
@@ -1430,7 +1473,7 @@ def accept_for_match_chain(
 
 def normalize_link(
     ctx: 'scr_context.ScrContext', mc: Optional['match_chain.MatchChain'],
-    src_doc_type: 'DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
+    link_type: 'DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
     last_doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
 ) -> tuple[str, urllib.parse.ParseResult]:
     if last_doc_path is not None:
@@ -1439,7 +1482,7 @@ def normalize_link(
         doc_url_parsed = src_doc_path
     else:
         doc_url_parsed = None
-    if src_doc_type.derived_type() in [DocumentType.FILE, DocumentType.CONTENT_MATCH]:
+    if link_type.non_r_type() == DocumentType.FILE:
         if not link_parsed.scheme:
             handle_windows_paths: bool = False
             if not os.path.isabs(link):
@@ -1465,7 +1508,7 @@ def normalize_link(
                     link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
                 return link, urllib.parse.urlparse(link)
         return link, link_parsed
-    assert src_doc_type.derived_type() == DocumentType.URL
+    assert link_type == DocumentType.URL
     if doc_url_parsed and link_parsed.netloc == "" and link_parsed.scheme == "":
         lnk_ppp = pathlib.PurePosixPath(link)
         if not lnk_ppp.is_absolute() and doc_url_parsed.path:
@@ -1661,7 +1704,8 @@ def finalize(ctx: 'scr_context.ScrContext') -> None:
 
 
 def resolve_repl_defaults(
-    ctx_new: 'scr_context.ScrContext', ctx: 'scr_context.ScrContext', last_doc: Optional['document.Document']
+    ctx_new: 'scr_context.ScrContext', ctx: 'scr_context.ScrContext',
+    last_doc: Optional['document.Document']
 ) -> None:
     if ctx_new.user_agent_random and not ctx_new.user_agent:
         ctx.user_agent = None
@@ -1697,7 +1741,7 @@ def resolve_repl_defaults(
         if doc_url:
             if utils.begins(doc_url, "file:"):
                 path = utils.remove_file_scheme_from_url(doc_url)
-                if not last_doc or os.path.abspath(last_doc.path) != os.path.abspath(path):
+                if not last_doc or os.path.abspath(notnull(last_doc.path)) != os.path.abspath(path):
                     doctype = DocumentType.FILE
                     if last_doc and last_doc.document_type == DocumentType.RFILE:
                         doctype = DocumentType.RFILE

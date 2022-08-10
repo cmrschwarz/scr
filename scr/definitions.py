@@ -98,16 +98,21 @@ class DocumentType(Enum):
     URL = 1
     FILE = 2
     RFILE = 3
-    CONTENT_MATCH = 4
+    STRING = 4
+    RSTRING = 5
 
     def derived_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.URL
+        if self == DocumentType.RSTRING:
+            return DocumentType.STRING
         return self
 
-    def url_handling_type(self) -> 'DocumentType':
+    def non_r_type(self) -> 'DocumentType':
         if self == DocumentType.RFILE:
             return DocumentType.FILE
+        if self == DocumentType.RSTRING:
+            return DocumentType.STRING
         return self
 
 
@@ -115,14 +120,14 @@ document_type_dict: dict[str, DocumentType] = {
     "url": DocumentType.URL,
     "file": DocumentType.FILE,
     "rfile": DocumentType.RFILE,
-    "cmatch": DocumentType.CONTENT_MATCH
+    "string": DocumentType.STRING
 }
 
 document_type_display_dict: dict[DocumentType, str] = {
     DocumentType.URL: "url",
     DocumentType.FILE: "file",
     DocumentType.RFILE: "rfile",
-    DocumentType.CONTENT_MATCH: "content match"
+    DocumentType.STRING: "string"
 }
 
 selenium_variants_dict: dict[str, SeleniumVariant] = {

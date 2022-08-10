@@ -34,6 +34,11 @@ def truncate(
     return text
 
 
+def notnull(val: Optional[T]) -> T:
+    assert val is not None
+    return val
+
+
 def begins(string: str, begin: str) -> bool:
     return len(string) >= len(begin) and string[0:len(begin)] == begin
 

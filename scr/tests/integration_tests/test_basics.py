@@ -156,7 +156,7 @@ def test_broken_pipe(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            f"cmatch={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
+            f"string={'x' * (3 * DEFAULT_RESPONSE_BUFFER_SIZE)}",
             "cshif={c}",
             "cshf=python -c 'import time; time.sleep(1)'"
         ],
@@ -576,18 +576,19 @@ def test_implicit_range_begin(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "cmatch=x",
+            "string=x",
             "cr-2=.+",
         ],
         stdout="x\nx\nx\n"
     )
 
 
-def test_indoc_rfile(cli_env: CliEnv) -> None:
+def test_stdin_doc_twice(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
         args=[
-            "indoc=rfile",
+            "stdin",
+            "cl",
             "cpf={c}"
         ],
         stdin="../res/a.txt",

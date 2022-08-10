@@ -5,7 +5,7 @@ import copy
 from .definitions import (
     T, ScrSetupError, DocumentType, SeleniumVariant, selenium_variants_dict,
     selenium_strats_dict, selenium_download_strategies_dict, verbosities_dict,
-    document_duplication_dict, document_type_dict,
+    document_duplication_dict,
     VERSION, SCRIPT_NAME, DEFAULT_ESCAPE_SEQUENCE, DEFAULT_CPF, DEFAULT_CWF,
     DEFAULT_TIMEOUT_SECONDS
 )
@@ -50,8 +50,6 @@ def help(err: bool = False) -> None:
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to \"{DEFAULT_ESCAPE_SEQUENCE}\"
-        cenc=<encoding>       default encoding to assume that content is in
-        cfenc=<encoding>      encoding to always assume that content is in, even if http(s) says differently
 
     Labels to give each matched content (mostly useful for the filename in csf):
         lx=<xpath>           xpath for label matching
@@ -83,10 +81,18 @@ def help(err: bool = False) -> None:
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
         dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
-    Initial Documents:
-        url=<url>            fetch a document from a url, derived document matches are (relative) urls
-        file=<path>          fetch a document from a file, derived documents matches are (relative) file pathes
-        rfile=<path>         fetch a document from a file, derived documents matches are urls
+        drbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
+        dbase=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
+        dfbase=bool          force the default d(r)base even if the originating document has a valid base
+
+    Initial Documents (may be specified multiple times):
+        url=<url>            fetch document from url
+        rfile=<path>         read document from path
+        file=<path>          read document from path, urls without scheme are treated as relative file pathes
+        rstring=<string>     treat string as document
+        string=<string>      treat string as document, urls without scheme are treated as relative file pathes
+        rstdin               read document from stdin
+        stdin                read document from stdin, urls without scheme are treated as relative file pathes
 
     Other:
         selstrat=<strategy>  matching strategy for selenium (default: plain, values: anymatch, plain, interactive, deduplicate)
@@ -125,7 +131,7 @@ def help(err: bool = False) -> None:
         {{di}}                 document index
         {{ci}}                 content index
         {{dl}}                 document link (inside df, this refers to the parent document)
-        {{cenc}}               content encoding, deduced while respecting cenc and cfenc
+        {{denc}}               content encoding, deduced while respecting denc and dfenc
         {{cesc}}               escape sequence for separating content, can be overwritten using cesc
         {{chain}}              id of the match chain that generated this content
 
@@ -423,13 +429,13 @@ def gen_doc_from_arg(
     mcs: list['match_chain.MatchChain'], extend_chains_above: Optional[int],
     doctype: DocumentType, value: str
 ) -> 'document.Document':
-    if doctype == DocumentType.CONTENT_MATCH:
-        path, path_parsed = "<content match>", None
+    if doctype in [DocumentType.STRING, DocumentType.RSTRING]:
+        path, path_parsed = None, None
     else:
         path, path_parsed = scr.normalize_link(
             ctx,
             None,
-            doctype.url_handling_type(),
+            doctype,
             None,
             None,
             value,
@@ -437,14 +443,14 @@ def gen_doc_from_arg(
         )
     doc = document.Document(
         doctype,
-        path,
-        None,
-        None,
-        mcs,
-        extend_chains_above,
-        path_parsed=path_parsed
+        path=path,
+        src_mc=None,
+        parent_doc=None,
+        match_chains=mcs,
+        expand_match_chains_above=extend_chains_above,
+        path_parsed=path_parsed,
     )
-    if doctype == DocumentType.CONTENT_MATCH:
+    if doctype == DocumentType.STRING:
         doc.text = value
     return doc
 
@@ -480,15 +486,15 @@ def apply_doc_arg(
     return True
 
 
-def apply_doc_arg_stdin(ctx: 'scr_context.ScrContext', argname: str, arg: str) -> bool:
+def apply_doc_arg_stdin(ctx: 'scr_context.ScrContext', argname: str, arg: str, doctype: DocumentType) -> bool:
     parse_result = parse_doc_arg(ctx, argname, arg, True)
     if parse_result is None:
         return False
     mcs, extend_chains_above, value = parse_result
-    if value is None:
-        doctype = DocumentType.CONTENT_MATCH
-    else:
-        doctype = parse_variant_arg(value, document_type_dict, arg)
+    if value is not None:
+        raise ScrSetupError(
+            f"{argname} does not take an argument: '{arg}'"
+        )
     if ctx.stdin_text is None:
         ctx.stdin_text = sys.stdin.read()
     ctx.docs.append(gen_doc_from_arg(ctx, mcs, extend_chains_above, doctype, ctx.stdin_text))
@@ -707,6 +713,21 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             continue
 
         if apply_mc_arg(
+            ctx, "dd", ["document_duplication"], arg,
+            lambda v, arg: parse_variant_arg(v, document_duplication_dict, arg),
+        ): continue
+
+        if apply_mc_arg(ctx, "dbase", ["file_base"], arg):
+            continue
+
+        if apply_mc_arg(ctx, "drbase", ["url_base"], arg):
+            continue
+
+        if apply_mc_arg(ctx, "dfbase", ["force_mc_base"], arg, parse_bool_arg, True):
+            continue
+
+        # misc args
+        if apply_mc_arg(
             ctx, "selstrat", ["selenium_strategy"], arg,
             lambda v, arg: parse_variant_arg(v, selenium_strats_dict, arg)
         ): continue
@@ -714,25 +735,27 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             ctx, "seldl", ["selenium_download_strategy"], arg,
             lambda v, arg: parse_variant_arg(v, selenium_download_strategies_dict, arg)
         ): continue
-        if apply_mc_arg(
-            ctx, "dd", ["document_duplication"], arg,
-            lambda v, arg: parse_variant_arg(v, document_duplication_dict, arg),
-        ): continue
 
-        # misc args
+        # Documents
         if apply_doc_arg(ctx, "url", DocumentType.URL, arg):
             continue
         if apply_doc_arg(ctx, "rfile", DocumentType.RFILE, arg):
             continue
         if apply_doc_arg(ctx, "file", DocumentType.FILE, arg):
             continue
-        if apply_doc_arg(ctx, "cmatch", DocumentType.CONTENT_MATCH, arg):
+        if apply_doc_arg(ctx, "string", DocumentType.STRING, arg):
             continue
-        if apply_doc_arg_stdin(ctx, "indoc", arg):
+        if apply_doc_arg(ctx, "string", DocumentType.RSTRING, arg):
             continue
+        if apply_doc_arg_stdin(ctx, "stdin", arg, DocumentType.STRING):
+            continue
+        if apply_doc_arg_stdin(ctx, "rstdin", arg, DocumentType.STRING):
+            continue
+
         if apply_ctx_arg(ctx, "cookiefile", "cookie_file", arg):
             continue
 
+        # Global Options
         if apply_ctx_arg(
             ctx, "sel", "selenium_variant", arg,
             lambda v, arg: parse_variant_arg(

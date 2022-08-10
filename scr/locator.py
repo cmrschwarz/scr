@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from .definitions import (ScrSetupError, ScrMatchError, Verbosity)
-from . import match_chain, scr, utils, document, content_match, selenium_setup
+from . import match_chain, scr, document, content_match, selenium_setup
 from .config_data_class import ConfigDataClass
 from typing import Optional, Union, Any, cast
 import lxml.etree
@@ -231,7 +231,6 @@ class Locator(ConfigDataClass):
         self,
         src_text: str,
         src_xml: Optional[lxml.html.HtmlElement],
-        doc_path: str,
         store_xml: bool = False
     ) -> list[LocatorMatch]:
         if self.xpath is None:
@@ -241,22 +240,16 @@ class Locator(ConfigDataClass):
                 lm.xmatch_xml = src_xml
             return [lm]
         assert src_xml is not None
+        err = False
         try:
             xp = cast(lxml.etree.XPath, self.xpath)
             xpath_matches = eval_xpath(src_xml, xp)
-        except lxml.etree.XPathError:
-            raise ScrMatchError(
-                f"xpath matching failed for: '{self.xpath}' in {doc_path}"
-            )
-        except lxml.etree.LxmlError as ex:
-            raise ScrMatchError(
-                f"xpath '{self.xpath}' to {doc_path}: "
-                + f"{ex.__class__.__name__}:  {str(ex)}"
-            )
+        except (lxml.etree.XPathError, lxml.etree.LxmlError):
+            err = True
 
-        if not isinstance(xpath_matches, list):
+        if err or not isinstance(xpath_matches, list):
             raise ScrMatchError(
-                f"xpath matching failed for: '{self.xpath}' in {doc_path}"
+                f"xpath matching failed for: {self.get_configuring_argument(['xpath'])}"
             )
 
         if self.xpath_sibling_match_depth > 0:
@@ -290,9 +283,9 @@ class Locator(ConfigDataClass):
                     lm.xmatch = lxml.html.tostring(xm, encoding="unicode").strip()
                     if store_xml:
                         lm.xmatch_xml = xm
-                except (lxml.etree.LxmlError, UnicodeEncodeError) as ex1:
+                except (lxml.etree.LxmlError, UnicodeEncodeError):
                     raise ScrMatchError(
-                        f"{doc_path}: xpath match encoding failed: {str(ex1)}"
+                        f"xpath match encoding in  {self.get_configuring_argument(['xpath'])} failed"
                     )
             lm.result = lm.xmatch
             res.append(lm)
@@ -345,16 +338,14 @@ class Locator(ConfigDataClass):
             try:
                 mc.js_executed = True
                 drv = cast(SeleniumWebDriver, mc.ctx.selenium_driver)
-
-                results = drv.execute_script(
-                    self.js_script, *args_dict.values())  # type: ignore
+                results = drv.execute_script(self.js_script, *args_dict.values())  # type: ignore
 
             except SeleniumJavascriptException as ex:
                 arg = cast(str, self.get_configuring_argument(['js_script']))
                 name = arg[0: arg.find("=")]
                 scr.log(
                     mc.ctx, Verbosity.WARN,
-                    f"{name}: js exception on {utils.truncate(doc.path)}:\n{textwrap.indent(str(ex), '    ')}"
+                    f"{name}: js exception:\n{textwrap.indent(str(ex), '    ')}"
                 )
                 continue
             except (SeleniumWebDriverException, SeleniumMaxRetryError):

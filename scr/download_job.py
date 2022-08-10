@@ -306,8 +306,13 @@ class DownloadJob:
 
     def __init__(self, cm: content_match.ContentMatch) -> None:
         self.cm = cm
+        if self.cm.doc.path is None:
+            assert self.cm.doc.document_type.non_r_type() == DocumentType.STRING
+            ctx = "<string doc>"
+        else:
+            ctx = utils.truncate(self.cm.doc.path)
         self.context = (
-            f"{utils.truncate(self.cm.doc.path)}{scr.get_ci_di_context(self.cm)}"
+            f"{ctx}{scr.get_ci_di_context(self.cm)}"
         )
         self.output_formatters = []
 
@@ -918,7 +923,7 @@ class DownloadJob:
                 path = self.cm.clm.result
                 path_parsed = self.cm.url_parsed
             doc = document.Document(
-                DocumentType.CONTENT_MATCH,
+                DocumentType.STRING,
                 path, self.cm.mc, self.cm.doc,
                 self.cm.mc.content_forward_chains, None, None,
                 path_parsed

@@ -91,8 +91,6 @@ scr [OPTIONS]
         cin=<bool>            give a prompt to ignore a potential content match
         cl=<bool>             treat content match as a link to the actual content
         cesc=<string>         escape sequence to terminate content in cin mode, defaults to "<END>"
-        cenc=<encoding>       default encoding to assume that content is in
-        cfenc=<encoding>      encoding to always assume that content is in, even if http(s) says differently
 
     Labels to give each matched content (mostly useful for the filename in csf):
         lx=<xpath>           xpath for label matching
@@ -124,10 +122,18 @@ scr [OPTIONS]
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
         dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
-    Initial Documents:
-        url=<url>            fetch a document from a url, derived document matches are (relative) urls
-        file=<path>          fetch a document from a file, derived documents matches are (relative) file pathes
-        rfile=<path>         fetch a document from a file, derived documents matches are urls
+        drbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
+        dbase=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
+        dfbase=bool          force the default d(r)base even if the originating document has a valid base
+
+    Initial Documents (may be specified multiple times):
+        url=<url>            fetch document from url
+        rfile=<path>         read document from path
+        file=<path>          read document from path, urls without scheme are treated as relative file pathes
+        rstring=<string>     treat string as document
+        string=<string>      treat string as document, urls without scheme are treated as relative file pathes
+        rstdin               read document from stdin
+        stdin                read document from stdin, urls without scheme are treated as relative file pathes
 
     Other:
         selstrat=<strategy>  matching strategy for selenium (default: plain, values: anymatch, plain, interactive, deduplicate)
@@ -166,7 +172,7 @@ scr [OPTIONS]
         {di}                 document index
         {ci}                 content index
         {dl}                 document link (inside df, this refers to the parent document)
-        {cenc}               content encoding, deduced while respecting cenc and cfenc
+        {denc}               content encoding, deduced while respecting denc and dfenc
         {cesc}               escape sequence for separating content, can be overwritten using cesc
         {chain}              id of the match chain that generated this content
 
