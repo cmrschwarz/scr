@@ -9,11 +9,13 @@ class ContentMatch:
     mc: 'match_chain.MatchChain'
     doc: 'document.Document'
     filename: Optional[str] = None
+    base: Optional['urllib.parse.ParseResult'] = None
 
     # these are set once we accept the CM, not during it's creation
     ci: Optional[int] = None
     di: Optional[int] = None
 
+    url: Optional[str]
     url_parsed: Optional[urllib.parse.ParseResult] = None
 
     def __init__(
@@ -27,6 +29,7 @@ class ContentMatch:
         self.clm = clm
         self.mc = mc
         self.doc = doc
+        self.base = doc.base
 
     def __key__(self) -> Any:
         return (

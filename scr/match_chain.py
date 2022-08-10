@@ -4,6 +4,7 @@ from .definitions import (
     DEFAULT_ESCAPE_SEQUENCE, FALLBACK_DOCUMENT_SCHEME)
 from .config_data_class import ConfigDataClass
 from . import locator, content_match, scr_context, document
+import urllib.parse
 
 
 class MatchChain(ConfigDataClass):
@@ -26,7 +27,7 @@ class MatchChain(ConfigDataClass):
     content_raw: bool = True
 
     content_input_encoding: str = "utf-8"
-    content_forced_input_encoding: Optional[str] = None
+    content_force_input_encoding: Optional[bool] = None
     save_path_interactive: bool = False
 
     label_default_format: Optional[str] = None
@@ -39,19 +40,19 @@ class MatchChain(ConfigDataClass):
     dimin: int = 1
     dimax: Union[int, float] = float("inf")
     default_document_encoding: str = "utf-8"
-    forced_document_encoding: Optional[str] = None
+    force_document_encoding: Optional[bool] = None
 
     default_document_scheme: str = FALLBACK_DOCUMENT_SCHEME
-    prefer_parent_document_scheme: bool = True
-    forced_document_scheme: Optional[str] = None
+    prefer_parent_document_scheme: Optional[bool] = None
+    force_document_scheme: Optional[bool] = None
 
     selenium_strategy: SeleniumStrategy = SeleniumStrategy.PLAIN
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
 
     document_output_chains: list['MatchChain']
 
-    file_base: Optional[str] = None
-    url_base: Optional[str] = None
+    file_base: Optional['urllib.parse.ParseResult'] = None
+    url_base: Optional['urllib.parse.ParseResult'] = None
     force_mc_base: Optional[bool] = None
 
     __annotations__: dict[str, type]

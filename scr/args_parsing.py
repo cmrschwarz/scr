@@ -1,5 +1,4 @@
 from typing import Any, Optional, Callable, Iterable
-import urllib
 import itertools
 import copy
 from .definitions import (
@@ -12,7 +11,7 @@ from .definitions import (
 
 from . import (
     match_chain, document, input_sequences,
-    selenium_driver_download, scr_context, utils, scr
+    selenium_driver_download, scr_context, utils
 )
 
 import sys
@@ -75,10 +74,10 @@ def help(err: bool = False) -> None:
         dmm=<bool>           allow multiple document matches in one document instead of picking the first
         din=<bool>           give a prompt to ignore a potential document match
         denc=<encoding>      default document encoding to use for following documents, default is utf-8
-        dfenc=<encoding>     force document encoding for following documents, even if http(s) says differently
+        dfenc=<bool>         force document encoding for following documents, even if http(s) says differently
         dsch=<scheme>        default scheme for urls derived from following documents, defaults to "https"
         dpsch=<bool>         use the parent documents scheme if available, defaults to true unless dsch is specified
-        dfsch=<scheme>       force this scheme for urls derived from following documents
+        dfsch=<bool>         force the default scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
         dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
         rbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
@@ -432,15 +431,7 @@ def gen_doc_from_arg(
     if doctype.non_r_type() == DocumentType.STRING:
         path, path_parsed = None, None
     else:
-        path, path_parsed = scr.normalize_link(
-            ctx,
-            None,
-            doctype,
-            None,
-            None,
-            value,
-            urllib.parse.urlparse(value)
-        )
+        path, path_parsed = value, None
     doc = document.Document(
         doctype,
         path=path,
@@ -641,7 +632,7 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
 
         if apply_mc_arg(ctx, "cienc", ["content_input_encoding"], arg, parse_encoding_arg):
             continue
-        if apply_mc_arg(ctx, "cfienc", ["content_forced_input_encoding"], arg, parse_encoding_arg):
+        if apply_mc_arg(ctx, "cfienc", ["content_force_input_encoding"], arg, parse_encoding_arg):
             continue
 
         if apply_mc_arg(ctx, "cl", ["content_raw"], arg, lambda v, arg: not parse_bool_arg(v, arg), True): continue
@@ -702,14 +693,14 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
 
         if apply_mc_arg(ctx, "denc", ["default_document_encoding"], arg, parse_encoding_arg):
             continue
-        if apply_mc_arg(ctx, "dfenc", ["forced_document_encoding"], arg, parse_encoding_arg):
+        if apply_mc_arg(ctx, "dfenc", ["force_document_encoding"], arg, parse_encoding_arg):
             continue
 
         if apply_mc_arg(ctx, "dsch", ["default_document_scheme"], arg):
             continue
         if apply_mc_arg(ctx, "dpsch", ["prefer_parent_document_scheme"], arg):
             continue
-        if apply_mc_arg(ctx, "dfsch", ["forced_document_scheme"], arg):
+        if apply_mc_arg(ctx, "dfsch", ["force_document_scheme"], arg, parse_bool_arg, True):
             continue
 
         if apply_mc_arg(

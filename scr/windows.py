@@ -3,7 +3,7 @@ from typing import Optional, cast
 from enum import Enum
 import os
 import shlex
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import win32api
     import win32event
     import win32file

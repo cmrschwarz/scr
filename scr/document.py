@@ -11,8 +11,7 @@ class Document:
     # for documents without a path
     path: Optional[str]
     path_parsed: Optional[urllib.parse.ParseResult]
-    base: Optional[str]
-    base_parsed: Optional[urllib.parse.ParseResult]
+    base: Optional[urllib.parse.ParseResult]
     encoding: Optional[str]
     forced_encoding: bool
     text: Optional[str]
@@ -30,16 +29,14 @@ class Document:
         match_chains: Optional[list['match_chain.MatchChain']] = None,
         expand_match_chains_above: Optional[int] = None,
         locator_match: Optional['locator.LocatorMatch'] = None,
+        base: Optional[urllib.parse.ParseResult] = None,
         path_parsed: Optional[urllib.parse.ParseResult] = None,
-        base: Optional[str] = None,
-        base_parsed: Optional[urllib.parse.ParseResult] = None
     ) -> None:
         self.document_type = document_type
         self.path = path
         self.path_parsed = path_parsed
         self.base = base
         self.parent_doc = parent_doc
-        self.path_parsed = base_parsed
         self.encoding = None
         self.forced_encoding = False
         self.text = None
@@ -47,8 +44,6 @@ class Document:
         self.src_mc = src_mc
         self.locator_match = locator_match
         self.dfmatch = None
-        if self.path_parsed is None and self.path is not None:
-            self.path_parsed = urllib.parse.urlparse(self.path)
         if not match_chains:
             self.match_chains = []
         else:
@@ -76,8 +71,8 @@ class Document:
         mc = self.src_mc
         if not mc:
             mc = ctx.match_chains[0]
-        if mc.forced_document_encoding:
-            enc = mc.forced_document_encoding
+        if mc.force_document_encoding:
+            enc = mc.default_document_encoding
             forced = True
         elif self.encoding:
             enc = self.encoding

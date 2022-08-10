@@ -38,7 +38,7 @@ from .definitions import (
     SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
     DocumentType, InteractiveResult,
     verbosities_display_dict, document_type_display_dict,
-    DEFAULT_CSF, DEFAULT_CWF, DEFAULT_CPF, SCR_USER_AGENT, FALLBACK_DOCUMENT_SCHEME
+    DEFAULT_CSF, DEFAULT_CWF, DEFAULT_CPF, SCR_USER_AGENT
 
 )
 from .input_sequences import (
@@ -338,8 +338,11 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     if mc.content_forward_chains and mc.content_forward_format is None:
         mc.content_forward_format = DEFAULT_CWF
 
+    if mc.prefer_parent_document_scheme is None:
+        mc.prefer_parent_document_scheme = True
+
     if mc.file_base is None:
-        mc.file_base = os.getcwd()
+        mc.file_base = urllib.parse.urlparse(".")
 
     if not mc.document_output_chains:
         mc.document_output_chains = [mc]
@@ -556,8 +559,7 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
         use_path_as_base = not force_mc_base and d.document_type in [DocumentType.URL, DocumentType.FILE]
         if use_path_as_base:
             assert d.path_parsed is not None
-            d.base_parsed = d.path_parsed._replace(path=os.path.normpath(d.path_parsed.path + "/.."))
-            d.base = urllib.parse.urlunparse(d.base_parsed)
+            d.base = get_path_base(d.path_parsed)
         else:
             use_file_base = d.document_type in [DocumentType.FILE, DocumentType.STRING]
             if use_file_base:
@@ -1053,7 +1055,7 @@ def forward_document(ctx: 'scr_context.ScrContext', doc: Optional['document.Docu
     ctx.docs.append(doc)
 
 
-def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Optional[str]) -> InteractiveResult:
+def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
     cm.mc.loc_content.apply_format_for_content_match(cm, cm.clm)
@@ -1072,10 +1074,11 @@ def handle_content_match(cm: 'content_match.ContentMatch', last_doc_path: Option
 
     while True:
         if not cm.mc.content_raw:
-            cm.url_parsed = urllib.parse.urlparse(cm.clm.result)
-            cm.clm.result, cm.url_parsed = normalize_link(
-                cm.mc.ctx, cm.mc, cm.doc.document_type.derived_link_type(), cm.doc.path_parsed,
-                last_doc_path, cm.clm.result, cm.url_parsed
+            cm.url, cm.url_parsed = normalize_link(
+                cm.clm.result, cm.base, cm.doc.document_type,
+                cm.mc.default_document_scheme,
+                cm.mc.prefer_parent_document_scheme is True,
+                cm.mc.force_document_scheme is True, False
             )
 
         if cm.mc.loc_content.interactive:
@@ -1438,7 +1441,7 @@ def accept_for_match_chain(
             if not mc.has_label_matching or cm.llm is not None:
                 if mc.ci > mc.cimax:
                     break
-                res = handle_content_match(cm, last_doc_path)
+                res = handle_content_match(cm)
                 if res == InteractiveResult.SKIP_CHAIN:
                     break
                 if res == InteractiveResult.SKIP_DOC:
@@ -1471,66 +1474,70 @@ def accept_for_match_chain(
     return content_skip_doc, documents_skip_doc
 
 
-def normalize_link(
-    ctx: 'scr_context.ScrContext', mc: Optional['match_chain.MatchChain'],
-    link_type: 'DocumentType', src_doc_path: Optional[urllib.parse.ParseResult],
-    last_doc_path: Optional[str], link: str, link_parsed: urllib.parse.ParseResult
-) -> tuple[str, urllib.parse.ParseResult]:
-    if last_doc_path is not None:
-        doc_url_parsed = urllib.parse.urlparse(last_doc_path)
-    elif src_doc_path is not None:
-        doc_url_parsed = src_doc_path
-    else:
-        doc_url_parsed = None
-    if link_type.non_r_type() == DocumentType.FILE:
-        if not link_parsed.scheme:
-            handle_windows_paths: bool = False
-            if not os.path.isabs(link):
-                if doc_url_parsed is not None:
-                    base = doc_url_parsed.path
-                    if ctx.selenium_variant.enabled():
-                        assert last_doc_path is not None
-                        assert src_doc_path is not None
-                        handle_windows_paths = (
-                            bool(utils.is_windows())
-                            and bool(doc_url_parsed.scheme == "file")
-                        )
-                        if handle_windows_paths:
-                            base = utils.remove_file_scheme_from_url(last_doc_path)
-                        # attempt to preserve short, relative paths were possible
-                        if os.path.abspath(base) == os.path.abspath(src_doc_path.path):
-                            base = src_doc_path.path
-                    link = os.path.normpath(os.path.join(os.path.dirname(base), link))
-                else:
-                    link = os.path.normpath(link)
+def get_path_base(link: urllib.parse.ParseResult) -> Optional[urllib.parse.ParseResult]:
+    if link.scheme == "data":
+        return None
+    return link._replace(path=os.path.dirname(link.path))
 
-                if handle_windows_paths:
-                    link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
-                return link, urllib.parse.urlparse(link)
-        return link, link_parsed
+
+def normalize_link(
+    link: str,
+    base: Optional[urllib.parse.ParseResult],
+    base_doc_type: 'DocumentType',
+    default_scheme: str,
+    prefer_parent_scheme: bool,
+    force_default_scheme: bool,
+    treat_path_without_slashes_as_domain: bool,
+) -> tuple[str, urllib.parse.ParseResult]:
+    link_type = base_doc_type.derived_link_type()
+    if link_type == DocumentType.FILE:
+        assert base is not None
+        if link.startswith("file:"):
+            link = utils.remove_file_scheme_from_url(link)
+        else:
+            if not os.path.isabs(link):
+                # attempt to preserve short, relative paths were possible
+                if os.path.abspath(base.path) == os.path.abspath(link):
+                    link = base.path
+                else:
+                    link = os.path.normpath(os.path.join(os.path.dirname(base.path), link))
+            else:
+                link = os.path.normpath(link)
+        return link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
     assert link_type == DocumentType.URL
-    if doc_url_parsed and link_parsed.netloc == "" and link_parsed.scheme == "":
+    changed = False
+    link_parsed = urllib.parse.urlparse(link)
+    if base is not None and link_parsed.netloc == "" and link_parsed.scheme == "":
         lnk_ppp = pathlib.PurePosixPath(link)
-        if not lnk_ppp.is_absolute() and doc_url_parsed.path:
-            du_ppp = pathlib.PurePosixPath(doc_url_parsed.path)
+        if not lnk_ppp.is_absolute() and base.path:
+            du_ppp = pathlib.PurePosixPath(base.path)
             lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
         link_parsed = link_parsed._replace(
-            netloc=doc_url_parsed.netloc, scheme=doc_url_parsed.scheme, path=str(lnk_ppp))
-
+            netloc=base.netloc, scheme=base.scheme, path=str(lnk_ppp)
+        )
+        changed = True
     # for urls like 'google.com' urllib makes this a path instead of a netloc
-    if link_parsed.netloc == "" and not doc_url_parsed and link_parsed.scheme == "" and link_parsed.path != "" and link[0] not in [".", "/"]:
+    if (
+        treat_path_without_slashes_as_domain
+        and link_parsed.netloc == ""
+        and link_parsed.scheme == ""
+        and "/" not in link_parsed.path
+    ):
         link_parsed = link_parsed._replace(path="", netloc=link_parsed.path)
-    if (mc and mc.forced_document_scheme):
-        link_parsed = link_parsed._replace(scheme=mc.forced_document_scheme)
+        changed = True
+    if force_default_scheme:
+        link_parsed = link_parsed._replace(scheme=default_scheme)
+        changed = True
     elif link_parsed.scheme == "":
-        if (mc and mc.prefer_parent_document_scheme) and doc_url_parsed and doc_url_parsed.scheme not in ["", "file"]:
-            scheme = doc_url_parsed.scheme
-        elif mc:
-            scheme = mc.default_document_scheme
+        if prefer_parent_scheme and base is not None and base.scheme not in ["", "file"]:
+            scheme = base.scheme
         else:
-            scheme = FALLBACK_DOCUMENT_SCHEME
+            scheme = default_scheme
         link_parsed = link_parsed._replace(scheme=scheme)
-    return link_parsed.geturl(), link_parsed
+        changed = True
+    if changed:
+        link = urllib.parse.urlunparse(link_parsed)
+    return link, link_parsed
 
 
 def parse_xml(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:

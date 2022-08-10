@@ -21,6 +21,7 @@ def is_linux() -> bool:
 
 
 DEFAULT_TRUNCATION_LENGTH = 200
+FILE_SCHEME_LEN = len("file:")
 
 
 def truncate(
@@ -68,30 +69,33 @@ def unique_not_none(*values: Optional[T]) -> list[T]:
 
 def stdin_has_content(timeout: float) -> bool:
     assert timeout >= 0
-    if sys.platform != 'win32':
+    if is_windows():
+        return windows.stdin_has_content(timeout)
+    else:
         rlist, _, _ = select.select(
             [sys.stdin], [], [], timeout
         )
         return bool(rlist)
-    else:
-        return windows.stdin_has_content(timeout)
 
 
 def remove_file_scheme_from_url(url: str) -> str:
     offs = len("file:")
     assert url[:offs] == "file:"
-    for i in range(2):
-        if url[offs] == "/":
-            offs += 1
-    url = url[offs:]
+    if url[offs:offs+1] != "/":
+        return url[offs:]
+    while offs < len(url):
+        if url[offs] != "/":
+            break
+        offs += 1
+
     # browsers turn windows paths like 'C:\foobar' into "file:///C:/foobar"
-    # which does not fly with pythons os.path, so we hack in a fix
-    # that removes that leading slash from the path
-    # once we do that, urllib thinks that C: is a scheme,
-    # so we have to include file://, see handle_widows_paths normalize_link
-    if is_windows() and re.match("/[A-Za-z]:/", url):
-        url = url[1:]
-    return url
+    # which does not work with python's os.path, so we hack in a fix
+    # that removes that leading slash from the path.
+    # once we do that, we always have to always keep the 'file://',
+    # otherwise urllib will think that C: is a scheme, see normalize_selenium_base_link
+    if is_windows() and re.match("[A-Za-z]:", url[offs:]):
+        return url[offs:]
+    return url[offs-1:]
 
 
 def is_debugger_attached() -> bool:

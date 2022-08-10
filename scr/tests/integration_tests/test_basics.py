@@ -625,6 +625,7 @@ def test_rbase(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "rstr=base64/b2s=",
+            "cl",
             "rbase=httpbin.org"
         ],
         stdout="ok"
