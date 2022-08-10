@@ -81,9 +81,9 @@ def help(err: bool = False) -> None:
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
         dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
-        drbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
-        dbase=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
-        dfbase=bool          force the default d(r)base even if the originating document has a valid base
+        rbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
+        base=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
+        fbase=bool          force the default d(r)base even if the originating document has a valid base
 
     Initial Documents (may be specified multiple times):
         url=<url>            fetch document from url
@@ -717,13 +717,13 @@ def parse_args(ctx: 'scr_context.ScrContext', args: Iterable[str]) -> None:
             lambda v, arg: parse_variant_arg(v, document_duplication_dict, arg),
         ): continue
 
-        if apply_mc_arg(ctx, "dbase", ["file_base"], arg):
+        if apply_mc_arg(ctx, "base", ["file_base"], arg):
             continue
 
-        if apply_mc_arg(ctx, "drbase", ["url_base"], arg):
+        if apply_mc_arg(ctx, "rbase", ["url_base"], arg):
             continue
 
-        if apply_mc_arg(ctx, "dfbase", ["force_mc_base"], arg, parse_bool_arg, True):
+        if apply_mc_arg(ctx, "fbase", ["force_mc_base"], arg, parse_bool_arg, True):
             continue
 
         # misc args

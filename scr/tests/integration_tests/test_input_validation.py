@@ -224,7 +224,7 @@ def test_inconsequential_diverging_rbase(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "str=foo",
-            "drbase1=x",
+            "rbase1=x",
         ],
         stdout="foofoo",
     )
@@ -235,8 +235,20 @@ def test_diverging_rbase(cli_env: CliEnv) -> None:
         cli_env,
         args=[
             "rstr=foo",
-            "drbase1=x",
+            "rbase1=x",
         ],
         ec=1,
         stderr="[ERROR]: match chains 0 and 1 can't have different rbase values while sharing documents\n",
+    )
+
+
+def test_diverging_fbase(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rstr=foo",
+            "fbase1",
+        ],
+        ec=1,
+        stderr="[ERROR]: match chains 0 and 1 can't have different fbase values while sharing documents\n",
     )

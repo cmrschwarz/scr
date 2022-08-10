@@ -618,3 +618,14 @@ def test_rstdin_no_cl(cli_env: CliEnv) -> None:
         stdin="foo",
         stdout="foofoo"
     )
+
+
+def test_rbase(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rstr=base64/b2s=",
+            "rbase=httpbin.org"
+        ],
+        stdout="ok"
+    )

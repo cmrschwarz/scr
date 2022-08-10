@@ -565,11 +565,11 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
             else:
                 d.base = d.match_chains[0].url_base
         for mc in d.match_chains[1:]:
+            if mc.force_mc_base != force_mc_base:
+                raise ScrSetupError(
+                    f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different fbase values while sharing documents"
+                )
             if use_path_as_base:
-                if mc.force_mc_base:
-                    raise ScrSetupError(
-                        f"match chains {d.match_chains[0].chain_id} and {mc.chain_id} can't have different dfbase values while sharing documents"
-                    )
                 continue
             if use_file_base:
                 base = mc.file_base

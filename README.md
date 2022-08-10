@@ -122,9 +122,9 @@ scr [OPTIONS]
         dfsch=<scheme>       force this scheme for urls derived from following documents
         doc=<chain spec>     chains that matched documents should apply to, default is the same chain
         dd=<duplication>     whether to allow document duplication (default: unique, values: allowed, nonrecursive, unique)
-        drbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
-        dbase=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
-        dfbase=bool          force the default d(r)base even if the originating document has a valid base
+        rbase=<url>         default base for relative urls from rfile, rstring and rstdin documents
+        base=<path>         default base for relative file pathes from string and stdin documents, default: current working directory
+        fbase=bool          force the default d(r)base even if the originating document has a valid base
 
     Initial Documents (may be specified multiple times):
         url=<url>            fetch document from url
