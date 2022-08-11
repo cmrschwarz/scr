@@ -1520,7 +1520,7 @@ def normalize_link(
     default_scheme: str,
     prefer_parent_scheme: bool,
     force_default_scheme: bool,
-    treat_path_without_slashes_as_domain: bool,
+    prefer_parsing_as_absolute_url: bool,
 ) -> tuple[str, urllib.parse.ParseResult]:
     link = link.strip()
     if link.startswith("data:"):
@@ -1541,34 +1541,45 @@ def normalize_link(
     assert link_type == DocumentType.URL
     changed = False
     link_parsed = urllib.parse.urlparse(link)
-    if base is not None and link_parsed.netloc == "" and link_parsed.scheme == "":
+
+    scheme_was_blank = link_parsed.scheme == ""
+    if scheme_was_blank:
+        if force_default_scheme:
+            scheme = default_scheme
+        elif prefer_parent_scheme and base is not None and base.scheme not in ["", "file"]:
+            scheme = base.scheme
+        else:
+            scheme = default_scheme
+        link_parsed = link_parsed._replace(
+            scheme=scheme
+        )
+        changed = True
+
+    # for urls like 'google.com' urllib makes this a path instead of a netloc
+    # we change that when there would be no netloc otherwise, or when
+    # this interpretation is explicitly preferred using the flag
+    if link_parsed.netloc == "" and scheme_was_blank and (base is None or prefer_parsing_as_absolute_url):
+        first_slash = link_parsed.path.find("/")
+        if first_slash == -1:
+            netloc = link_parsed.path
+            path = ""
+        else:
+            # when the slash is right at the start, the netloc stays blank
+            netloc = link_parsed.path[0:first_slash]
+            path = link_parsed.path[first_slash:]
+        link_parsed = link_parsed._replace(netloc=netloc, path=path)
+        changed = True
+
+    if base is not None:
+        if link_parsed.netloc == "" and scheme_was_blank:
+            link_parsed = link_parsed._replace(netloc=base.netloc)
         lnk_ppp = pathlib.PurePosixPath(link)
         if not lnk_ppp.is_absolute() and base.path:
             du_ppp = pathlib.PurePosixPath(base.path)
             lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
-        link_parsed = link_parsed._replace(
-            netloc=base.netloc, scheme=base.scheme, path=str(lnk_ppp)
-        )
-        changed = True
-    # for urls like 'google.com' urllib makes this a path instead of a netloc
-    if (
-        treat_path_without_slashes_as_domain
-        and link_parsed.netloc == ""
-        and link_parsed.scheme == ""
-        and "/" not in link_parsed.path
-    ):
-        link_parsed = link_parsed._replace(path="", netloc=link_parsed.path)
-        changed = True
-    if force_default_scheme:
-        link_parsed = link_parsed._replace(scheme=default_scheme)
-        changed = True
-    elif link_parsed.scheme == "":
-        if prefer_parent_scheme and base is not None and base.scheme not in ["", "file"]:
-            scheme = base.scheme
-        else:
-            scheme = default_scheme
-        link_parsed = link_parsed._replace(scheme=scheme)
-        changed = True
+            link_parsed = link_parsed._replace(path=str(lnk_ppp))
+            changed = True
+
     if changed:
         link = urllib.parse.urlunparse(link_parsed)
     return link, link_parsed

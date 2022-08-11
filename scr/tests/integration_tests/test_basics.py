@@ -402,7 +402,7 @@ def test_illegal_url(cli_env: CliEnv) -> None:
             "cpf={c}"
         ],
         ec=1,
-        stderr="[ERROR]: Failed to fetch https:///../res/basic.html: invalid url\n"
+        stderr="[ERROR]: Failed to fetch https://../res/basic.html: invalid url\n"
     )
 
 
@@ -652,6 +652,17 @@ def test_rbase(cli_env: CliEnv) -> None:
             "rstr=base64/b2s=",
             "cl",
             "rbase=httpbin.org"
+        ],
+        stdout="ok"
+    )
+
+
+def test_url_default_scheme(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rstr=httpbin.org/base64/b2s=",
+            "cl",
         ],
         stdout="ok"
     )

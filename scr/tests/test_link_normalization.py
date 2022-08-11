@@ -44,8 +44,17 @@ def test_url_hostname_assumption() -> None:
 
 def test_without_url_hostname_assumption() -> None:
     res, res_parsed = normalize_link(
-        "example.com", urllib.parse.urlparse("foobar.com/"),
+        "example.com", urllib.parse.urlparse("https://foobar.com"),
         DocumentType.URL, "https", False, False, False
     )
     assert res == urllib.parse.urlunparse(res_parsed)
-    validate_text("wrong link normalization", "https:///example.com", res, add_newline=True)
+    validate_text("wrong link normalization", "https://foobar.com/example.com", res, add_newline=True)
+
+
+def test_without_url_hostname_assumption_no_base() -> None:
+    res, res_parsed = normalize_link(
+        "example.com", None,
+        DocumentType.URL, "https", False, False, False
+    )
+    assert res == urllib.parse.urlunparse(res_parsed)
+    validate_text("wrong link normalization", "https://example.com", res, add_newline=True)
