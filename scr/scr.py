@@ -1529,15 +1529,14 @@ def normalize_link(
         assert base is not None
         if link.startswith("file:"):
             link = utils.remove_file_scheme_from_url(link)
-        else:
-            if not os.path.isabs(link):
-                # attempt to preserve short, relative paths were possible
-                if os.path.abspath(base.path) == os.path.abspath(link):
-                    link = base.path
-                else:
-                    link = os.path.normpath(os.path.join(base.path, link))
+        if not os.path.isabs(link):
+            # attempt to preserve short, relative paths were possible
+            if os.path.abspath(base.path) == os.path.abspath(link):
+                link = base.path
             else:
-                link = os.path.normpath(link)
+                link = os.path.normpath(os.path.join(base.path, link))
+        else:
+            link = os.path.normpath(link)
         return link, urllib.parse.urlparse("file:" + link)._replace(scheme="")
     assert link_type == DocumentType.URL
     changed = False

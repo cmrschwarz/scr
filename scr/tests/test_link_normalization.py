@@ -3,6 +3,7 @@ from ..definitions import DocumentType
 from ..scr import normalize_link
 from .utils import validate_text
 from .. import utils
+import os
 
 
 def test_windows_file_scheme_removal(pretend_windows: bool) -> None:
@@ -29,7 +30,7 @@ def test_windows_file_link_normalization(pretend_windows: None) -> None:
             DocumentType.FILE, "", False, False, False
         )
         assert res == urllib.parse.urlunparse(res_parsed)
-        validate_text("wrong link normalization", expected_result, res, add_newline=True)
+        validate_text(f"wrong link normalization for '{link}'", os.path.normpath(expected_result), res, add_newline=True)
 
 
 def test_url_hostname_assumption() -> None:
