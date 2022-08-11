@@ -1,8 +1,9 @@
 from .. import progress_report, download_job
-from typing import cast, Any
+from typing import cast
 import pytest
 import datetime
 from collections import deque
+from .conftest import FAKE_TIME_ORIGIN
 
 
 @pytest.mark.parametrize(('byte_size', 'output_size', 'output_unit'), [
@@ -35,22 +36,9 @@ def test_get_timespan_string(timespan: float, output_size: str, output_unit: str
     )
 
 
-FAKE_TIME_ORIGIN = datetime.datetime.min
-FAKE_TIME_NOW = (datetime.datetime.min + datetime.timedelta(seconds=60))
-
-
-@pytest.fixture()
-def _patch_datetime_now(monkeypatch: pytest.MonkeyPatch) -> None:
-    class mydatetime(datetime.datetime):
-        @classmethod
-        def now(cls: Any, tz: Any = None) -> Any:
-            return FAKE_TIME_NOW
-    monkeypatch.setattr(datetime, 'datetime', mydatetime)
-
-
 @pytest.fixture()
 def dummy_status_reports(
-    _patch_datetime_now: None
+    _fake_time: None
 ) -> list[progress_report.DownloadStatusReport]:
     lines: list[progress_report.DownloadStatusReport] = []
     for i in range(10):

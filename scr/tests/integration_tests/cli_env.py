@@ -52,10 +52,10 @@ class ScrRunResults:
     exit_code: int
     stdout: str
     stderr: str
-    received_files: dict[str, str]
+    received_files: list[str]
 
     def __init__(self) -> None:
-        self.received_files = {}
+        self.received_files = []
 
     def validate_exit_code(self, expected: int) -> None:
         if expected != self.exit_code:
@@ -74,7 +74,7 @@ class ScrRunResults:
 
     def validate_file_results(self, expected_files: dict[str, Optional[str]]) -> None:
         expected_file_names = sorted(expected_files.keys())
-        received_file_names = sorted(self.received_files.keys())
+        received_file_names = sorted(self.received_files)
         if expected_file_names != received_file_names:
             if USE_PYTEST_ASSERTIONS:
                 assert expected_file_names == received_file_names, "wrong files created"
@@ -87,11 +87,12 @@ class ScrRunResults:
                     f"incorrect file results:\n{rec_ex_strs}"
                 )
         for of in expected_files.keys():
-            with open(of) as f:
-                received = f.read()
             expected = expected_files[of]
-            if expected is not None:
-                validate_text(f"output file '{of}' has wrong contents", expected, received, False)
+            if expected is None:
+                continue
+            with open(of, "rb") as f:
+                received = f.read().decode("utf-8", errors="surrogateescape")
+            validate_text(f"output file '{of}' has wrong contents", expected, received, False)
 
 
 def run_scr_raw(
@@ -108,10 +109,7 @@ def run_scr_raw(
     res.stdout = cap.out
     res.stderr = cap.err
     res.exit_code = exit_code
-    received_files = sorted({*os.listdir(env.tmpdir)} - env.special_files)
-    for rf in received_files:
-        with open(rf) as f:
-            res.received_files[rf] = f.read()
+    res.received_files = sorted({*os.listdir(env.tmpdir)} - env.special_files)
     return res
 
 

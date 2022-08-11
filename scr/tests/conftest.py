@@ -3,6 +3,7 @@ import pytest
 from .. import utils
 import sys
 import platform
+import datetime
 
 
 @pytest.fixture()
@@ -17,6 +18,19 @@ def pretend_windows() -> Generator[bool, None, None]:
     yield True
     platform.system = system_func
     sys.platform = sys_platform_value
+
+
+FAKE_TIME_ORIGIN = datetime.datetime.min
+FAKE_TIME_NOW = (datetime.datetime.min + datetime.timedelta(seconds=60))
+
+
+@pytest.fixture()
+def _fake_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    class mydatetime(datetime.datetime):
+        @classmethod
+        def now(cls: Any, tz: Any = None) -> Any:
+            return FAKE_TIME_NOW
+    monkeypatch.setattr(datetime, 'datetime', mydatetime)
 
 
 # this makes sure that exceptions in tests are raise properly

@@ -16,6 +16,31 @@ def test_basic_xpath(cli_env: CliEnv) -> None:
     )
 
 
+def test_basic_regex(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li/text()",
+            "cr=f..",
+        ],
+        stdout="foo\n",
+    )
+
+
+def test_named_capture_group(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            "cx=//ul/li/text()",
+            "cr=(?P<cap>f.)o",
+            "cpf={cap}{cap}\n",
+        ],
+        stdout="fofo\n",
+    )
+
+
 def test_lic(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
