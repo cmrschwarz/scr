@@ -29,8 +29,9 @@ class ConfigDataClass:
                 def_val = defaults.__dict__[cs]
             else:
                 def_val = defaults.__class__.__dict__[cs]
-            if cs not in self.__dict__ or self.__dict__[cs] is None:
+            if cs not in self.__dict__ or cs not in self._final_values_:
                 self.__dict__[cs] = def_val
+                self._final_values_.add(cs)
                 vs = defaults._value_sources_.get(cs, None)
                 if vs:
                     self._value_sources_[cs] = vs
@@ -81,3 +82,7 @@ class ConfigDataClass:
         conf._value_sources_[attr] = arg
         conf.__dict__[attr] = value
         return None
+
+    def unfinalize_value(self, attrib_path: list[str]) -> None:
+        conf, attr = self.follow_attrib_path(attrib_path)
+        conf._final_values_.remove(attr)

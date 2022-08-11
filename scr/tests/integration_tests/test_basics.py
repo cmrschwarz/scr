@@ -406,6 +406,31 @@ def test_illegal_url(cli_env: CliEnv) -> None:
     )
 
 
+def test_subfolder(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "file=../res/subfolder.html",
+            "cx1=//title/text()",
+            "cpf1=text: {c}\n",
+            "cx2=//iframe/@src",
+            "cl2",
+            "cpf2=src: {cm}\n",
+            "dx0=//iframe/@src",
+            "doc=-2"
+        ],
+        stdout=[
+            "text: subfolder",
+            "src: ../res/subfolder/different_root.html",
+            "text: different_root",
+            "src: ../res/subfolder/different_root_sibling.html",
+            "text: different_root_sibling",
+            "src: ../res/a.txt.html",
+            "text: a.txt",
+        ]
+    )
+
+
 def test_info_verbosity(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,

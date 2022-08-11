@@ -21,13 +21,13 @@ class MatchChain(ConfigDataClass):
     content_write_format: Optional[str] = None
     content_shell_command_format: Optional[str] = None
     content_shell_command_stdin_format: Optional[str] = None
-    content_shell_command_print_output: Optional[bool] = None
+    content_shell_command_print_output: bool = False
     content_forward_format: Optional[str] = None
-    content_forward_chains: list['MatchChain'] = []
+    content_forward_chains: list['MatchChain']
     content_raw: bool = True
 
     content_input_encoding: str = "utf-8"
-    content_force_input_encoding: Optional[bool] = None
+    content_force_input_encoding: bool = False
     save_path_interactive: bool = False
 
     label_default_format: Optional[str] = None
@@ -40,11 +40,11 @@ class MatchChain(ConfigDataClass):
     dimin: int = 1
     dimax: Union[int, float] = float("inf")
     default_document_encoding: str = "utf-8"
-    force_document_encoding: Optional[bool] = None
+    force_document_encoding: bool = False
 
     default_document_scheme: str = FALLBACK_DOCUMENT_SCHEME
-    prefer_parent_document_scheme: Optional[bool] = None
-    force_document_scheme: Optional[bool] = None
+    prefer_parent_document_scheme: bool = False
+    force_document_scheme: bool = False
 
     selenium_strategy: SeleniumStrategy = SeleniumStrategy.PLAIN
     selenium_download_strategy: SeleniumDownloadStrategy = SeleniumDownloadStrategy.EXTERNAL
@@ -53,7 +53,7 @@ class MatchChain(ConfigDataClass):
 
     file_base: Optional[Union['urllib.parse.ParseResult', str]] = None
     url_base: Optional[Union['urllib.parse.ParseResult', str]] = None
-    force_mc_base: Optional[bool] = None
+    force_mc_base: bool = False
 
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
@@ -98,7 +98,11 @@ class MatchChain(ConfigDataClass):
 
         self.ctx = ctx
         self.chain_id = chain_id
+        # we can't put [self] as a default here because that would be propagated
+        # as a default to other chains
         self.document_output_chains = []
+
+        self.content_forward_chains = []
 
         self.loc_content = locator.Locator("content", blank)
         self.loc_label = locator.Locator("label", blank)

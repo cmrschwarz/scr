@@ -2,6 +2,7 @@ from .cli_env import CliEnv, run_scr_raw
 from ..utils import validate_text
 from ...download_job import DEFAULT_RESPONSE_BUFFER_SIZE
 from ...progress_report import DEFAULT_MAX_TERMINAL_LINE_LENGTH
+import pytest
 
 
 def test_broken_pipe_status_report(cli_env: CliEnv) -> None:
@@ -23,7 +24,8 @@ def test_broken_pipe_status_report(cli_env: CliEnv) -> None:
     validate_text("incorrect last line of status report", last_line, lines[-1], True)
 
 
-def test_filesize_report(cli_env: CliEnv, _fake_time: None) -> None:
+@pytest.mark.usefixtures('_fake_time')
+def test_filesize_report(cli_env: CliEnv) -> None:
     res = run_scr_raw(
         cli_env,
         args=[

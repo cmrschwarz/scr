@@ -347,13 +347,13 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         _, mc.file_base = normalize_link(
             cast(str, mc.file_base), urllib.parse.urlparse("."),
             DocumentType.FILE, mc.default_document_scheme,
-            mc.prefer_parent_document_scheme is True, mc.force_document_scheme is None, False
+            mc.prefer_parent_document_scheme, mc.force_document_scheme, False
         )
     if mc.url_base is not None:
         _, mc.url_base = normalize_link(
             cast(str, mc.url_base), None, DocumentType.URL, mc.default_document_scheme,
-            mc.prefer_parent_document_scheme is True,
-            mc.force_document_scheme is None, True
+            mc.prefer_parent_document_scheme,
+            mc.force_document_scheme, True
         )
 
     if not mc.document_output_chains:
@@ -600,8 +600,8 @@ def setup_ctx(ctx: 'scr_context.ScrContext') -> None:
             d.path, d.path_parsed = normalize_link(
                 d.path, doc_base, linktype,
                 mc0.default_document_scheme,
-                mc0.prefer_parent_document_scheme is True,
-                mc.force_document_scheme is True, True
+                mc0.prefer_parent_document_scheme,
+                mc.force_document_scheme, True
             )
             if use_path_as_base:
                 assert d.path_parsed is not None
@@ -1106,8 +1106,8 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
             cm.clm.result, cm.url_parsed = normalize_link(
                 cm.clm.result, cm.base, cm.doc.document_type.derived_link_type(),
                 cm.mc.default_document_scheme,
-                cm.mc.prefer_parent_document_scheme is True,
-                cm.mc.force_document_scheme is True, False
+                cm.mc.prefer_parent_document_scheme,
+                cm.mc.force_document_scheme, False
             )
 
         if cm.mc.loc_content.interactive:
@@ -1271,8 +1271,8 @@ def gen_document_matches(
         link_type = doc.document_type.derived_link_type()
         path, path_parsed = normalize_link(
             dlm.result, doc.base, link_type, mc.default_document_scheme,
-            mc.prefer_parent_document_scheme is True,
-            mc.force_document_scheme is True, False
+            mc.prefer_parent_document_scheme,
+            mc.force_document_scheme, False
         )
         if mc.document_duplication != DocumentDuplication.ALLOWED:
             canonical_url = urllib.parse.urlunparse(path_parsed)
@@ -1573,12 +1573,12 @@ def normalize_link(
     if base is not None:
         if link_parsed.netloc == "" and scheme_was_blank:
             link_parsed = link_parsed._replace(netloc=base.netloc)
-        lnk_ppp = pathlib.PurePosixPath(link)
-        if not lnk_ppp.is_absolute() and base.path:
-            du_ppp = pathlib.PurePosixPath(base.path)
-            lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
-            link_parsed = link_parsed._replace(path=str(lnk_ppp))
-            changed = True
+            lnk_ppp = pathlib.PurePosixPath(link)
+            if not lnk_ppp.is_absolute() and base.path:
+                du_ppp = pathlib.PurePosixPath(base.path)
+                lnk_ppp = du_ppp.parent.joinpath(lnk_ppp)
+                link_parsed = link_parsed._replace(path=str(lnk_ppp))
+                changed = True
 
     if changed:
         link = urllib.parse.urlunparse(link_parsed)
@@ -1760,10 +1760,10 @@ def resolve_repl_defaults(
     last_doc: Optional['document.Document']
 ) -> None:
     if ctx_new.user_agent_random and not ctx_new.user_agent:
-        ctx.user_agent = None
+        ctx.unfinalize_value(["user_agent"])
 
     if ctx_new.user_agent and not ctx_new.user_agent_random:
-        ctx.user_agent_random = None
+        ctx.unfinalize_value(["user_agent_random"])
 
     ctx_new.apply_defaults(ctx)
 

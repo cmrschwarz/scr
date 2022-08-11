@@ -1,2 +1,2 @@
 # prevent autocrlf from messing with the data in our test resources
-* -text
+** -text

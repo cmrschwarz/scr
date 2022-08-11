@@ -37,9 +37,7 @@ def test_get_timespan_string(timespan: float, output_size: str, output_unit: str
 
 
 @pytest.fixture()
-def dummy_status_reports(
-    _fake_time: None
-) -> list[progress_report.DownloadStatusReport]:
+def dummy_status_reports(_fake_time: None) -> list[progress_report.DownloadStatusReport]:
     lines: list[progress_report.DownloadStatusReport] = []
     for i in range(10):
         dsr = progress_report.DownloadStatusReport(
