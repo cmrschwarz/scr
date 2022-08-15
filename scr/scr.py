@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from datetime import datetime
+from types import FrameType
 from typing import IO, Any, Optional, BinaryIO, Union, cast
 
 import shutil
@@ -855,8 +856,12 @@ def build_elem_xpath(root: 'lxml.html.HtmlElement', elem: 'lxml.html.HtmlElement
         elem = parent
 
 
-def get_child_iframes(elem: 'lxml.html.HtmlElement') -> list['lxml.html.HtmlElement']:
-    return cast(list[lxml.html.HtmlElement], elem.xpath("//iframe"))
+def get_child_frames(elem: 'lxml.html.HtmlElement') -> list['lxml.html.HtmlElement']:
+    res = []
+    frame_types = ["iframe", "embed", "object"]
+    for ft in frame_types:
+        res += cast(list[lxml.html.HtmlElement], elem.xpath(f"//{ft}"))
+    return res
 
 
 def insert_shadow_roots(
@@ -912,48 +917,48 @@ def expand_shadow_roots(
     return True
 
 
-def expand_iframes(
+def expand_child_frames(
     ctx: 'scr_context.ScrContext', text: str, doc_xml: lxml.html.HtmlElement
 ) -> tuple[str, lxml.html.HtmlElement]:
     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
     roots_expanded = expand_shadow_roots(ctx, doc_xml)
-    iframes: list[lxml.html.HtmlElement] = get_child_iframes(doc_xml)
-    if not iframes:
+    frames: list[lxml.html.HtmlElement] = get_child_frames(doc_xml)
+    if not frames:
         if roots_expanded:
             text = cast(str, lxml.html.tostring(doc_xml))
         return text, doc_xml
     depth = 0
     curr_xml = doc_xml
     try:
-        iframe_stack: list[tuple[
+        frame_stack: list[tuple[
             SeleniumWebElement, int, lxml.html.HtmlElement
         ]] = []
         while True:
-            for iframe in reversed(iframes):
-                iframe_xpath = build_elem_xpath(curr_xml, iframe)
-                iframes_sel = drv.find_elements(
+            for frame in reversed(frames):
+                frame_xpath = build_elem_xpath(curr_xml, frame)
+                frames_sel = drv.find_elements(
                     by=selenium.webdriver.common.by.By.XPATH,
-                    value=iframe_xpath
+                    value=frame_xpath
                 )
-                if len(iframes_sel) != 1:
+                if len(frames_sel) != 1:
                     log(ctx, Verbosity.WARN, "failed to match up iframe contents")
                 else:
-                    iframe_stack.append((iframes_sel[0], depth + 1, iframe))
-            if not iframe_stack:
+                    frame_stack.append((frames_sel[0], depth + 1, frame))
+            if not frame_stack:
                 break
-            iframe_sel, depth_new, curr_xml = iframe_stack.pop()
+            iframe_sel, depth_new, curr_xml = frame_stack.pop()
             while depth_new <= depth:
                 depth -= 1
                 drv.switch_to.parent_frame()
             drv.switch_to.frame(iframe_sel)
             depth = depth_new
-            iframe_xml = cast(
+            frame_xml = cast(
                 lxml.html.HtmlElement, lxml.html.fromstring(drv.page_source)
             )
-            expand_shadow_roots(ctx, iframe_xml)
-            iframes = get_child_iframes(iframe_xml)
-            curr_xml.append(iframe_xml)
-            curr_xml = iframe_xml
+            expand_shadow_roots(ctx, frame_xml)
+            frames = get_child_frames(frame_xml)
+            curr_xml.append(frame_xml)
+            curr_xml = frame_xml
 
         return cast(str, lxml.html.tostring(doc_xml)), doc_xml
     except SeleniumWebDriverException:
@@ -968,7 +973,7 @@ def expand_iframes(
 def selenium_get_full_page_source(ctx: 'scr_context.ScrContext') -> tuple[str, lxml.html.HtmlElement]:
     text = cast(SeleniumWebDriver, ctx.selenium_driver).page_source
     doc_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(text))
-    return expand_iframes(ctx, text, doc_xml)
+    return expand_child_frames(ctx, text, doc_xml)
 
 
 def fetch_doc(ctx: 'scr_context.ScrContext', doc: 'document.Document') -> None:

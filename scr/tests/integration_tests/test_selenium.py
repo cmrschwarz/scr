@@ -240,6 +240,24 @@ def test_selenium_install_firefox(cli_env: CliEnv) -> None:
 
 
 @pytest.mark.selenium()
+def test_selenium_embed_expansion(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=["file=../res/a.txt.html", "cx=//embed//body//text()", "sel=f", "selh"],
+        stdout="a\n\n"
+    )
+
+
+@pytest.mark.selenium()
+def test_selenium_object_expansion(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=["file=../res/a.txt_object.html", "cx=//object//body//text()", "sel=f", "selh"],
+        stdout="a\n\n"
+    )
+
+
+@pytest.mark.selenium()
 def test_selenium_js_fail(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
