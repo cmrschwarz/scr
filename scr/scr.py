@@ -1216,7 +1216,7 @@ def gen_content_matches(
     match_index = 0
     labels_none_for_n = 0
     for clm_xp in content_lms_xp:
-        if mc.labels_inside_content and mc.loc_label.xpath:
+        if mc.labels_inside_content and mc.loc_label.xpath and mc.loc_content.xpath:
             label_lms = mc.loc_label.match_xpath(
                 clm_xp.result, clm_xp.xmatch_xml, False
             )
@@ -1231,10 +1231,19 @@ def gen_content_matches(
         for clm in content_lms:
             llm: Optional[locator.LocatorMatch] = None
             if mc.labels_inside_content:
-                if not mc.loc_label.xpath:
+                if not mc.loc_label.xpath or not mc.loc_content.xpath:
                     llm = locator.LocatorMatch()
                     llm.result = clm.result
-                    label_lms = mc.loc_label.apply_regex_matches([llm], False)
+                    if mc.loc_label.xpath:
+                        try:
+                            res_xml = cast(lxml.html.HtmlElement, lxml.html.fromstring(clm.result))
+                            label_lms = mc.loc_label.match_xpath(clm.result, res_xml)
+                        except lxml.etree.LxmlError:
+                            label_lms = []
+                    else:
+                        label_lms = [llm]
+
+                    label_lms = mc.loc_label.apply_regex_matches(label_lms, False)
                     label_lms = mc.loc_label.apply_js_matches(
                         doc, mc, label_lms, last_doc_path, False
                     )

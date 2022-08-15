@@ -68,6 +68,20 @@ def test_lic_without_cx(cli_env: CliEnv) -> None:
     )
 
 
+def test_lic_without_cx_but_with_cr(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "rfile=../res/foo+bar+baz.html",
+            'cr=<li id="foo">foo</li>',
+            "lic",
+            "lx=//@id",
+            "cpf={l}: {c}\n"
+        ],
+        stdout='foo: <li id="foo">foo</li>\n',
+    )
+
+
 def test_filename_in_interactive_label(cli_env: CliEnv) -> None:
     run_scr(
         cli_env,
