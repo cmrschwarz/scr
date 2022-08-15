@@ -389,14 +389,20 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     elif any(content_output_variants):
         mc.has_content_matching = True
 
-    if mc.has_content_matching and all(cov is None for cov in content_output_variants):
+    uses_output = any(cov is not None for cov in content_output_variants)
+    if mc.has_content_matching and not uses_output:
         mc.content_print_format = DEFAULT_CPF
+        uses_output = True
 
     if not mc.has_content_matching and not mc.has_document_matching:
-        if not (mc.chain_id == 0 and (mc.ctx.repl or mc.ctx.special_args_occured)):
-            # if the whole document is printed, we don't want an additional newline
-            mc.content_print_format = DEFAULT_CWF
-            mc.has_content_matching = True
+        if mc.chain_id == 0:
+            if not mc.ctx.repl and not mc.ctx.special_args_occured:
+                mc.content_print_format = DEFAULT_CWF
+                mc.has_content_matching = True
+        else:
+            raise ScrSetupError(
+                f"match chain {mc.chain_id} has neither matching nor output format specifications"
+            )
 
     dummy_cm = mc.gen_dummy_content_match(not mc.content_raw)
     if mc.content_print_format is not None:

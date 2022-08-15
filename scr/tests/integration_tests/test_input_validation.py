@@ -213,6 +213,7 @@ def test_diverging_base(cli_env: CliEnv) -> None:
         args=[
             "str=foo",
             "base1=x",
+            "cpf={c}"
         ],
         ec=1,
         stderr="[ERROR]: match chains 0 and 1 can't have different base values while sharing documents\n"
@@ -225,8 +226,20 @@ def test_inconsequential_diverging_rbase(cli_env: CliEnv) -> None:
         args=[
             "str=foo",
             "rbase1=x",
+            "cpf={c}"
         ],
         stdout="foofoo",
+    )
+
+
+def test_disallow_unused_match_chain(cli_env: CliEnv) -> None:
+    run_scr(
+        cli_env,
+        args=[
+            "str1=foo"
+        ],
+        ec=1,
+        stderr="[ERROR]: match chain 1 has neither matching nor output format specifications\n"
     )
 
 
@@ -236,6 +249,7 @@ def test_diverging_rbase(cli_env: CliEnv) -> None:
         args=[
             "rstr=foo",
             "rbase1=x",
+            "cpf={c}"
         ],
         ec=1,
         stderr="[ERROR]: match chains 0 and 1 can't have different rbase values while sharing documents\n",
@@ -248,6 +262,7 @@ def test_diverging_fbase(cli_env: CliEnv) -> None:
         args=[
             "rstr=foo",
             "fbase1",
+            "cpf={c}"
         ],
         ec=1,
         stderr="[ERROR]: match chains 0 and 1 can't have different fbase values while sharing documents\n",
