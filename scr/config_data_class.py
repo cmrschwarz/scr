@@ -16,7 +16,7 @@ class ConfigDataClass:
             self.__dict__[k] = None
 
     @staticmethod
-    def _previous_annotations_as_config_slots(
+    def _annotations_as_config_slots(
         annotations: dict[str, Any],
         subconfig_slots: list[str]
     ) -> list[str]:

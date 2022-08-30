@@ -35,7 +35,7 @@ def truncate(
     return text
 
 
-def notnull(val: Optional[T]) -> T:
+def not_none(val: Optional[T]) -> T:
     assert val is not None
     return val
 

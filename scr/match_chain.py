@@ -57,7 +57,7 @@ class MatchChain(ConfigDataClass):
 
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
-        ConfigDataClass._previous_annotations_as_config_slots(
+        ConfigDataClass._annotations_as_config_slots(
             __annotations__, [])
     )
 

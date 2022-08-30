@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from datetime import datetime
-from types import FrameType
 from typing import IO, Any, Optional, BinaryIO, Union, cast
 
 import shutil
@@ -33,7 +32,7 @@ import time
 import tempfile
 import warnings
 import urllib.request
-from .utils import notnull
+from .utils import not_none
 from .definitions import (
     T, K, DocumentDuplication, ScrSetupError, ScrFetchError, ScrMatchError, Verbosity, SCRIPT_NAME,
     SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
@@ -149,25 +148,6 @@ def apply_general_format_args(
     })
 
 
-def apply_locator_match_format_args(
-    locator_name: str, lm: 'locator.LocatorMatch', args_dict: dict[str, Any]
-) -> None:
-    p = locator_name[0]
-    dict_update_unless_none(args_dict, {
-        f"{p}x": lm.xmatch,
-        f"{p}r": lm.rmatch,
-        f"{p}f": lm.fres,
-        f"{p}js": lm.jsres,
-        f"{p}{'m' if p == 'c' else ''}": lm.result,
-    })
-    # apply the unnamed groups first in case somebody overwrote it with a named group
-    args_dict.update(lm.unnamed_group_list_to_dict(f"{p}g"))
-
-    # finally apply the named groups
-    if lm.named_cgroups:
-        args_dict.update(lm.named_cgroups)
-
-
 def apply_filename_format_args(filename: Optional[str], args_dict: dict[str, Any]) -> None:
     if filename is None:
         return
@@ -189,19 +169,9 @@ def content_match_build_format_args(
     if content is not None:
         args_dict["c"] = content
 
-    potential_locator_matches = [
-        ("d", cm.doc.locator_match),
-        ("l", cm.llm),
-        ("c", cm.clm)
-    ]
-    # remove None regex matches (and type cast this to make mypy happy)
-    locator_matches = cast(
-        list[tuple[str, 'locator.LocatorMatch']],
-        list(filter(lambda plm: plm[1] is not None, potential_locator_matches))
-    )
-
-    for loc_name, loc_match in locator_matches:
-        apply_locator_match_format_args(loc_name, loc_match, args_dict)
+    for lm in [cm.doc.locator_match, cm.llm, cm.clm]:
+        if lm is not None:
+            args_dict.update(lm.match_args)
 
     return args_dict
 
@@ -1204,8 +1174,7 @@ def handle_document_match(mc: 'match_chain.MatchChain', doc: 'document.Document'
 
 
 def gen_content_matches(
-    mc: 'match_chain.MatchChain', doc: 'document.Document',
-    last_doc_path: Optional[str]
+    mc: 'match_chain.MatchChain', doc: 'document.Document'
 ) -> tuple[list['content_match.ContentMatch'], int]:
     # TODO: properly set content match base respecting iframes
     text = cast(str, doc.text)
@@ -1217,7 +1186,7 @@ def gen_content_matches(
     if mc.has_label_matching and not mc.labels_inside_content:
         label_lms = mc.loc_label.match_xpath(text, doc.xml, False)
         label_lms = mc.loc_label.apply_regex_matches(label_lms)
-        label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms, last_doc_path)
+        label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
     match_index = 0
     labels_none_for_n = 0
     for clm_xp in content_lms_xp:
@@ -1229,10 +1198,10 @@ def gen_content_matches(
             # will be done on the LABEL xpath result, not the content one
             # even for lic = y
             label_lms = mc.loc_label.apply_regex_matches(label_lms)
-            label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms, last_doc_path)
+            label_lms = mc.loc_label.apply_js_matches(doc, mc, label_lms)
 
         content_lms = mc.loc_content.apply_regex_matches([clm_xp])
-        content_lms = mc.loc_content.apply_js_matches(doc, mc, content_lms, last_doc_path)
+        content_lms = mc.loc_content.apply_js_matches(doc, mc, content_lms)
         for clm in content_lms:
             llm: Optional[locator.LocatorMatch] = None
             if mc.labels_inside_content:
@@ -1250,7 +1219,7 @@ def gen_content_matches(
 
                     label_lms = mc.loc_label.apply_regex_matches(label_lms, False)
                     label_lms = mc.loc_label.apply_js_matches(
-                        doc, mc, label_lms, last_doc_path, False
+                        doc, mc, label_lms, False
                     )
                 if len(label_lms) == 0:
                     if not mc.label_allow_missing:
@@ -1277,15 +1246,14 @@ def gen_content_matches(
 
 
 def gen_document_matches(
-    mc: 'match_chain.MatchChain', doc: 'document.Document',
-    last_doc_path: Optional[str]
+    mc: 'match_chain.MatchChain', doc: 'document.Document'
 ) -> list['document.Document']:
     document_matches = []
     document_lms = mc.loc_document.match_xpath(
         cast(str, doc.text), doc.xml, False
     )
     document_lms = mc.loc_document.apply_regex_matches(document_lms)
-    document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms, last_doc_path)
+    document_lms = mc.loc_document.apply_js_matches(doc, mc, document_lms)
     for dlm in document_lms:
         mc.loc_document.apply_format_for_document_match(doc, mc, dlm)
         link_type = doc.document_type.derived_link_type()
@@ -1344,7 +1312,6 @@ def handle_interactive_chains(
     ctx: 'scr_context.ScrContext',
     interactive_chains: list['match_chain.MatchChain'],
     doc: 'document.Document',
-    last_doc_path: Optional[str],
     try_number: int, last_msg: str
 ) -> tuple[Optional[InteractiveResult], str]:
     content_count = 0
@@ -1361,7 +1328,7 @@ def handle_interactive_chains(
         if mc.need_content_matches():
             have_content_matching = True
 
-    msg = f"{last_doc_path}: use page with potentially"
+    msg = f"{ctx.last_doc_path}: use page with potentially"
     if have_content_matching:
         lpad, rpad = make_padding(ctx, content_count)
         msg += f'{lpad}< {content_count} >{rpad} content'
@@ -1448,19 +1415,16 @@ def match_chain_was_satisfied(mc: 'match_chain.MatchChain') -> tuple[bool, bool]
     return satisfied, interactive
 
 
-def handle_match_chain(
-    mc: 'match_chain.MatchChain', doc: 'document.Document',
-    last_doc_path: Optional[str]
-) -> None:
+def handle_match_chain(mc: 'match_chain.MatchChain', doc: 'document.Document') -> None:
     if mc.need_content_matches():
         content_matches, mc.labels_none_for_n = gen_content_matches(
-            mc, doc, last_doc_path
+            mc, doc
         )
     else:
         content_matches = []
 
     if mc.need_document_matches(True):
-        document_matches = gen_document_matches(mc, doc, last_doc_path)
+        document_matches = gen_document_matches(mc, doc)
     else:
         document_matches = []
 
@@ -1483,7 +1447,6 @@ def handle_match_chain(
 
 def accept_for_match_chain(
     mc: 'match_chain.MatchChain', doc: 'document.Document',
-    last_doc_path: Optional[str],
     content_skip_doc: bool, documents_skip_doc: bool,
     new_docs: list['document.Document']
 ) -> tuple[bool, bool]:
@@ -1627,7 +1590,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
     doc = None
     while ctx.docs:
         doc = ctx.docs.popleft()
-        last_doc_path = doc.path
+        ctx.last_doc_path = doc.path
         unsatisfied_chains = 0
         have_xpath_matching = 0
         for mc in doc.match_chains:
@@ -1666,7 +1629,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
                 assert ctx.selenium_variant.enabled()
                 try:
                     drv = cast(SeleniumWebDriver, ctx.selenium_driver)
-                    last_doc_path = drv.current_url
+                    ctx.last_doc_path = drv.current_url
                     src_new, xml_new = selenium_get_full_page_source(ctx)
                     same_content = (src_new == doc.text)
                     doc.text = src_new
@@ -1691,7 +1654,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
                     if mc.satisfied:
                         continue
                     mc.js_executed = False
-                    handle_match_chain(mc, doc, last_doc_path)
+                    handle_match_chain(mc, doc)
                     satisfied, interactive = match_chain_was_satisfied(mc)
                     if satisfied:
                         log(
@@ -1712,8 +1675,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
 
             if interactive_chains:
                 accept, last_msg = handle_interactive_chains(
-                    ctx, interactive_chains, doc,
-                    last_doc_path, try_number, last_msg
+                    ctx, interactive_chains, doc, try_number, last_msg
                 )
                 sat = (accept == InteractiveResult.ACCEPT)
                 if accept:
@@ -1734,7 +1696,7 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
                 # ignore skipped chains
                 continue
             content_skip_doc, doc_skip_doc = accept_for_match_chain(
-                mc, doc, last_doc_path, content_skip_doc, doc_skip_doc, new_docs
+                mc, doc, content_skip_doc, doc_skip_doc, new_docs
             )
         if mc.ctx.documents_bfs:
             mc.ctx.docs.extend(new_docs)
@@ -1813,7 +1775,7 @@ def resolve_repl_defaults(
         if doc_url:
             if doc_url.startswith("file:"):
                 path = utils.remove_file_scheme_from_url(doc_url)
-                if not last_doc or os.path.abspath(notnull(last_doc.path)) != os.path.abspath(path):
+                if not last_doc or os.path.abspath(not_none(last_doc.path)) != os.path.abspath(path):
                     doctype = DocumentType.FILE
                     if last_doc and last_doc.document_type == DocumentType.RFILE:
                         doctype = DocumentType.RFILE

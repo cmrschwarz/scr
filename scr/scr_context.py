@@ -40,7 +40,7 @@ class ScrContext(ConfigDataClass):
     stdin_text: Optional[str] = None
     __annotations__: dict[str, type]
     _config_slots_: list[str] = (
-        ConfigDataClass._previous_annotations_as_config_slots(
+        ConfigDataClass._annotations_as_config_slots(
             __annotations__, []
         )
     )
@@ -54,6 +54,7 @@ class ScrContext(ConfigDataClass):
     origin_mc: 'match_chain.MatchChain'
     error_code: int = 0
     abort: bool = False
+    last_doc_path: str = None
 
     # used for --help --version and selinstall/selupdate to indicate
     # that if there are no match chains etc. we should exit without error

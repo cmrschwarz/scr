@@ -1,8 +1,9 @@
-from collections import OrderedDict
+from abc import ABC, abstractmethod
 from .definitions import (ScrSetupError, ScrMatchError, Verbosity)
-from . import match_chain, scr, document, content_match, selenium_setup
+from . import match_chain, scr, selenium_setup
+from .document import Document
 from .config_data_class import ConfigDataClass
-from typing import Optional, Union, Any, cast
+from typing import Optional, Any, cast
 import lxml.etree
 import lxml.html
 import re
@@ -10,18 +11,17 @@ from selenium.common.exceptions import WebDriverException as SeleniumWebDriverEx
 from selenium.common.exceptions import JavascriptException as SeleniumJavascriptException
 from selenium.webdriver.remote.webdriver import WebDriver as SeleniumWebDriver
 from urllib3.exceptions import MaxRetryError as SeleniumMaxRetryError
+from .match_chain import MatchChain
 import textwrap
+import copy
 
 
 class LocatorMatch:
-    xmatch: Optional[str] = None
-    xmatch_xml: Optional[lxml.html.HtmlElement] = None
-    rmatch: Optional[str] = None
-    fres: Optional[str] = None
-    jsres: Optional[str] = None
-    result: str = ""
-    named_cgroups: Optional[dict[str, str]] = None
-    unnamed_cgroups: Optional[list[str]] = None
+    text: Optional[str]
+    xml: Optional[lxml.html.HtmlElement]
+    doc: Document
+    match_args: dict[str, str]
+    slots = tuple(__annotations__.keys())
 
     def set_regex_match(self, match: re.Match[str]) -> None:
         self.result = match.group(0)
@@ -34,10 +34,13 @@ class LocatorMatch:
             x if x is not None else "" for x in match.groups()
         ]
 
-    def __key__(self) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-        # we only ever compare locator matches from the same match chain
-        # therefore it is enough that the complete match is equivalent
-        return (self.xmatch, self.rmatch, self.fres, self.jsres)
+    def __init__(self, text: Optional[str] = None, xml: Optional[lxml.html.HtmlElement] = None):
+        self.text = text
+        self.xml = xml
+        self.match_args = {}
+
+    def __key__(self) -> tuple[Optional[str], Optional[lxml.html.HtmlElement], dict[str, str]]:
+        return (self.text, self.xml, self.match_args)
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, self.__class__) and self.__key__() == other.__key__()
@@ -53,307 +56,189 @@ class LocatorMatch:
             group_dict[f"{name_prefix}{i+1}"] = g
         return group_dict
 
-    def clone(self) -> 'LocatorMatch':
-        c = LocatorMatch()
-        if self.xmatch is not None:
-            c.xmatch = self.xmatch
-        if self.xmatch_xml is not None:
-            c.xmatch_xml = self.xmatch_xml
-        if self.rmatch is not None:
-            c.rmatch = self.rmatch
-        if self.fres is not None:
-            c.fres = self.fres
-        if self.jsres is not None:
-            c.jsres = self.jsres
-        if self.result is not None:
-            c.result = self.result
-        if self.named_cgroups is not None:
-            c.named_cgroups = self.named_cgroups
-        if self.unnamed_cgroups is not None:
-            c.unnamed_cgroups = self.unnamed_cgroups
-        return c
+    def copy(self) -> 'LocatorMatch':
+        return copy.copy(self)
 
 
-def build_sibling_xpath(root: lxml.html.HtmlElement, elem: lxml.html.HtmlElement, sibling_depth: int) -> lxml.etree.XPath:
-    res = ""
-    level = 0
-    if type(elem) == lxml.etree._ElementUnicodeResult:  # type: ignore
-        if elem.attrname is None:
-            res = "/text()"
-        else:
-            res = f"/@{elem.attrname}"
-        elem = elem.getparent()
-    while True:
-        parent = cast(Optional[lxml.html.HtmlElement], elem.getparent())
-        if level >= sibling_depth:
-            index = 1
-            if parent is not None:
-                for e in parent.iterchildren():
-                    if e == elem:
-                        break
-                    if e.tag == elem.tag:
-                        index += 1
-            res = f"/{elem.tag}[{index}]{res}"
-        else:
-            res = f"/{elem.tag}{res}"
-            level += 1
-        if elem == root:
-            break
-        assert parent is not None
-        elem = parent
-    return lxml.etree.XPath(res)
+class MatchStep(ABC, ConfigDataClass):
+    arg_val: str
 
+    _config_slot_annotations_: dict[str, Any] = __annotations__
 
-def eval_xpath(src_xml: lxml.html.HtmlElement, xpath: lxml.etree.XPath) -> Any:
-    if type(src_xml) == lxml.etree._ElementUnicodeResult:  # type: ignore
-        # since lxml doesn't allow us to evaluate xpaths on these,
-        # but we need it for lic, we hack in support for it by
-        # generating a derived xpath that gets the expected results while
-        # actually being evaluated on the parent
-        if src_xml.attrname is None:
-            fixed_xpath = "./text()"
-        else:
-            fixed_xpath = f"./@{src_xml.attrname}"
-
-        if xpath.path[0:1] != "/":
-            fixed_xpath += "/"
-        fixed_xpath += xpath.path
-        return src_xml.getparent().xpath(fixed_xpath)
-    else:
-        return xpath.evaluate(src_xml)  # type: ignore
-
-
-class Locator(ConfigDataClass):
     name: str
-    xpath: Optional[Union[str, lxml.etree.XPath]] = None
-    regex: Optional[Union[str, re.Pattern[str]]] = None
-    js_script: Optional[str] = None
-    format: Optional[str] = None
+    name_short: str
+
+    @staticmethod
+    def _annotations_as_config_slots(
+        annotations: dict[str, Any],
+        subconfig_slots: list[str]
+    ) -> list[str]:
+        annots = MatchStep._config_slot_annotations_.copy()
+        annots.update(annotations)
+        return ConfigDataClass._annotations_as_config_slots(annots, subconfig_slots)
+
+    def __init__(self, name: str, step_type_index: int, arg: str, arg_val: str) -> None:
+        ConfigDataClass.__init__(self)
+        self.name = name
+        self.step_type_index = step_type_index
+        self.try_set_config_option(["arg_val"], arg_val, arg)
+
+    def apply_match_arg(self, lm: LocatorMatch, arg_name: str, arg_val: str) -> None:
+        lm.match_args[self.name + arg_name] = arg_val
+        lm.match_args[self.name_short + arg_name] = arg_val
+
+    def apply_partial_chain_to_dummy_locator_match(self, loc: 'Locator', dlm: 'LocatorMatch') -> None:
+        for ms in loc.match_steps:
+            ms.apply_to_dummy_locator_match(dlm)
+            if ms is self:
+                break
+
+    @abstractmethod
+    def setup(self, loc: 'Locator', prev: Optional['MatchStep']) -> None:
+        pass
+
+    @abstractmethod
+    def apply(self, lms: list[LocatorMatch]) -> list[LocatorMatch]:
+        pass
+
+    def apply_to_dummy_locator_match(self, lm: LocatorMatch) -> None:
+        self.apply_match_arg(lm, "", "")
+
+    def needs_text(self) -> bool:
+        return True
+
+    def needs_xml(self) -> bool:
+        return False
+
+    def needs_xpath(self) -> bool:
+        return False
+
+    def is_order_dependent(self) -> bool:
+        """ whether the step has observable behavior depending on the
+        execution of earlier matches in the chain. examples of this include
+        executing js or using the ci variable
+        """
+        return False
+
+
+class RegexMatchStep(MatchStep):
     multimatch: bool = True
-    interactive: bool = False
-    xpath_sibling_match_depth: int = 0
-    __annotations__: dict[str, type]
+    multiline: bool = False
+    case_insensitive: bool = False
 
     _config_slots_: list[str] = (
-        ConfigDataClass._previous_annotations_as_config_slots(
-            __annotations__, []
-        )
+        MatchStep._annotations_as_config_slots(__annotations__, [])
     )
+    step_type_index: int
+    regex: re.Pattern[str]
 
-    validated: bool = False
+    def __init__(self, name: str, step_type_index: int, arg: str, arg_val: str) -> None:
+        super().__init__(name, step_type_index, arg, arg_val)
 
-    def __init__(self, name: str, blank: bool = False) -> None:
-        super().__init__(blank)
-        self.name = name
-
-    def is_active(self) -> bool:
-        return any(x is not None for x in [self.xpath, self.regex, self.format, self.js_script])
-
-    def needs_document_content(self) -> bool:
-        return any(x is not None for x in [self.xpath, self.regex, self.js_script])
-
-    def setup_xpath(self, mc: 'match_chain.MatchChain') -> None:
-        if self.xpath is None:
-            return
+    def setup(self, loc: 'Locator', prev: Optional['MatchStep']) -> None:
         try:
-            xp = lxml.etree.XPath(cast(str, self.xpath))
-            xp.evaluate(  # type: ignore
-                lxml.html.fromstring("<div>test</div>")
-            )
-        except (lxml.etree.XPathError):
-            # don't use the XPathSyntaxError message because they are spectacularily bad
-            # e.g. XPath("/div/text(") -> XPathSyntaxError("Missing closing CURLY BRACE")
-            raise ScrSetupError(
-                f"invalid xpath in {self.get_configuring_argument(['xpath'])}"
-            )
-        self.xpath = xp
-
-    def gen_dummy_locator_match(self) -> LocatorMatch:
-        lm = LocatorMatch()
-        if self.xpath:
-            lm.xmatch = ""
-        if self.regex and type(self.regex) is re.Pattern:
-            lm.rmatch = ""
-            capture_group_keys = list(self.regex.groupindex.keys())
-            unnamed_regex_group_count = (
-                self.regex.groups - len(capture_group_keys)
-            )
-            lm.named_cgroups = {k: "" for k in capture_group_keys}
-            lm.unnamed_cgroups = [""] * unnamed_regex_group_count
-        if self.format:
-            lm.fres = ""
-        if self.js_script:
-            lm.jsres = ""
-        return lm
-
-    def setup_regex(self, mc: 'match_chain.MatchChain') -> None:
-        if self.regex is None:
-            return
-        try:
-            self.regex = re.compile(self.regex, re.DOTALL | re.MULTILINE)
+            self.regex = re.compile(self.arg_val, re.DOTALL | re.MULTILINE)
         except re.error as err:
             raise ScrSetupError(
                 f"invalid regex ({err.msg}) in {self.get_configuring_argument(['regex'])}"
             )
 
-    def setup_format(self, mc: 'match_chain.MatchChain') -> None:
-        if self.format is None:
-            return
-        scr.validate_format(
-            self, ["format"], mc.gen_dummy_content_match(not mc.content_raw), True, False
+    def apply_regex_match_args(self, lm: 'LocatorMatch', named_cgroups: dict[str, Any], unnamed_cgroups: list[Any]) -> None:
+        for k, v in named_cgroups.items():
+            val = str(v) if v is not None else ""
+            self.apply_match_arg(lm, k, val)
+            lm.match_args[k] = val
+
+        for i, g in enumerate(unnamed_cgroups):
+            val = str(g) if g is not None else ""
+            self.apply_match_arg(lm, str(i), val)
+
+    def apply_regex_match_match_args(self, lm: 'LocatorMatch', match: re.Match[str]) -> None:
+        self.apply_regex_match_args(lm, match.groupdict(), cast(list[Any], match.groups()))
+
+    def apply_to_dummy_locator_match(self, lm: LocatorMatch) -> None:
+        lm.rmatch = ""
+        capture_group_keys = list(self.regex.groupindex.keys())
+        unnamed_regex_group_count = (
+            self.regex.groups - len(capture_group_keys)
         )
-
-    def setup_js(self, mc: 'match_chain.MatchChain') -> None:
-        if self.js_script is None:
-            return
-        args_dict: dict[str, Any] = {}
-        dummy_doc = mc.gen_dummy_document()
-        scr.apply_general_format_args(dummy_doc, mc, args_dict, ci=None)
-        scr.apply_locator_match_format_args(
-            self.name, self.gen_dummy_locator_match(), args_dict
+        self.apply_regex_match_args(
+            lm,
+            {k: "" for k in capture_group_keys},
+            [""] * unnamed_regex_group_count
         )
-        js_prelude = ""
-        for i, k in enumerate(args_dict.keys()):
-            js_prelude += f"const {k} = arguments[{i}];\n"
-        self.js_script = js_prelude + self.js_script
+        self.apply_match_arg(lm, "", "")
 
-    def setup(self, mc: 'match_chain.MatchChain') -> None:
-        self.xpath = cast(str, self.xpath)
-        assert self.regex is None or type(self.regex) is str
-        self.regex = self.regex
-        self.setup_xpath(mc)
-        self.setup_regex(mc)
-        self.setup_js(mc)
-        self.setup_format(mc)
-        self.validated = True
-
-    def match_xpath(
-        self,
-        src_text: str,
-        src_xml: Optional[lxml.html.HtmlElement],
-        store_xml: bool = False
-    ) -> list[LocatorMatch]:
-        if self.xpath is None:
-            lm = LocatorMatch()
-            lm.result = src_text
-            if store_xml:
-                lm.xmatch_xml = src_xml
-            return [lm]
-        assert src_xml is not None
-        err = False
-        try:
-            xp = cast(lxml.etree.XPath, self.xpath)
-            xpath_matches = eval_xpath(src_xml, xp)
-        except (lxml.etree.XPathError, lxml.etree.LxmlError):
-            err = True
-
-        if err or not isinstance(xpath_matches, list):
-            raise ScrMatchError(
-                f"xpath matching failed for: {self.get_configuring_argument(['xpath'])}"
-            )
-
-        if self.xpath_sibling_match_depth > 0:
-            # we deduplicate based on the match and it's parent, because
-            # non identical unicode results with the same text will otherwise
-            # be merged
-            matches: OrderedDict[tuple[lxml.html.HtmlElement, lxml.html.HtmlElement], None] = OrderedDict()
-            for xm in xpath_matches:
-                # the sibling xpath will match the original element aswell,
-                # so no need to add it manually
-                sibling_xpath = build_sibling_xpath(src_xml, xm, self.xpath_sibling_match_depth)
-                sibling_matches = eval_xpath(src_xml, sibling_xpath)
-                if not isinstance(sibling_matches, list):
-                    continue
-
-                for match in sibling_matches:
-                    matches[(match.getparent(), match)] = None
-            xpath_matches = [k[1] for k in matches.keys()]
-
-        if len(xpath_matches) > 1 and not self.multimatch:
-            xpath_matches = xpath_matches[:1]
-        res = []
-        for xm in xpath_matches:
-            lm = LocatorMatch()
-            if type(xm) == lxml.etree._ElementUnicodeResult:  # type: ignore
-                lm.xmatch = str(xm)
-                if store_xml:
-                    lm.xmatch_xml = xm
-            else:
-                try:
-                    lm.xmatch = lxml.html.tostring(xm, encoding="unicode").strip()
-                    if store_xml:
-                        lm.xmatch_xml = xm
-                except (lxml.etree.LxmlError, UnicodeEncodeError):
-                    raise ScrMatchError(
-                        f"xpath match encoding in  {self.get_configuring_argument(['xpath'])} failed"
-                    )
-            lm.result = lm.xmatch
-            res.append(lm)
-        return res
-
-    def apply_regex_matches(
-        self, lms: list[LocatorMatch],
-        multimatch: Optional[bool] = None
-    ) -> list[LocatorMatch]:
+    def apply(self, lms: list[LocatorMatch]) -> list[LocatorMatch]:
         if self.regex is None:
             return lms
-        rgx = cast(re.Pattern[str], self.regex)
-        if multimatch is None:
-            multimatch = self.multimatch
-
         lms_new = []
         for lm in lms:
-            if not multimatch:
-                match = rgx.match(lm.result)
+            if not self.multimatch:
+                match = self.regex.match(lm.result)
                 if match:
-                    lm.set_regex_match(match)
+                    self.apply_regex_match_match_args(lm, match)
                     lms_new.append(lm)
                 continue
             res: Optional[LocatorMatch] = lm
-            for match in rgx.finditer(lm.result):
+            for match in self.regex.finditer(lm.result):
                 if res is None:
-                    res = lm.clone()
-                res.set_regex_match(match)
+                    res = lm.copy()
+                self.apply_regex_match_match_args(lm, match)
                 lms_new.append(res)
-                if not multimatch:
+                if not self.multimatch:
                     break
                 res = None
         return lms_new
 
-    def apply_js_matches(
-        self, doc: 'document.Document', mc: 'match_chain.MatchChain', lms: list['LocatorMatch'],
-        last_doc_path: Optional[str], multimatch: Optional[bool] = None
-    ) -> list['LocatorMatch']:
-        if self.js_script is None:
-            return lms
-        if multimatch is None:
-            multimatch = self.multimatch
+
+class JSMatchStep(MatchStep):
+    multimatch: bool = False
+
+    _config_slots_: list[str] = (
+        MatchStep._annotations_as_config_slots(__annotations__, [])
+    )
+    loc: 'Locator'
+
+    def __init__(self, name: str, step_type_index: int, arg: str, arg_val: str) -> None:
+        super().__init__(name, step_type_index, arg, arg_val)
+
+    def setup(self, loc: 'Locator', prev: Optional['MatchStep']) -> None:
+        self.loc = loc
+        args_dict: dict[str, Any] = {}
+        dummy_doc = loc.mc.gen_dummy_document()
+        scr.apply_general_format_args(dummy_doc, loc.mc, args_dict, ci=None)
+        dummy_loc_match = LocatorMatch()
+        if prev is not None:
+            prev.apply_partial_chain_to_dummy_locator_match(loc, dummy_loc_match)
+        args_dict.update(dummy_loc_match.match_args)
+        js_prelude = ""
+        for i, k in enumerate(args_dict.keys()):
+            js_prelude += f"const {k} = arguments[{i}];\n"
+        self.js_script = js_prelude + self.arg_val
+
+    def apply(self, lms: list[LocatorMatch]) -> list[LocatorMatch]:
         lms_new: list[LocatorMatch] = []
         for lm in lms:
-            args_dict: dict[str, Any] = {}
-            # TODO: make ci work here by checking whether we are interactive
-            # or not skipping cis in general
-            scr.apply_general_format_args(doc, mc, args_dict, ci=None)
-            scr.apply_locator_match_format_args(self.name, lm, args_dict)
+            args_dict: dict[str, Any] = lm.named_cgroups
             try:
-                mc.js_executed = True
-                drv = cast(SeleniumWebDriver, mc.ctx.selenium_driver)
+                drv = cast(SeleniumWebDriver, self.loc.mc.ctx.selenium_driver)
                 results = drv.execute_script(self.js_script, *args_dict.values())  # type: ignore
 
             except SeleniumJavascriptException as ex:
                 arg = cast(str, self.get_configuring_argument(['js_script']))
                 name = arg[0: arg.find("=")]
-                if last_doc_path:
-                    on = f" on {last_doc_path}"
+                if self.loc.mc.ctx.last_doc_path:
+                    on = f" on {self.loc.mc.ctx.last_doc_path}"
                 else:
                     on = ""
                 scr.log(
-                    mc.ctx, Verbosity.WARN,
+                    self.loc.mc.ctx, Verbosity.WARN,
                     f"{name}: js exception{on}:\n{textwrap.indent(str(ex), '    ')}"
                 )
                 continue
             except (SeleniumWebDriverException, SeleniumMaxRetryError):
-                if selenium_setup.selenium_has_died(mc.ctx):
+                if selenium_setup.selenium_has_died(self.loc.mc.ctx):
                     raise ScrMatchError(
                         "the selenium instance was closed unexpectedly")
                 continue
@@ -364,33 +249,88 @@ class Locator(ConfigDataClass):
             res: Optional[LocatorMatch] = lm
             for r in results:
                 if res is None:
-                    res = lm.clone()
-                res.jsres = r
+                    res = lm.copy()
+                self.apply_match_arg(res, "", r)
                 res.result = r
                 lms_new.append(res)
-                if not multimatch:
+                if not self.multimatch:
                     break
                 res = None
         return lms_new
 
-    def apply_format_for_content_match(
-        self, cm: 'content_match.ContentMatch', lm: LocatorMatch
-    ) -> None:
-        if not self.format:
-            return
-        lm.fres = self.format.format(**scr.content_match_build_format_args(cm))
-        lm.result = lm.fres
+    def needs_xpath(self) -> bool:
+        return True
 
-    def apply_format_for_document_match(
-        self, doc: 'document.Document', mc: 'match_chain.MatchChain', lm: 'LocatorMatch'
-    ) -> None:
-        if not self.format:
-            return
-        args_dict: dict[str, Any] = {}
-        scr.apply_general_format_args(doc, mc, args_dict, ci=None)
-        scr.apply_locator_match_format_args(self.name, lm, args_dict)
-        lm.fres = self.format.format(**args_dict)
-        lm.result = lm.fres
+    def is_order_dependent(self) -> bool:
+        return True
 
-    def is_unset(self) -> bool:
-        return min([v is None for v in [self.xpath, self.regex, self.format]])
+
+class PythonFormatStringMatchStep(MatchStep):
+    _config_slots_: list[str] = (
+        MatchStep._annotations_as_config_slots(__annotations__, [])
+    )
+    loc: 'Locator'
+
+    def __init__(self, name: str, step_type_index: int, arg: str, arg_val: str) -> None:
+        super().__init__(name, step_type_index, arg, arg_val)
+
+    def setup(self, loc: 'Locator', prev: Optional['MatchStep']) -> None:
+        self.loc = loc
+        scr.validate_format(
+            self, ["format"], loc.mc.gen_dummy_content_match(not loc.mc.content_raw), True, False
+        )
+
+    def apply(self, lms: list[LocatorMatch]) -> list[LocatorMatch]:
+        for i, lm in enumerate(lms):
+            args_dict: dict[str, str] = {}
+            scr.apply_general_format_args(lm.doc, self.loc.mc, args_dict, self.loc.mc.ci + i)
+            args_dict.update(lm.match_args)
+            lm.text = self.arg_val.format(**args_dict)
+        return lms
+
+    def is_order_dependent(self) -> bool:
+        return scr.format_string_arg_occurence(self.arg_val, "ci") != 0
+
+
+class Locator(ConfigDataClass):
+    name: str
+    xpath_sibling_match_depth: int = 0
+
+    __annotations__: dict[str, type]
+
+    _config_slots_: list[str] = (
+        ConfigDataClass._annotations_as_config_slots(
+            __annotations__, []
+        )
+    )
+    mc: MatchChain  # initialized on setup
+    match_steps: list[MatchStep]
+    first_order_dependant_step: int
+    last_xpath_needing_step: int
+    # steps that can be executed before interactive selenium deduplication
+
+    def __init__(self, name: str, blank: bool = False) -> None:
+        super().__init__(blank)
+        self.name = name
+        self.match_steps = []
+        self.first_order_dependant_step = 0
+
+    def is_active(self) -> bool:
+        return len(self.match_steps) != 0
+
+    def needs_document_content(self) -> bool:
+        return any(ms.needs_text() for ms in self.match_steps)
+
+    def is_order_dependant(self) -> bool:
+        return self.first_order_dependant_step == len(self.match_steps)
+
+    def gen_dummy_locator_match(self) -> LocatorMatch:
+        lm = LocatorMatch()
+        for ms in self.match_steps:
+            ms.apply_to_dummy_locator_match(lm)
+        return lm
+
+    def setup(self, mc: 'match_chain.MatchChain') -> None:
+        self.mc = mc
+        for i in range(len(self.match_steps)):
+            self.match_steps[i].setup(self, self.match_steps[i - 1] if i > 0 else None)
