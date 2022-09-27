@@ -54,7 +54,7 @@ class ScrContext(ConfigDataClass):
     origin_mc: 'match_chain.MatchChain'
     error_code: int = 0
     abort: bool = False
-    last_doc_path: str = None
+    last_doc_path: Optional[str] = None
 
     # used for --help --version and selinstall/selupdate to indicate
     # that if there are no match chains etc. we should exit without error

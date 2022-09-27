@@ -38,7 +38,8 @@ from .definitions import (
     SeleniumVariant, SeleniumStrategy, SeleniumDownloadStrategy,
     DocumentType, InteractiveResult,
     verbosities_display_dict, document_type_display_dict,
-    DEFAULT_CSF, DEFAULT_CWF, DEFAULT_CPF, SCR_USER_AGENT
+    DEFAULT_CSF, DEFAULT_CWF, DEFAULT_CPF, SCR_USER_AGENT,
+    FILENAME_REQUIRING_FORMAT_SPECIFIERS
 
 )
 from .input_sequences import (
@@ -337,12 +338,8 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
     for loc in locators:
         loc.setup(mc)
 
-    if any(lc.xpath is not None for lc in locators):
-        mc.has_xpath_matching = True
     if mc.loc_label.is_active():
         mc.has_label_matching = True
-    if mc.labels_inside_content is not None and mc.loc_label.xpath is not None:
-        mc.has_content_xpaths = True
     if mc.loc_document.is_active():
         mc.has_document_matching = True
     if mc.loc_label.interactive or mc.loc_content.interactive:
@@ -426,22 +423,20 @@ def setup_match_chain(mc: 'match_chain.MatchChain', ctx: 'scr_context.ScrContext
         mc.content_forward_format
     ]
 
-    label_formats = [mc.loc_label.format, mc.label_default_format]
-
-    filename_format_occurences = ["fn", "fb", "fe"]
-
     # because of lin / csin
-    mc.need_filename_for_interaction = format_strings_args_occurence(
-        [*label_formats, mc.content_save_format], filename_format_occurences
+    mc.need_filename_for_interaction = mc.loc_label.needs_filename() or format_string_args_occurence(
+        mc.content_save_format, FILENAME_REQUIRING_FORMAT_SPECIFIERS
     ) > 0
 
     mc.need_filename = mc.need_filename_for_interaction or format_strings_args_occurence(
-        output_formats, filename_format_occurences
+        output_formats, FILENAME_REQUIRING_FORMAT_SPECIFIERS
     ) > 0
 
     mc.need_content = format_strings_args_occurence(
         output_formats, ["c"]
     ) > 0
+
+    mc.need_xml = any(loc.last_xml_needing_step is not None for loc in locators)
 
     mc.need_label = format_strings_args_occurence(
         output_formats, ["l"]
@@ -692,7 +687,7 @@ def try_read_data_url(cm: 'content_match.ContentMatch') -> Optional[bytes]:
     assert cm.url_parsed is not None
     if cm.url_parsed.scheme == "data":
         res = urllib.request.urlopen(
-            cm.clm.result,
+            cm.clm.text,
             timeout=cm.mc.ctx.request_timeout_seconds
         )
         try:
@@ -1068,14 +1063,14 @@ def forward_document(ctx: 'scr_context.ScrContext', doc: Optional['document.Docu
 def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
     cm.di = cm.mc.di
     cm.ci = cm.mc.ci
-    cm.mc.loc_content.apply_format_for_content_match(cm, cm.clm)
+    cm.mc.loc_content.apply_order_dependant_steps(cm.clm)
     cm.mc.ci += 1
 
     di_ci_context = get_ci_di_context(cm)
     content_type = get_content_type_label(cm)
 
-    if cm.llm is not None and cm.llm.rmatch is not None:
-        label_context = f' (label match was "{cm.llm.rmatch}")'
+    if cm.llm is not None:
+        label_context = f' (label match was "{cm.llm.text}")'
     else:
         if cm.mc.need_label:
             label_context = " (no label match)"
@@ -1084,8 +1079,8 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
 
     while True:
         if not cm.mc.content_raw:
-            cm.clm.result, cm.url_parsed = normalize_link(
-                cm.clm.result, cm.base, cm.doc.document_type.derived_link_type(),
+            cm.clm.text, cm.url_parsed = normalize_link(
+                cm.clm.text, cm.base, cm.doc.document_type.derived_link_type(),
                 cm.mc.default_document_scheme,
                 cm.mc.prefer_parent_document_scheme,
                 cm.mc.force_document_scheme, False
@@ -1106,7 +1101,7 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
                 prompt_msg = f'accept {content_type} from "{cm.doc.path}"{di_ci_context}{label_context}'
             else:
                 inspect_opt_str = ""
-                prompt_msg = f'"{cm.doc.path}"{di_ci_context}{label_context}: accept {content_type} "{cm.clm.result}"'
+                prompt_msg = f'"{cm.doc.path}"{di_ci_context}{label_context}: accept {content_type} "{cm.clm.text}"'
 
             res = prompt(
                 f'{prompt_msg} [Yes/no/edit{inspect_opt_str}/chainskip/docskip]? ',
@@ -1117,22 +1112,22 @@ def handle_content_match(cm: 'content_match.ContentMatch') -> InteractiveResult:
                 break
             if res == InteractiveResult.INSPECT:
                 print(
-                    f'content for "{cm.doc.path}"{label_context}:\n' + cm.clm.result)
+                    f'content for "{cm.doc.path}"{label_context}:\n' + cm.clm.text)
                 continue
             if res is not InteractiveResult.EDIT:
                 return res
             if not cm.mc.content_raw:
-                cm.clm.result = input(f"enter new {content_type}:\n")
+                cm.clm.text = input(f"enter new {content_type}:\n")
             else:
                 print(
                     f'enter new {content_type} (terminate with a newline followed by the string "{cm.mc.content_escape_sequence}"):\n')
-                cm.clm.result = ""
+                cm.clm.text = ""
                 while True:
-                    cm.clm.result += input() + "\n"
-                    i = cm.clm.result.find(
+                    cm.clm.text += input() + "\n"
+                    i = cm.clm.text.find(
                         "\n" + cm.mc.content_escape_sequence)
                     if i != -1:
-                        cm.clm.result = cm.clm.result[:i]
+                        cm.clm.text = cm.clm.text[:i]
                         break
         break
 
@@ -1592,13 +1587,13 @@ def process_document_queue(ctx: 'scr_context.ScrContext') -> Optional['document.
         doc = ctx.docs.popleft()
         ctx.last_doc_path = doc.path
         unsatisfied_chains = 0
-        have_xpath_matching = 0
+        chains_needing_xml = 0
         for mc in doc.match_chains:
             if mc.need_document_matches(False) or mc.need_content_matches():
                 unsatisfied_chains += 1
                 mc.satisfied = False
-                if mc.has_xpath_matching:
-                    have_xpath_matching += 1
+                if mc.need_xml:
+                    chains_needing_xml += 1
         if unsatisfied_chains == 0:
             if not ctx.selenium_variant.enabled() or (doc is ctx.reused_doc and not ctx.changed_selenium):
                 continue
@@ -1869,7 +1864,7 @@ def run_repl(initial_ctx: 'scr_context.ScrContext', args: list[str]) -> int:
 def run_scr(args: list[str]) -> int:
     ctx = scr_context.ScrContext(blank=True)
     if len(args) < 2:
-        sys.stderr.write(get_log_str(
+        log_raw(get_log_str(
             Verbosity.ERROR,
             f"missing command line options. Consider {SCRIPT_NAME} --help"
         ))
@@ -1879,7 +1874,7 @@ def run_scr(args: list[str]) -> int:
         args_parsing.parse_args(ctx, args[1:])
         setup_ctx(ctx)
     except ScrSetupError as ex:
-        sys.stderr.write(get_log_str(Verbosity.ERROR, str(ex)))
+        log_raw(get_log_str(Verbosity.ERROR, str(ex)))
         return 1
     if ctx.repl:
         ec = run_repl(ctx, args)

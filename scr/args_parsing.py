@@ -172,7 +172,7 @@ def help(err: bool = False) -> None:
 
         """.strip()
     if err:
-        sys.stderr.write(text + "\n")
+        log_raw(text + "\n")
         sys.exit(1)
 
     else:
@@ -208,7 +208,7 @@ def parse_simple_mc_range(ctx: 'scr_context.ScrContext', mc_spec: str, arg: str)
         dash_split = [r.strip() for r in s.split("-")]
         if len(dash_split) > 2 or s == "-":
             raise ScrSetupError(
-                "invalid range '{s}' in match chain specification of '{arg}'")
+                f"invalid range '{s}' in match chain specification of '{arg}'")
         if len(dash_split) == 1:
             id = parse_mc_range_int(ctx, dash_split[0], arg)
             extend_match_chain_list(ctx, id)

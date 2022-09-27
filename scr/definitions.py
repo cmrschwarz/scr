@@ -21,6 +21,8 @@ DEFAULT_CWF = "{c}"
 DEFAULT_CSF = "{fn}"
 DEFAULT_ESCAPE_SEQUENCE = "<END>"
 
+FILENAME_REQUIRING_FORMAT_SPECIFIERS = ["fn", "fb", "fe"]
+
 
 T = TypeVar("T")
 K = TypeVar("K")
