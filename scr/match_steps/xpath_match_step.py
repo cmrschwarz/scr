@@ -1,6 +1,7 @@
-from .locator import MatchStep, Locator, LocatorMatch
-from .definitions import ScrSetupError, ScrMatchError
-from .utils import not_none
+from .match_step import MatchStep
+from ..locator import Locator, LocatorMatch
+from ..definitions import ScrSetupError, ScrMatchError
+from ..utils import not_none
 from typing import cast, Optional, Any, OrderedDict
 import lxml.etree
 import lxml.html
@@ -84,10 +85,10 @@ class XPathMatchStep(MatchStep):
     )
     xpath: lxml.etree.XPath
     store_xml: bool
-    step_type_index: int
+    step_type_occurence_count: int
 
-    def __init__(self, name: str, step_type_index: int, arg: str, arg_val: str) -> None:
-        super().__init__(name, step_type_index, arg, arg_val)
+    def __init__(self, index: int, name: str, step_type_occurence_count: int, arg: str, arg_val: str) -> None:
+        super().__init__(index, name, step_type_occurence_count, arg, arg_val)
 
     def setup(self, loc: 'Locator', prev: Optional['MatchStep']) -> None:
         try:
@@ -140,11 +141,11 @@ class XPathMatchStep(MatchStep):
                 res.append(lm)
         return res
 
-    def needs_text(self) -> bool:
-        return False
-
     def needs_xml(self) -> bool:
         return True
 
     def needs_xpath(self) -> bool:
         return True
+
+    def has_multimatch(self) -> bool:
+        return self.multimatch

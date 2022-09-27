@@ -365,7 +365,7 @@ class DownloadJob:
 
     def handle_label_match(self) -> InteractiveResult:
         cm = self.cm
-        if not cm.mc.need_label or (cm.llm is not None and cm.llm.fres is not None):
+        if not cm.mc.need_label or (cm.llm is not None):
             # this was already done during for interactive filename determination
             return InteractiveResult.ACCEPT
 
@@ -375,11 +375,10 @@ class DownloadJob:
 
         if cm.llm is None:
             if cm.mc.need_label:
-                cm.llm = locator.LocatorMatch()
-                cm.llm.fres = cast(str, cm.mc.label_default_format).format(
+                label = cast(str, cm.mc.label_default_format).format(
                     **scr.content_match_build_format_args(cm)
                 )
-                cm.llm.result = cm.llm.fres
+                cm.llm = locator.LocatorMatch(None, label)
         else:
             cm.mc.loc_label.apply_format_for_content_match(cm, cm.llm)
 
@@ -388,10 +387,10 @@ class DownloadJob:
             content_type = scr.get_content_type_label(cm)
             assert cm.llm is not None
             while True:
-                if not cm.mc.is_valid_label(cm.llm.result):
+                if not cm.mc.is_valid_label(cm.llm.text):
                     self.log(
                         Verbosity.WARN,
-                        f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.result}")'
+                        f'"{cm.doc.path}": labels cannot contain a slash ("{cm.llm.text}")'
                     )
                 else:
                     prompt_options = [
@@ -405,10 +404,10 @@ class DownloadJob:
                         prompt_options.append(
                             (InteractiveResult.INSPECT, INSPECT_INDICATING_STRINGS))
                         inspect_opt_str = "/inspect"
-                        prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.llm.result}"'
+                        prompt_msg = f'"{cm.doc.path}"{di_ci_context}: accept content label "{cm.llm.text}"'
                     else:
                         inspect_opt_str = ""
-                        prompt_msg = f'"{cm.doc.path}": {content_type} {cm.clm.result}{di_ci_context}: accept content label "{cm.llm.result}"'
+                        prompt_msg = f'"{cm.doc.path}": {content_type} {cm.clm.text}{di_ci_context}: accept content label "{cm.llm.text}"'
 
                     res = scr.prompt(
                         f'{prompt_msg} [Yes/no/edit/{inspect_opt_str}/chainskip/docskip]? ',
@@ -419,11 +418,11 @@ class DownloadJob:
                         break
                     if res == InteractiveResult.INSPECT:
                         print(
-                            f'"{cm.doc.path}": {content_type} for "{cm.llm.result}":\n' + cm.clm.result)
+                            f'"{cm.doc.path}": {content_type} for "{cm.llm.text}":\n' + cm.clm.text)
                         continue
                     if res != InteractiveResult.EDIT:
                         return res
-                cm.llm.result = input("enter new label: ")
+                cm.llm.text = input("enter new label: ")
         return InteractiveResult.ACCEPT
 
     def handle_save_path(self) -> 'InteractiveResult':
@@ -433,10 +432,10 @@ class DownloadJob:
         cm = self.cm
         if not cm.mc.content_save_format:
             return InteractiveResult.ACCEPT
-        if cm.llm and not cm.mc.is_valid_label(cm.llm.result):
+        if cm.llm and not cm.mc.is_valid_label(cm.llm.text):
             self.log(
                 Verbosity.WARN,
-                f"matched label '{cm.llm.result}' would contain a slash, skipping this content from: {cm.doc.path}"
+                f"matched label '{cm.llm.text}' would contain a slash, skipping this content from: {cm.doc.path}"
             )
             save_path = None
         if cm.mc.need_filename_for_interaction:
@@ -497,7 +496,7 @@ class DownloadJob:
         return res
 
     def selenium_download_from_local_file(self) -> bool:
-        path = self.cm.clm.result
+        path = self.cm.clm.text
         self.content_format = ContentFormat.FILE
         if cast(urllib.parse.ParseResult, self.cm.url_parsed).scheme == "file":
             offs = len("file:")
@@ -520,7 +519,7 @@ class DownloadJob:
         try:
             try:
                 req = scr.request_raw(
-                    self.cm.mc.ctx, self.cm.clm.result, cast(
+                    self.cm.mc.ctx, self.cm.clm.text, cast(
                         urllib.parse.ParseResult, self.cm.url_parsed),
                     selenium_setup.load_selenium_cookies(self.cm.mc.ctx),
                     proxies=proxies, stream=True
@@ -539,7 +538,7 @@ class DownloadJob:
             self.log(
                 Verbosity.ERROR,
                 f"{self.cm.doc.path_for_context()}{scr.get_ci_di_context(self.cm)}: "
-                + f"failed to download '{utils.truncate(self.cm.clm.result)}': {str(ex)}"
+                + f"failed to download '{utils.truncate(self.cm.clm.text)}': {str(ex)}"
             )
             return False
 
@@ -552,7 +551,7 @@ class DownloadJob:
         if doc_url.netloc != cast(urllib.parse.ParseResult, self.cm.url_parsed).netloc:
             self.log(
                 Verbosity.ERROR,
-                f"{self.cm.clm.result}{scr.get_ci_di_context(self.cm)}: "
+                f"{self.cm.clm.text}{scr.get_ci_di_context(self.cm)}: "
                 + "failed to download: seldl=internal does not work across origins"
             )
             return False
@@ -570,14 +569,14 @@ class DownloadJob:
         """
         try:
             selenium_setup.selenium_exec_script(self.cm.mc.ctx, script_source,
-                                                self.cm.clm.result, tmp_filename)
+                                                self.cm.clm.text, tmp_filename)
         except SeleniumWebDriverException as ex:
             if selenium_setup.selenium_has_died(self.cm.mc.ctx):
                 selenium_setup.report_selenium_died(self.cm.mc.ctx)
             else:
                 self.log(
                     Verbosity.ERROR,
-                    f"{self.cm.clm.result}{scr.get_ci_di_context(self.cm)}: "
+                    f"{self.cm.clm.text}{scr.get_ci_di_context(self.cm)}: "
                     + f"selenium download failed: {str(ex)}"
                 )
             return False
@@ -638,7 +637,7 @@ class DownloadJob:
         try:
             doc_url = driver.current_url
             res = selenium_setup.selenium_exec_script(
-                self.cm.mc.ctx, script_source, self.cm.clm.result)
+                self.cm.mc.ctx, script_source, self.cm.clm.text)
         except SeleniumWebDriverException as ex:
             if selenium_setup.selenium_has_died(self.cm.mc.ctx):
                 selenium_setup.report_selenium_died(self.cm.mc.ctx)
@@ -648,12 +647,12 @@ class DownloadJob:
             err = res["error"]
         if err is not None:
             cors_warn = ""
-            if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(self.cm.clm.result).netloc:
+            if urllib.parse.urlparse(doc_url).netloc != urllib.parse.urlparse(self.cm.clm.text).netloc:
                 cors_warn = " (potential CORS issue)"
             self.log(
                 Verbosity.ERROR,
                 f"{self.cm.doc.path_for_context()}{scr.get_ci_di_context(self.cm)}: "
-                + f"selenium download of '{self.cm.clm.result}' failed{cors_warn}: {err}"
+                + f"selenium download of '{self.cm.clm.text}' failed{cors_warn}: {err}"
             )
             return False
         self.content = binascii.a2b_base64(res["ok"])
@@ -691,7 +690,7 @@ class DownloadJob:
             # this was already done during filename determination
             return True
         if self.cm.mc.content_raw:
-            self.content = self.cm.clm.result
+            self.content = self.cm.clm.text
             self.content_format = ContentFormat.STRING
             if not self.gen_fallback_filename():
                 return False
@@ -718,7 +717,7 @@ class DownloadJob:
                         if not self.gen_fallback_filename(dont_use_url=True):
                             return False
                     elif self.cm.doc.document_type.derived_link_type() is DocumentType.FILE:
-                        self.content = self.cm.clm.result
+                        self.content = self.cm.clm.text
                         self.content_format = ContentFormat.FILE
                         if self.status_report:
                             try:
@@ -731,7 +730,7 @@ class DownloadJob:
                     else:
                         try:
                             res = scr.request_raw(
-                                self.cm.mc.ctx, self.cm.clm.result,
+                                self.cm.mc.ctx, self.cm.clm.text,
                                 cast(
                                     urllib.parse.ParseResult,
                                     self.cm.url_parsed
@@ -754,7 +753,7 @@ class DownloadJob:
                             else:
                                 self.log(
                                     Verbosity.ERROR,
-                                    f"{self.context}: failed to download '{utils.truncate(self.cm.clm.result)}': {str(fe)}"
+                                    f"{self.context}: failed to download '{utils.truncate(self.cm.clm.text)}': {str(fe)}"
                                 )
                             return False
         return True
@@ -920,7 +919,7 @@ class DownloadJob:
                 path = "<forwarded content match>"
                 path_parsed = None
             else:
-                path = self.cm.clm.result
+                path = self.cm.clm.text
                 path_parsed = self.cm.url_parsed
             doc = document.Document(
                 DocumentType.STRING,
@@ -1049,7 +1048,7 @@ class DownloadJob:
                 os.remove(self.temp_file_path)
             if self.save_file is not None:
                 self.save_file.close()
-            path = self.cm.clm.result
+            path = self.cm.clm.text
             if self.requires_download():
                 self.log(
                     Verbosity.DEBUG,
@@ -1089,7 +1088,7 @@ class DownloadManager:
     def submit(self, dj: DownloadJob) -> None:
         scr.log(
             self.ctx, Verbosity.DEBUG,
-            f"enqueuing download for {dj.cm.clm.result}"
+            f"enqueuing download for {dj.cm.clm.text}"
         )
         dj.request_print_streams(self.pom)
         if self.ctx.enable_status_reports:

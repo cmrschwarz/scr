@@ -73,14 +73,13 @@ class MatchChain(ConfigDataClass):
     di: int
     ci: int
     js_executed: bool = False
-    has_xpath_matching: bool = False
     has_label_matching: bool = False
-    has_content_xpaths: bool = False
     # TODO: this should include if this is the target of any doc=...
     has_document_matching: bool = False
     has_content_matching: bool = False
     has_interactive_matching: bool = False
     need_content: bool = False
+    need_xml: bool = False
     need_label: bool = False
     need_filename: bool = False
     need_filename_for_interaction: bool = False
@@ -127,15 +126,13 @@ class MatchChain(ConfigDataClass):
         if self.has_label_matching:
             llm = self.loc_label.gen_dummy_locator_match()
         elif self.label_default_format:
-            llm = locator.LocatorMatch()
-            llm.fres = ""
+            llm = locator.LocatorMatch(None, "")
         else:
             llm = None
 
         dcm = content_match.ContentMatch(
             clm, llm, self, self.gen_dummy_document())
-        if self.loc_content.multimatch:
-            dcm.ci = 0
+        dcm.ci = 0
         if self.has_document_matching:
             dcm.di = 0
         dcm.filename = "" if has_filename else None
