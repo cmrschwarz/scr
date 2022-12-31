@@ -4,7 +4,7 @@ from abc import ABC
 class RangeSpecParseException(Exception):
     pass
 
-def RangeSpec(ABC):
+class RangeSpec(ABC):
     def __init__():
         pass
 

@@ -8,6 +8,7 @@ VERSION = "0.12.0"
 
 SCR_USER_AGENT = f"{SCRIPT_NAME}/{VERSION}"
 FALLBACK_DOCUMENT_SCHEME = "https"
+DEFAULT_DOCUMENT_ENCODING = "utf-8"
 DEFAULT_TIMEOUT_SECONDS = 30
 # cap for filenames deduced from urls to avoid a messs e.g. for data urls
 URL_FILENAME_MAX_LEN = 256
