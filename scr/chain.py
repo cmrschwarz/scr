@@ -15,8 +15,9 @@ class Chain:
     selenium_context: Optional['scr.selenium.selenium_context.SeleniumContext']
     selenium_download_strategy: SeleniumDownloadStrategy
 
-    subchains: list['chain.Chain']
     transforms: list['transform.Transform']
+
+    subchains: list['chain.Chain']
 
     def __init__(
         self,

@@ -106,11 +106,9 @@ def create_root_chain(co: ChainOptions, ctx: 'context.Context') -> 'chain.Chain'
 
 
 def update_chain(c: 'chain.Chain', co: ChainOptions) -> None:
-    c.transforms = co.transforms
     c.default_text_encoding = co.default_text_encoding.get_or_default(c.default_text_encoding)
     c.prefer_parent_text_encoding = co.prefer_parent_text_encoding.get_or_default(c.prefer_parent_text_encoding)
     c.force_text_encoding = co.force_text_encoding.get_or_default(c.force_text_encoding)
-    c.selenium_download_strategy = co.selenium_download_strategy.get_or_default(c.selenium_download_strategy)
 
     curr_sc = c.selelenium_context
     if curr_sc is not None:
@@ -121,6 +119,9 @@ def update_chain(c: 'chain.Chain', co: ChainOptions) -> None:
             c.selelenium_context = get_selenium_context(co, c.parent)
     else:
         c.selelenium_context = get_selenium_context(co, c.parent)
+
+    c.selenium_download_strategy = co.selenium_download_strategy.get_or_default(c.selenium_download_strategy)
+    c.transforms = co.transforms
 
     retained_chain_count = min(len(c.subchains), len(co.subchains))
     for i in range(0, retained_chain_count):

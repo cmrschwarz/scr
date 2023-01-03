@@ -1,6 +1,6 @@
 from scr.scr_option import ScrOption, ScrOptionSet
 from scr.selenium import selenium_options
-from scr import context
+from scr import context, progress_report
 from typing import Optional
 import multiprocessing
 
@@ -50,5 +50,12 @@ def create_context(opts: ContextOptions) -> 'context.Context':
     )
 
 
-def update_context(opts: ContextOptions, prev: 'context.Context') -> 'context.Context':
-    raise NotImplementedError
+def update_context(ctx: 'context.Context', opts: ContextOptions) -> None:
+    if opts.parallel_jobs.is_set():
+        ctx.set_parallel_job_count(opts.parallel_jobs.get())
+    if opts.progress_report.is_set():
+        pr = opts.progress_report.get()
+        if ctx.progress_reporter is None and pr:
+            ctx.progress_reporter = progress_report.ProgressReporter()
+        elif ctx.progress_reporter is not None and not pr:
+            ctx.progress_reporter = None
