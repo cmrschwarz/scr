@@ -1,8 +1,11 @@
+import scr.context
 from scr.transforms import transform
+
 from scr.selenium import selenium_options
 
 
 class Chain:
+    ctx: scr.context.Context
     default_doc_encoding: str
     prefer_parent_doc_encoding: bool
     force_doc_encoding: bool
@@ -12,4 +15,4 @@ class Chain:
     selenium_download_strategy: selenium_options.SeleniumDownloadStrategy
 
     subchains: list['Chain']
-    transforms: list[transform.Transform]
+    transforms: list['transform.Transform']

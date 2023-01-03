@@ -5,9 +5,9 @@ from scr.scr_option import ScrOption
 
 
 class ChainOptions:
-    default_doc_encoding: ScrOption[str]
-    prefer_parent_doc_encoding: ScrOption[bool]
-    force_doc_encoding: ScrOption[bool]
+    default_text_encoding: ScrOption[str]
+    prefer_parent_text_encoding: ScrOption[bool]
+    force_text_encoding: ScrOption[bool]
 
     selenium_variant: ScrOption[selenium_options.SeleniumVariant]
     selenium_page_acceptance: ScrOption[selenium_options.SeleniumPageAcceptance]
@@ -18,9 +18,9 @@ class ChainOptions:
 
     def __init__(
         self,
-        default_doc_encoding: Optional[str] = None,
-        prefer_parent_doc_encoding: Optional[bool] = None,
-        force_doc_encoding: Optional[bool] = None,
+        default_text_encoding: Optional[str] = None,
+        prefer_parent_text_encoding: Optional[bool] = None,
+        force_text_encoding: Optional[bool] = None,
 
         selenium_variant: Optional[selenium_options.SeleniumVariant] = None,
         selenium_page_acceptance: Optional[selenium_options.SeleniumPageAcceptance] = None,
@@ -29,9 +29,9 @@ class ChainOptions:
         subchains: Optional[list['ChainOptions']] = None,
         transforms: Optional[list[transform.Transform]] = None,
     ) -> None:
-        self.default_doc_encoding = ScrOption(default_doc_encoding)
-        self.prefer_parent_doc_encoding = ScrOption(prefer_parent_doc_encoding)
-        self.force_doc_encoding = ScrOption(force_doc_encoding)
+        self.default_text_encoding = ScrOption(default_text_encoding)
+        self.prefer_parent_text_encoding = ScrOption(prefer_parent_text_encoding)
+        self.force_text_encoding = ScrOption(force_text_encoding)
         self.selenium_variant = ScrOption(selenium_variant)
         self.selenium_page_acceptance = ScrOption(selenium_page_acceptance)
         self.selenium_download_strategy = ScrOption(selenium_download_strategy)
@@ -40,9 +40,9 @@ class ChainOptions:
 
 
 DEFAULT_CHAIN_OPTIONS = ChainOptions(
-    default_doc_encoding="utf-8",
-    prefer_parent_doc_encoding=False,
-    force_doc_encoding=False,
+    default_text_encoding="utf-8",
+    prefer_parent_text_encoding=False,
+    force_text_encoding=False,
     selenium_variant=selenium_options.SeleniumVariant.DISABLED,
     selenium_page_acceptance=selenium_options.SeleniumPageAcceptance.PLAIN,
     selenium_download_strategy=selenium_options.SeleniumDownloadStrategy.SCR

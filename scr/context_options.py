@@ -3,7 +3,7 @@ from typing import Optional
 import multiprocessing
 
 
-class InstanceOptions:
+class ContextOptions:
     progress_report: ScrOption[bool]
     parallel_jobs: ScrOption[int]
     print_help: ScrOption[bool]
@@ -25,7 +25,7 @@ class InstanceOptions:
         self.install_selenium_drivers = ScrOptionSet(install_selenium_drivers)
 
 
-DEFAULT_INSTANCE_OPTIONS = InstanceOptions(
+DEFAULT_INSTANCE_OPTIONS = ContextOptions(
     progress_report=True,
     parallel_jobs=multiprocessing.cpu_count(),
     print_help=False,

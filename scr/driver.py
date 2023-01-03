@@ -2,19 +2,20 @@ import sys
 import warnings
 import os
 
-from scr import chain_options, instance_options, result, document
+from scr import chain_options, context_options, result, document, parse_cli_args
 
 
 def run(
     root_chain: chain_options.ChainOptions,
     docs: list[document.Document],
-    opts: instance_options.InstanceOptions = instance_options.DEFAULT_INSTANCE_OPTIONS
+    opts: context_options.ContextOptions = context_options.DEFAULT_INSTANCE_OPTIONS
 ) -> list[result.Result]:
     return []
 
 
 def run_cli(args: list[str]) -> list[result.Result]:
-    return []
+    (root_chain, docs, opts) = parse_cli_args.parse(args)
+    return run(root_chain, docs, opts)
 
 
 def main() -> None:
