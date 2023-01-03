@@ -1,6 +1,6 @@
 from typing import Optional
 from scr.transforms import transform
-from scr import match
+from scr.match import MatchConcrete, MatchEager
 import time
 import math
 
@@ -22,6 +22,6 @@ class Sleep(transform.TransformLazy):
         except (FloatingPointError, ValueError, TypeError, OverflowError):
             raise ValueError("invalid sleep time {arg}")
 
-    def apply_concrete(self, m: match.MatchConcrete) -> match.MatchEager:
+    def apply_concrete(self, m: MatchConcrete) -> MatchEager:
         time.sleep(self.sleep_time_seconds)
         return m

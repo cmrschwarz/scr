@@ -2,6 +2,7 @@ from typing import Optional
 from scr.transforms import transform
 from scr.selenium import selenium_options
 from scr.scr_option import ScrOption
+from scr import chain, context
 
 
 class ChainOptions:
@@ -37,6 +38,14 @@ class ChainOptions:
         self.selenium_download_strategy = ScrOption(selenium_download_strategy)
         self.subchains = subchains if subchains is not None else []
         self.transforms = transforms if transforms is not None else []
+
+
+def create_chain(chain: ChainOptions, ctx: 'context.Context') -> 'chain.Chain':
+    raise NotImplementedError
+
+
+def update_root_chain(chain: ChainOptions, prev: 'chain.Chain') -> 'chain.Chain':
+    raise NotImplementedError
 
 
 DEFAULT_CHAIN_OPTIONS = ChainOptions(

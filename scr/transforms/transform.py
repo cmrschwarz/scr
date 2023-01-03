@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-import scr.chain
-import scr.match
+from scr import chain
+from scr.match import Match, MatchEager, MatchConcrete
 
 
 class Transform(ABC):
@@ -18,23 +18,23 @@ class Transform(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
+    def apply(self, c: 'chain.Chain', m: Match) -> Match:
         raise NotImplementedError
 
 
 class TransformEager(Transform):
     @abstractmethod
-    def apply_concrete(self, m: scr.match.MatchConcrete) -> scr.match.MatchEager:
+    def apply_concrete(self, m: MatchConcrete) -> MatchEager:
         raise NotImplementedError
 
-    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
+    def apply(self, c: 'chain.Chain', m: Match) -> Match:
         return m.apply_eager(c.ctx.executor, self.apply_concrete)
 
 
 class TransformLazy(Transform):
     @abstractmethod
-    def apply_concrete(self, m: scr.match.MatchConcrete) -> scr.match.MatchEager:
+    def apply_concrete(self, m: MatchConcrete) -> MatchEager:
         raise NotImplementedError
 
-    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
+    def apply(self, c: 'chain.Chain', m: Match) -> Match:
         return m.apply_lazy(c.ctx.executor, self.apply_concrete)
