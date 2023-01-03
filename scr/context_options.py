@@ -1,6 +1,6 @@
 from scr.scr_option import ScrOption, ScrOptionSet
 from scr.selenium import selenium_options
-from scr import context, chain, document
+from scr import context
 from typing import Optional
 import multiprocessing
 
@@ -28,6 +28,7 @@ class ContextOptions:
         self.progress_report = ScrOption(progress_report)
         self.install_selenium_drivers = ScrOptionSet(install_selenium_drivers)
         self.update_selenium_drivers = ScrOptionSet(update_selenium_drivers)
+        self.repl = ScrOption(repl)
         self.print_help = ScrOption(print_help)
         self.print_version = ScrOption(print_version)
 
@@ -38,7 +39,7 @@ DEFAULT_CONTEXT_OPTIONS = ContextOptions(
     install_selenium_drivers=None,
     update_selenium_drivers=None,
     print_help=False,
-    print_version=True
+    print_version=False
 )
 
 

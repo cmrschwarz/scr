@@ -1,4 +1,3 @@
-from typing import Optional
 from scr.transforms import transform
 from scr.match import MatchConcrete, MatchEager, MultiMatchBuilder, MatchText
 import re
@@ -11,8 +10,8 @@ class Regex(transform.TransformEager):
     def name_matches(name: str) -> bool:
         return "regex".startswith(name)
 
-    def __init__(self, name: str, label: Optional[str], arg: str) -> None:
-        super().__init__(label if label is not None else name)
+    def __init__(self, label: str, arg: str) -> None:
+        super().__init__(label)
         try:
             self.regex = re.compile(arg, re.DOTALL | re.MULTILINE)
         except re.error as err:

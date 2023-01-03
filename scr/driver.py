@@ -2,7 +2,7 @@ import sys
 import warnings
 import os
 
-from scr.chain_options import ChainOptions, create_chain, update_root_chain
+from scr.chain_options import ChainOptions, create_root_chain
 from scr.context import Context
 from scr.context_options import ContextOptions, DEFAULT_CONTEXT_OPTIONS, create_context
 from scr.document import Document
@@ -37,7 +37,7 @@ def run(
 ) -> list[Result]:
     perform_side_tasks(opts)
     ctx = create_context(opts)
-    rc = create_chain(root_chain, ctx)
+    rc = create_root_chain(root_chain, ctx)
     if opts.repl.get_or_default(DEFAULT_CONTEXT_OPTIONS.repl.get()):
         return run_repl(ctx)
     return ctx.run(rc, docs)

@@ -1,5 +1,6 @@
-from typing import Generic, TypeVar, Optional
+from typing import Generic, TypeVar, Optional, Union
 T = TypeVar("T")
+D = TypeVar("D")
 
 
 class ScrOption(Generic[T]):
@@ -26,7 +27,7 @@ class ScrOption(Generic[T]):
             raise ValueError("attempted to get value of unassigned option")
         return self.value
 
-    def get_or_default(self, default: T) -> T:
+    def get_or_default(self, default: D) -> Union[T, D]:
         if self.value is None:
             return default
         return self.value

@@ -1,4 +1,3 @@
-from typing import Optional
 from scr.transforms import transform
 from scr.match import MatchConcrete, MatchEager
 import time
@@ -12,8 +11,8 @@ class Sleep(transform.TransformLazy):
     def name_matches(name: str) -> bool:
         return "sleep".startswith(name)
 
-    def __init__(self, name: str, label: Optional[str], arg: str) -> None:
-        super().__init__(label if label is not None else name)
+    def __init__(self, label: str, arg: str) -> None:
+        super().__init__(label)
         try:
             sts = float(arg)
             if math.isnan(sts) or math.isinf(sts) or sts < 0:

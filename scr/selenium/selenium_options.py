@@ -27,17 +27,3 @@ class SeleniumDownloadStrategy(Enum):
     # use the javascript fetch api and give the base64 encoded
     # result back to scr (high ram usage for large files)
     JAVASCRIPT = 2
-
-
-class SeleniumPageAcceptance(Enum):
-    # accept the document once selenium reports it as 'loaded'
-    PLAIN = 0
-    # accept the document once it reaches any accepting transform
-    # (like dl, w, p, in, or acc)
-    ANY_ACCEPT = 1
-    # ask the user on the cli to accept the document, displaying the number
-    # of matches that reached an accepting transform
-    INTERACTIVE = 2
-    # like interactive, but instead of throwing away matches from earlier
-    # document versions, keep them around
-    INTERACTIVE_CONCAT = 3
