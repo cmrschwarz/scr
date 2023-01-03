@@ -37,3 +37,6 @@ class Context:
         self.root_chain = root_chain
         self.docs.extend(docs)
         raise NotImplementedError
+
+    def finalize(self) -> None:
+        pass  # TODO: cleanup selenium contexts, etc.

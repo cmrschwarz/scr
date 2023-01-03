@@ -11,6 +11,7 @@ class ContextOptions:
     install_selenium_drivers: ScrOptionSet['selenium_options.SeleniumVariant']
     update_selenium_drivers: ScrOptionSet['selenium_options.SeleniumVariant']
     repl: ScrOption[bool]
+    exit_repl: ScrOption[bool]
     print_help: ScrOption[bool]
     print_version: ScrOption[bool]
 
@@ -20,7 +21,8 @@ class ContextOptions:
         progress_report: Optional[bool] = None,
         install_selenium_drivers: Optional[set['selenium_options.SeleniumVariant']] = None,
         update_selenium_drivers: Optional[set['selenium_options.SeleniumVariant']] = None,
-        repl: Optional[bool] = False,
+        repl: Optional[bool] = None,
+        exit_repl: Optional[bool] = None,
         print_help: Optional[bool] = None,
         print_version: Optional[bool] = None,
     ) -> None:
@@ -29,6 +31,7 @@ class ContextOptions:
         self.install_selenium_drivers = ScrOptionSet(install_selenium_drivers)
         self.update_selenium_drivers = ScrOptionSet(update_selenium_drivers)
         self.repl = ScrOption(repl)
+        self.exit_repl = ScrOption(exit_repl)
         self.print_help = ScrOption(print_help)
         self.print_version = ScrOption(print_version)
 
@@ -38,6 +41,8 @@ DEFAULT_CONTEXT_OPTIONS = ContextOptions(
     progress_report=True,
     install_selenium_drivers=None,
     update_selenium_drivers=None,
+    repl=False,
+    exit_repl=False,
     print_help=False,
     print_version=False
 )
