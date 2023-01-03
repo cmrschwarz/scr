@@ -1,10 +1,10 @@
 from typing import Optional
 from scr.transforms import transform
-from scr import match, chain
+from scr import match
 import re
 
 
-class Regex(transform.Transform):
+class Regex(transform.TransformEager):
     regex: re.Pattern[str]
 
     @staticmethod
@@ -18,11 +18,10 @@ class Regex(transform.Transform):
         except re.error as err:
             raise ValueError(f"invalid regex: {err.msg}")
 
-    def apply_single(self, c: chain.Chain, m: match.Match, res: list[match.Match]) -> None:
-        m = m.resolve()
+    def apply_concrete(self, m: match.MatchConcrete) -> match.MatchEager:
         if not isinstance(m, match.MatchText):
             raise ValueError("the regex transform only works on text")
-
+        mmb = match.MultiMatchBuilder(m)
         for re_match in self.regex.finditer(m.text):
             text = re_match.group(0)
             mres = match.MatchText(m, text if text is not None else "")
@@ -30,4 +29,5 @@ class Regex(transform.Transform):
                 mres.args[k] = match.MatchText(m, v if v is not None else "")
             for i, g in enumerate(re_match.groups()):
                 mres.args[self.label + str(i)] = match.MatchText(m, g if g is not None else "")
-            res.append(mres)
+            mmb.append(mres)
+        return mmb.result()

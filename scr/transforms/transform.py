@@ -17,11 +17,15 @@ class Transform(ABC):
     def is_accepting(self) -> bool:
         raise NotImplementedError
 
-    def apply_single(self, chain: scr.chain.Chain, m: scr.match.Match, res_list: list[scr.match.Match]) -> None:
+    @abstractmethod
+    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
         raise NotImplementedError
 
-    def apply(self, c: scr.chain.Chain, matches: list[scr.match.Match]) -> list[scr.match.Match]:
-        res: list[scr.match.Match] = []
-        for m in matches:
-            self.apply_single(c, m, res)
-        return res
+
+class TransformEager(Transform):
+    @abstractmethod
+    def apply_concrete(self, m: scr.match.MatchConcrete) -> scr.match.MatchEager:
+        raise NotImplementedError
+
+    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
+        return m.apply_eager(c.ctx.executor, self.apply_concrete)
