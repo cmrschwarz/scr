@@ -29,3 +29,12 @@ class TransformEager(Transform):
 
     def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
         return m.apply_eager(c.ctx.executor, self.apply_concrete)
+
+
+class TransformLazy(Transform):
+    @abstractmethod
+    def apply_concrete(self, m: scr.match.MatchConcrete) -> scr.match.MatchEager:
+        raise NotImplementedError
+
+    def apply(self, c: scr.chain.Chain, m: scr.match.Match) -> scr.match.Match:
+        return m.apply_lazy(c.ctx.executor, self.apply_concrete)

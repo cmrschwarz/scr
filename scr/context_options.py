@@ -25,7 +25,7 @@ class ContextOptions:
         self.install_selenium_drivers = ScrOptionSet(install_selenium_drivers)
 
 
-DEFAULT_INSTANCE_OPTIONS = ContextOptions(
+DEFAULT_CONTEXT_OPTIONS = ContextOptions(
     progress_report=True,
     parallel_jobs=multiprocessing.cpu_count(),
     print_help=False,

@@ -11,10 +11,10 @@ class Regex(transform.TransformEager):
     def name_matches(name: str) -> bool:
         return "regex".startswith(name)
 
-    def __init__(self, name: str, label: Optional[str], regex: str) -> None:
+    def __init__(self, name: str, label: Optional[str], arg: str) -> None:
         super().__init__(label if label is not None else name)
         try:
-            self.regex = re.compile(regex, re.DOTALL | re.MULTILINE)
+            self.regex = re.compile(arg, re.DOTALL | re.MULTILINE)
         except re.error as err:
             raise ValueError(f"invalid regex: {err.msg}")
 
