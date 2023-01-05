@@ -2,10 +2,10 @@ from typing import Optional
 from scr.transforms import transform
 from scr.selenium import selenium_options, selenium_context
 from scr.scr_option import ScrOption
-from scr import chain, context
+from scr import chain, context, chain_prototype
 
 
-class ChainOptions:
+class ChainOptions(chain_prototype.ChainPrototype):
     default_text_encoding: ScrOption[str]
     prefer_parent_text_encoding: ScrOption[bool]
     force_text_encoding: ScrOption[bool]

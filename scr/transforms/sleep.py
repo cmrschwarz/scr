@@ -1,5 +1,6 @@
 from scr.transforms import transform
 from scr.match import MatchConcrete, MatchEager
+from typing import Optional
 import time
 import math
 
@@ -11,15 +12,20 @@ class Sleep(transform.TransformLazy):
     def name_matches(name: str) -> bool:
         return "sleep".startswith(name)
 
-    def __init__(self, label: str, arg: str) -> None:
-        super().__init__(label)
+    @staticmethod
+    def create(label: str, value: Optional[str]) -> 'transform.Transform':
+        if value is None:
+            raise transform.TransformValueError("missing sleep time argument")
         try:
-            sts = float(arg)
+            sts = float(value)
             if math.isnan(sts) or math.isinf(sts) or sts < 0:
-                raise ValueError("invalid sleep time {arg}")
-            self.sleep_time_seconds = sts
-        except (FloatingPointError, ValueError, TypeError, OverflowError):
-            raise ValueError("invalid sleep time {arg}")
+                raise transform.TransformValueError("invalid sleep time {arg}")
+            return Sleep(label, sts)
+        except (FloatingPointError, transform.TransformValueError, TypeError, OverflowError):
+            raise transform.TransformValueError("invalid sleep time {arg}")
+
+    def __init__(self, label: str, sleep_time_seconds: float) -> None:
+        super().__init__(label)
 
     def apply_concrete(self, m: MatchConcrete) -> MatchEager:
         time.sleep(self.sleep_time_seconds)

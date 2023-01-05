@@ -1,6 +1,7 @@
 from scr.transforms import transform
 from scr.match import MatchConcrete, MatchEager, MultiMatchBuilder, MatchText
 import re
+from typing import Optional
 
 
 class Regex(transform.TransformEager):
@@ -10,12 +11,19 @@ class Regex(transform.TransformEager):
     def name_matches(name: str) -> bool:
         return "regex".startswith(name)
 
-    def __init__(self, label: str, arg: str) -> None:
-        super().__init__(label)
+    @staticmethod
+    def create(label: str, value: Optional[str]) -> 'transform.Transform':
+        if value is None:
+            raise transform.TransformValueError(f"missing regex argument")
         try:
-            self.regex = re.compile(arg, re.DOTALL | re.MULTILINE)
+            regex = re.compile(value, re.DOTALL | re.MULTILINE)
+            return Regex(label, regex)
         except re.error as err:
-            raise ValueError(f"invalid regex: {err.msg}")
+            raise transform.TransformValueError(f"invalid regex: {err.msg}")
+
+    def __init__(self, label: str, regex: re.Pattern[str]) -> None:
+        super().__init__(label)
+        self.regex = regex
 
     def apply_concrete(self, m: MatchConcrete) -> MatchEager:
         if not isinstance(m, MatchText):

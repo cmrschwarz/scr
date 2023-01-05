@@ -1,11 +1,11 @@
-from scr import context, chain
+from scr import context, chain, chain_prototype
 import scr.selenium.selenium_context
 from scr.transforms import transform
 from scr.selenium.selenium_options import SeleniumDownloadStrategy
 from typing import Optional
 
 
-class Chain:
+class Chain(chain_prototype.ChainPrototype):
     ctx: 'context.Context'
     parent: Optional['Chain']
     default_text_encoding: str

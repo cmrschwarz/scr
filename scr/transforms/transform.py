@@ -1,6 +1,11 @@
 from abc import ABC, abstractmethod
-from scr import chain
+from scr import chain, chain_options
 from scr.match import Match, MatchEager, MatchConcrete
+from typing import Optional
+
+
+class TransformValueError(Exception):
+    pass
 
 
 class Transform(ABC):
@@ -8,6 +13,11 @@ class Transform(ABC):
 
     def __init__(self, label: str) -> None:
         self.label = label
+
+    @staticmethod
+    @abstractmethod
+    def create(label: str, value: Optional[str]) -> 'Transform':
+        raise NotImplementedError
 
     @staticmethod
     @abstractmethod
@@ -20,6 +30,9 @@ class Transform(ABC):
     @abstractmethod
     def apply(self, c: 'chain.Chain', m: Match) -> Match:
         raise NotImplementedError
+
+    def get_next_chain(self, current: 'chain_options.ChainPrototype') -> Optional['chain_options.ChainPrototype']:
+        return None
 
 
 class TransformEager(Transform):
