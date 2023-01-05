@@ -10,7 +10,7 @@ class Context:
     parallel_jobs: int = -1
     executor: concurrent.futures.Executor
     progress_reporter: Optional['scr.progress_report.ProgressReporter'] = None
-    docs: deque['document.Document']
+    documents: deque['document.Document']
     root_chain: 'chain.Chain'
 
     def __init__(
@@ -22,7 +22,7 @@ class Context:
         self.set_parallel_job_count(parallel_jobs)
         if progress_report:
             self.progress_reporter = scr.progress_report.ProgressReporter()
-        self.docs = deque()
+        self.documents = deque()
 
     def set_parallel_job_count(self, parallel_jobs: int) -> None:
         if self.parallel_jobs == parallel_jobs:
@@ -32,11 +32,6 @@ class Context:
             self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=parallel_jobs)
         else:
             self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-
-    def run(self, root_chain: 'chain.Chain', docs: list[document.Document]) -> list['result.Result']:
-        self.root_chain = root_chain
-        self.docs.extend(docs)
-        raise NotImplementedError
 
     def finalize(self) -> None:
         pass  # TODO: cleanup selenium contexts, etc.

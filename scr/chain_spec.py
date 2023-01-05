@@ -77,12 +77,12 @@ def parse_chain_spec(cs: str, parent_cs: Optional[str] = None) -> ChainSpec:
                 range_spec.parse_range_spec(cs[last_slash+1:], parent_cs)
             )
         if cs.startswith("."):
-            parent_ref = 0
+            up_count = 0
             for i in range(1, len(cs)):
                 if cs[i] != ".":
                     raise ChainSpecParseException("unexpected character '{cs[i]}' in chain identifier {cs}")
             up_count = len(cs) - 1
-            return ChainSpecParent(parent_ref)
+            return ChainSpecParent(up_count)
 
         return ChainSpecSubrange(ChainSpecParent(0), range_spec.parse_range_spec(cs, parent_cs))
 

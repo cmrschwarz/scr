@@ -118,8 +118,7 @@ class MatchList(MatchEager):
 
     def append_flatten(self, match: Match) -> None:
         if isinstance(match, MatchList):
-            # we don't flatten recursively
-            self.matches.extend(match.matches)
+            self.extend_flatten(match.matches)
         else:
             self.matches.append(match)
 

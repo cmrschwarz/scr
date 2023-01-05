@@ -14,7 +14,7 @@ class ChainOptions(chain_prototype.ChainPrototype):
     selenium_download_strategy: ScrOption[selenium_options.SeleniumDownloadStrategy]
 
     subchains: list['ChainOptions']
-    transforms: list[transform.Transform]
+    transforms: list['transform.Transform']
 
     parent: Optional['ChainOptions']
 

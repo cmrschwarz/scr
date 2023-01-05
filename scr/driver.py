@@ -3,7 +3,7 @@ import warnings
 import os
 import shlex
 from typing import Optional
-from scr import chain_options, context_options, context, document, result, cli_args
+from scr import chain_options, context_options, context, document, result, cli_args, chain
 from scr.selenium import selenium_updater
 from scr.version import SCR_VERSION, SCR_NAME
 from scr.logger import SCR_LOG
@@ -23,7 +23,12 @@ def perform_side_tasks(opts: 'context_options.ContextOptions') -> None:
         print(SCR_VERSION)
 
 
-def run_repl(ctx: 'context.Context', initial_args: Optional[list[str]]) -> list['result.Result']:
+def run_repl(
+    ctx: 'context.Context',
+    rc: 'chain.Chain',
+    docs: list['document.Document'],
+    initial_args: Optional[list[str]]
+) -> list['result.Result']:
     if sys.platform == 'win32':
         from pyreadline3 import Readline
         readline: Readline = Readline()
@@ -55,8 +60,8 @@ def run_repl(ctx: 'context.Context', initial_args: Optional[list[str]]) -> list[
                 SCR_LOG.error(str(ex))
                 continue
             context_options.update_context(ctx, opts)
-            chain_options.update_chain(ctx.root_chain, root_chain)
-            ctx.run(ctx.root_chain, docs)
+            chain_options.update_chain(rc, root_chain)
+            process_documents(ctx, rc, docs)
         except KeyboardInterrupt:
             print("")
             continue
@@ -65,7 +70,7 @@ def run_repl(ctx: 'context.Context', initial_args: Optional[list[str]]) -> list[
 def run(
     root_chain: 'chain_options.ChainOptions',
     docs: list['document.Document'],
-    opts: Optional['context_options.ContextOptions'],
+    opts: Optional['context_options.ContextOptions'] = None,
     initial_args: Optional[list[str]] = None
 ) -> list['result.Result']:
     if opts is None:
@@ -75,8 +80,8 @@ def run(
     rc = chain_options.create_root_chain(root_chain, ctx)
     try:
         if opts.repl.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.repl.get()):
-            return run_repl(ctx, initial_args)
-        return ctx.run(rc, docs)
+            return run_repl(ctx, rc, docs, initial_args)
+        return process_documents(ctx, rc, docs)
     finally:
         ctx.finalize()
 
