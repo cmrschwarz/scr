@@ -1,5 +1,6 @@
 from scr import chain_options, context_options, document, chain_spec, scr_option, version
 from scr.transforms import transform, transform_catalog
+from scr.selenium import selenium_options
 from typing import Iterable, Optional, Any
 import re
 
@@ -24,18 +25,21 @@ TRUE_INDICATING_STRINGS = set([*str_prefixes("true"), *str_prefixes("yes"), "1"]
 FALSE_INDICATING_STRINGS = set([*str_prefixes("false"), *str_prefixes("no"), "0"])
 
 
-def try_parse_bool(val: str, arg_ref: tuple[int, str]) -> bool:
+def try_parse_bool(val: str) -> Optional[bool]:
     if val in TRUE_INDICATING_STRINGS:
         return True
     if val in FALSE_INDICATING_STRINGS:
         return False
-    raise CliArgsParseException(arg_ref, "failed to parse as bool")
+    return None
 
 
-def try_parse_bool_or_default(val: Optional[str], default: bool, arg_ref: tuple[int, str]) -> bool:
+def try_parse_bool_arg_or_default(val: Optional[str], default: bool, arg_ref: tuple[int, str]) -> bool:
     if val is None:
         return default
-    return try_parse_bool(val, arg_ref)
+    res = try_parse_bool(val)
+    if res is None:
+        raise CliArgsParseException(arg_ref, "failed to parse as bool")
+    return res
 
 
 def try_parse_as_context_opt(
@@ -43,7 +47,7 @@ def try_parse_as_context_opt(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    has_chainspec: bool,
+    chainspec: Optional[chain_spec.ChainSpec],
     arg_ref: tuple[int, str]
 ) -> bool:
     matched = False
@@ -53,14 +57,17 @@ def try_parse_as_context_opt(
     elif argname == "--version":
         ctx_opts.print_version.set(True, arg_ref)
         matched = True
-    elif "help".startswith(argname):
-        ctx_opts.print_help.set(try_parse_bool_or_default(value, True, arg_ref), arg_ref)
+    elif argname == "help":
+        ctx_opts.print_help.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
         matched = True
-    elif "version".startswith(argname):
-        ctx_opts.print_version.set(try_parse_bool_or_default(value, True, arg_ref), arg_ref)
+    elif argname == "version":
+        ctx_opts.print_version.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
         matched = True
-    if matched and has_chainspec:
-        raise CliArgsParseException(arg_ref, f"cannot specify chain range for global argument")
+    if matched:
+        if label is not None:
+            raise CliArgsParseException(arg_ref, f"cannot specify label for global argument")
+        if chainspec is not None:
+            raise CliArgsParseException(arg_ref, f"cannot specify chain range for global argument")
     return matched
 
 
@@ -69,10 +76,24 @@ def try_parse_as_doc(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    chains: list['chain_options.ChainOptions'],
+    chainspec: Optional[chain_spec.ChainSpec],
     arg_ref: tuple[int, str]
 ) -> bool:
-    return False
+    doc_type = document.DocumentType.try_parse(argname)
+    if doc_type is None:
+        return False
+    if label is not None:
+        raise CliArgsParseException(arg_ref, f"cannot specify label for document")
+    if doc_type == document.DocumentType.STDIN:
+        if value is not None:
+            raise CliArgsParseException(arg_ref, f"cannot specify value for stdin document")
+    else:
+        if value is None:
+            if doc_type == document.DocumentType.STRING:
+                raise CliArgsParseException(arg_ref, f"missing value for string document")
+            raise CliArgsParseException(arg_ref, f"missing source for document")
+    docs.append(document.Document())
+    return True
 
 
 def try_parse_as_chain_opt(
@@ -80,10 +101,30 @@ def try_parse_as_chain_opt(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    chains: list['chain_options.ChainOptions'],
+    chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> bool:
-    return False
+    if "dte" == argname:
+        if value is None:
+            raise CliArgsParseException(arg_ref, "missing argument for default text encoding")
+        co.default_text_encoding.set(value, arg_ref)
+    elif "ppte" == argname:
+        co.prefer_parent_text_encoding.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
+    elif "fte" == argname:
+        co.force_text_encoding.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
+    elif "selenium".startswith(argname):
+        if value is not None:
+            sv = selenium_options.SeleniumVariant.try_parse(value)
+            if sv is None:
+                raise CliArgsParseException(arg_ref, "failed to parse selenium variant argument")
+        else:
+            sv = selenium_options.SeleniumVariant.DEFAULT
+        co.selenium_variant.set
+    elif "selds" == argname:
+        pass
+    else:
+        return False
+    return True
 
 
 def try_parse_as_transform(
@@ -91,7 +132,7 @@ def try_parse_as_transform(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    chains: list['chain_options.ChainOptions'],
+    chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> tuple[bool, 'chain_options.ChainOptions']:
     for tf in transform_catalog.TRANSFORM_CATALOG:
@@ -102,8 +143,11 @@ def try_parse_as_transform(
                 tf_inst = tf.create(label, value)
             except transform.TransformValueError as ex:
                 raise CliArgsParseException(arg_ref, *ex.args)
-            for c in chains:
-                c.transforms.append(tf_inst)
+            if chainspec is None:
+                curr_chain.transforms.append(tf_inst)
+            else:
+                for c in chainspec.instantiate(curr_chain):
+                    c.transforms.append(tf_inst)
             next_chain = tf_inst.get_next_chain(curr_chain)
             assert isinstance(next_chain, chain_options.ChainOptions)
             return True, next_chain
@@ -123,7 +167,7 @@ def parse(args: list[str]) -> tuple[chain_options.ChainOptions, list[document.Do
         for i, arg in enumerate(args[1:]):
             arg_ref = (i + 1, arg)
             if arg.startswith("-"):
-                if try_parse_as_context_opt(ctx_opts, arg, None, None, False, arg_ref):
+                if try_parse_as_context_opt(ctx_opts, arg, None, None, None, arg_ref):
                     continue
             m = CLI_ARG_REGEX.match(arg)
             if m is None:
@@ -131,20 +175,17 @@ def parse(args: list[str]) -> tuple[chain_options.ChainOptions, list[document.Do
             argname = m.group("argname")
             label = m.group("label")
             chainspec = m.group("chainspec")
+            chainspec = chain_spec.parse_chain_spec(chainspec) if chainspec is not None else None
             value = m.group("value")
-            if chainspec is not None:
-                chains = list(chain_spec.parse_chain_spec(chainspec).instantiate(curr_chain))
-            else:
-                chains = [curr_chain]
-            if try_parse_as_context_opt(ctx_opts, argname, label, value, chainspec is not None, arg_ref):
+            succ_ctx = try_parse_as_context_opt(ctx_opts, argname, label, value, chainspec, arg_ref)
+            succ_doc = try_parse_as_doc(docs, argname, label, value, chainspec, arg_ref)
+            succ_co = try_parse_as_chain_opt(root_chain, argname, label, value, chainspec, arg_ref)
+            succ_tf, curr_chain = try_parse_as_transform(curr_chain, argname, label, value, chainspec, arg_ref)
+            succ_sum = (succ_ctx + succ_doc + succ_co + succ_tf)
+            if succ_sum == 1:
                 continue
-            if try_parse_as_doc(docs, argname, label, value, chains, arg_ref):
-                continue
-            if try_parse_as_chain_opt(root_chain, argname, label, value, chains, arg_ref):
-                continue
-            success, curr_chain = try_parse_as_transform(curr_chain, argname, label, value, chains, arg_ref)
-            if success:
-                continue
+            if succ_sum > 1:
+                raise CliArgsParseException(arg_ref, f"ambiguous argument")
             raise CliArgsParseException(arg_ref, f"unknown argument")
     except scr_option.ScrOptionReassignmentError as ex:
         pass

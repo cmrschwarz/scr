@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from scr import chain, chain_options
+from scr import chain, chain_options, chain_prototype
 from scr.match import Match, MatchEager, MatchConcrete
 from typing import Optional
 
@@ -31,8 +31,8 @@ class Transform(ABC):
     def apply(self, c: 'chain.Chain', m: Match) -> Match:
         raise NotImplementedError
 
-    def get_next_chain(self, current: 'chain_options.ChainPrototype') -> Optional['chain_options.ChainPrototype']:
-        return None
+    def get_next_chain(self, current: 'chain_prototype.ChainPrototype') -> Optional['chain_prototype.ChainPrototype']:
+        return current
 
 
 class TransformEager(Transform):
