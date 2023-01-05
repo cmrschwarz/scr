@@ -16,6 +16,8 @@ class ChainOptions:
     subchains: list['ChainOptions']
     transforms: list[transform.Transform]
 
+    parent: Optional['ChainOptions']
+
     def __init__(
         self,
         default_text_encoding: Optional[str] = None,
@@ -27,13 +29,17 @@ class ChainOptions:
 
         subchains: Optional[list['ChainOptions']] = None,
         transforms: Optional[list[transform.Transform]] = None,
+        parent: Optional['ChainOptions'] = None
     ) -> None:
         self.default_text_encoding = ScrOption(default_text_encoding)
         self.prefer_parent_text_encoding = ScrOption(prefer_parent_text_encoding)
         self.force_text_encoding = ScrOption(force_text_encoding)
         self.selenium_variant = ScrOption(selenium_variant)
         self.selenium_download_strategy = ScrOption(selenium_download_strategy)
+        self.parent = parent
         self.subchains = subchains if subchains is not None else []
+        for sc in self.subchains:
+            sc.parent = self
         self.transforms = transforms if transforms is not None else []
 
 

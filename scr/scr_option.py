@@ -1,6 +1,14 @@
-from typing import Generic, TypeVar, Optional, Union
+from typing import Generic, TypeVar, Optional, Union, Any
 T = TypeVar("T")
 D = TypeVar("D")
+
+
+class ScrOptionReassignmentError(Exception):
+    originating_cli_arg: Optional[tuple[int, str]]
+
+    def __init__(self, originating_cli_arg: Optional[tuple[int, str]], *args: Any) -> None:
+        super().__init__(*args)
+        self.originating_cli_arg = originating_cli_arg
 
 
 class ScrOption(Generic[T]):
@@ -15,7 +23,7 @@ class ScrOption(Generic[T]):
 
     def set(self, value: T, cli_arg: Optional[tuple[int, str]]) -> None:
         if self.value is not None:
-            raise ValueError("attempted to reassign value of option")
+            raise ScrOptionReassignmentError(self.originating_cli_arg, "attempted to reassign value of option")
         self.value = value
         self.originating_cli_arg = cli_arg
 
@@ -59,7 +67,7 @@ class ScrOptionSet(Generic[T]):
 
     def add(self, value: T, cli_arg: Optional[tuple[int, str]]) -> None:
         if value in self.values:
-            raise ValueError("attempted to reassign value in option set")
+            raise ScrOptionReassignmentError(self.values[value], "attempted to reassign value in option set")
 
     def is_empty(self) -> bool:
         return len(self.values) == 0
