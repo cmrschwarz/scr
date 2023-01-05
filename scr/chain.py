@@ -1,7 +1,6 @@
 from scr import context, chain, chain_prototype
-import scr.selenium.selenium_context
+from scr.selenium import selenium_context, selenium_options
 from scr.transforms import transform
-from scr.selenium.selenium_options import SeleniumDownloadStrategy
 from typing import Optional
 
 
@@ -12,8 +11,8 @@ class Chain(chain_prototype.ChainPrototype):
     prefer_parent_text_encoding: bool
     force_text_encoding: bool
 
-    selenium_context: Optional['scr.selenium.selenium_context.SeleniumContext']
-    selenium_download_strategy: SeleniumDownloadStrategy
+    selenium_ctx: Optional['selenium_context.SeleniumContext']
+    selenium_download_strategy: 'selenium_options.SeleniumDownloadStrategy'
 
     transforms: list['transform.Transform']
 
@@ -27,8 +26,8 @@ class Chain(chain_prototype.ChainPrototype):
         prefer_parent_text_encoding: bool,
         force_text_encoding: bool,
 
-        selenium_context: Optional['scr.selenium.selenium_context.SeleniumContext'],
-        selenium_download_strategy: SeleniumDownloadStrategy,
+        selenium_ctx: Optional['selenium_context.SeleniumContext'],
+        selenium_download_strategy: 'selenium_options.SeleniumDownloadStrategy',
 
         transforms: list['transform.Transform'],
     ) -> None:
@@ -37,7 +36,7 @@ class Chain(chain_prototype.ChainPrototype):
         self.default_text_encoding = default_text_encoding
         self.prefer_parent_text_encoding = prefer_parent_text_encoding
         self.force_text_encoding = force_text_encoding
-        self.selelenium_context = selenium_context
+        self.selenium_ctx = selenium_ctx
         self.selenium_download_strategy = selenium_download_strategy
         self.transforms = transforms
 

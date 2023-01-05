@@ -3,32 +3,27 @@ import warnings
 import os
 import shlex
 from typing import Optional
-from scr.chain_options import ChainOptions, create_root_chain, update_chain
-from scr.context import Context
-from scr.context_options import ContextOptions, DEFAULT_CONTEXT_OPTIONS, create_context, update_context
-from scr.document import Document
-from scr.result import Result
-from scr import cli_args
+from scr import chain_options, context_options, context, document, result, cli_args
 from scr.selenium import selenium_updater
 from scr.version import SCR_VERSION, SCR_NAME
 from scr.logger import SCR_LOG
 
 
-def perform_side_tasks(opts: ContextOptions) -> None:
+def perform_side_tasks(opts: 'context_options.ContextOptions') -> None:
     for sv in opts.install_selenium_drivers.get_all():
         selenium_updater.install_selenium_driver(sv)
 
     for sv in opts.install_selenium_drivers.get_all():
         selenium_updater.update_selenium_driver(sv)
 
-    if opts.print_help.get_or_default(DEFAULT_CONTEXT_OPTIONS.print_help.get()):
+    if opts.print_help.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.print_help.get()):
         cli_args.print_help()
 
-    if opts.print_version.get_or_default(DEFAULT_CONTEXT_OPTIONS.print_version.get()):
+    if opts.print_version.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.print_version.get()):
         print(SCR_VERSION)
 
 
-def run_repl(ctx: Context, initial_args: Optional[list[str]]) -> list[Result]:
+def run_repl(ctx: 'context.Context', initial_args: Optional[list[str]]) -> list['result.Result']:
     if sys.platform == 'win32':
         from pyreadline3 import Readline
         readline: Readline = Readline()
@@ -59,8 +54,8 @@ def run_repl(ctx: Context, initial_args: Optional[list[str]]) -> list[Result]:
             except ValueError as ex:
                 SCR_LOG.error(str(ex))
                 continue
-            update_context(ctx, opts)
-            update_chain(ctx.root_chain, root_chain)
+            context_options.update_context(ctx, opts)
+            chain_options.update_chain(ctx.root_chain, root_chain)
             ctx.run(ctx.root_chain, docs)
         except KeyboardInterrupt:
             print("")
@@ -68,23 +63,25 @@ def run_repl(ctx: Context, initial_args: Optional[list[str]]) -> list[Result]:
 
 
 def run(
-    root_chain: ChainOptions,
-    docs: list[Document],
-    opts: ContextOptions = DEFAULT_CONTEXT_OPTIONS,
+    root_chain: 'chain_options.ChainOptions',
+    docs: list['document.Document'],
+    opts: Optional['context_options.ContextOptions'],
     initial_args: Optional[list[str]] = None
-) -> list[Result]:
+) -> list['result.Result']:
+    if opts is None:
+        opts = context_options.DEFAULT_CONTEXT_OPTIONS
     perform_side_tasks(opts)
-    ctx = create_context(opts)
-    rc = create_root_chain(root_chain, ctx)
+    ctx = context_options.create_context(opts)
+    rc = chain_options.create_root_chain(root_chain, ctx)
     try:
-        if opts.repl.get_or_default(DEFAULT_CONTEXT_OPTIONS.repl.get()):
+        if opts.repl.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.repl.get()):
             return run_repl(ctx, initial_args)
         return ctx.run(rc, docs)
     finally:
         ctx.finalize()
 
 
-def run_cli(args: list[str]) -> list[Result]:
+def run_cli(args: list[str]) -> list['result.Result']:
     (root_chain, docs, opts) = cli_args.parse(args)
     return run(root_chain, docs, opts)
 

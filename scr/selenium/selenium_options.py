@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional
-from scr import cli_args
+from scr import utils
 
 
 class SeleniumVariant(Enum):
@@ -21,10 +21,10 @@ class SeleniumVariant(Enum):
             if sv.name.lower().startswith(val):
                 return sv
 
-        b = cli_args.try_parse_bool(val)
-        if b == False:
+        b = utils.try_parse_bool(val)
+        if b is False:
             return SeleniumVariant.DISABLED
-        if b == True:
+        if b is True:
             return SeleniumVariant.DEFAULT
         return None
 

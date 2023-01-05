@@ -14,7 +14,7 @@ class Regex(transform.TransformEager):
     @staticmethod
     def create(label: str, value: Optional[str]) -> 'transform.Transform':
         if value is None:
-            raise transform.TransformValueError(f"missing regex argument")
+            raise transform.TransformValueError("missing regex argument")
         try:
             regex = re.compile(value, re.DOTALL | re.MULTILINE)
             return Regex(label, regex)

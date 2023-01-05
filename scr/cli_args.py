@@ -1,7 +1,7 @@
-from scr import chain_options, context_options, document, chain_spec, scr_option, version
+from scr import chain_options, context_options, document, chain_spec, scr_option, version, utils
 from scr.transforms import transform, transform_catalog
 from scr.selenium import selenium_options
-from typing import Iterable, Optional, Any
+from typing import Callable, Optional, Any
 import re
 
 
@@ -17,26 +17,10 @@ def print_help() -> None:
     print(f"{version.SCR_NAME} [OPTIONS]")  # TODO
 
 
-def str_prefixes(str: str) -> list[str]:
-    return [str[:i] for i in range(len(str), 0, -1)]
-
-
-TRUE_INDICATING_STRINGS = set([*str_prefixes("true"), *str_prefixes("yes"), "1"])
-FALSE_INDICATING_STRINGS = set([*str_prefixes("false"), *str_prefixes("no"), "0"])
-
-
-def try_parse_bool(val: str) -> Optional[bool]:
-    if val in TRUE_INDICATING_STRINGS:
-        return True
-    if val in FALSE_INDICATING_STRINGS:
-        return False
-    return None
-
-
 def try_parse_bool_arg_or_default(val: Optional[str], default: bool, arg_ref: tuple[int, str]) -> bool:
     if val is None:
         return default
-    res = try_parse_bool(val)
+    res = utils.try_parse_bool(val)
     if res is None:
         raise CliArgsParseException(arg_ref, "failed to parse as bool")
     return res
@@ -47,7 +31,7 @@ def try_parse_as_context_opt(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    chainspec: Optional[chain_spec.ChainSpec],
+    chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> bool:
     matched = False
@@ -65,9 +49,9 @@ def try_parse_as_context_opt(
         matched = True
     if matched:
         if label is not None:
-            raise CliArgsParseException(arg_ref, f"cannot specify label for global argument")
+            raise CliArgsParseException(arg_ref, "cannot specify label for global argument")
         if chainspec is not None:
-            raise CliArgsParseException(arg_ref, f"cannot specify chain range for global argument")
+            raise CliArgsParseException(arg_ref, "cannot specify chain range for global argument")
     return matched
 
 
@@ -76,52 +60,71 @@ def try_parse_as_doc(
     argname: str,
     label: Optional[str],
     value: Optional[str],
-    chainspec: Optional[chain_spec.ChainSpec],
+    chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> bool:
     doc_type = document.DocumentType.try_parse(argname)
     if doc_type is None:
         return False
     if label is not None:
-        raise CliArgsParseException(arg_ref, f"cannot specify label for document")
+        raise CliArgsParseException(arg_ref, "cannot specify label for document")
     if doc_type == document.DocumentType.STDIN:
         if value is not None:
-            raise CliArgsParseException(arg_ref, f"cannot specify value for stdin document")
+            raise CliArgsParseException(arg_ref, "cannot specify value for stdin document")
     else:
         if value is None:
             if doc_type == document.DocumentType.STRING:
-                raise CliArgsParseException(arg_ref, f"missing value for string document")
-            raise CliArgsParseException(arg_ref, f"missing source for document")
+                raise CliArgsParseException(arg_ref, "missing value for string document")
+            raise CliArgsParseException(arg_ref, "missing source for document")
     docs.append(document.Document())
     return True
 
 
 def try_parse_as_chain_opt(
-    co: 'chain_options.ChainOptions',
+    curr_chain: 'chain_options.ChainOptions',
     argname: str,
     label: Optional[str],
     value: Optional[str],
     chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> bool:
-    if "dte" == argname:
-        if value is None:
-            raise CliArgsParseException(arg_ref, "missing argument for default text encoding")
-        co.default_text_encoding.set(value, arg_ref)
-    elif "ppte" == argname:
-        co.prefer_parent_text_encoding.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
-    elif "fte" == argname:
-        co.force_text_encoding.set(try_parse_bool_arg_or_default(value, True, arg_ref), arg_ref)
-    elif "selenium".startswith(argname):
-        if value is not None:
-            sv = selenium_options.SeleniumVariant.try_parse(value)
-            if sv is None:
-                raise CliArgsParseException(arg_ref, "failed to parse selenium variant argument")
+    def apply(fn: Callable[['chain_options.ChainOptions'], None]) -> None:
+        if chainspec is None:
+            fn(curr_chain)
         else:
+            for co in chainspec.instantiate(curr_chain):
+                fn(co)
+
+    if "dte" == argname:
+        if value is not None:
+            v_ = value
+            apply(lambda co: co.default_text_encoding.set(v_, arg_ref))
+        else:
+            raise CliArgsParseException(arg_ref, "missing argument for default text encoding")
+    elif "ppte" == argname:
+        ppte = try_parse_bool_arg_or_default(value, True, arg_ref)
+        apply(lambda co: co.prefer_parent_text_encoding.set(ppte, arg_ref))
+    elif "fte" == argname:
+        fte = try_parse_bool_arg_or_default(value, True, arg_ref)
+        apply(lambda co: co.force_text_encoding.set(fte, arg_ref))
+    elif "selenium".startswith(argname):
+        if value is None:
             sv = selenium_options.SeleniumVariant.DEFAULT
-        co.selenium_variant.set
-    elif "selds" == argname:
-        pass
+        else:
+            sv_ = selenium_options.SeleniumVariant.try_parse(value)
+            if sv_ is None:
+                raise CliArgsParseException(arg_ref, "failed to parse selenium variant argument")
+            sv = sv_
+        apply(lambda co: co.selenium_variant.set(sv, arg_ref))
+    elif "sds" == argname:
+        if value is None:
+            raise CliArgsParseException(arg_ref, "missing argument for selenium download strategy")
+        else:
+            sds_ = selenium_options.SeleniumDownloadStrategy.try_parse(value)
+            if sds_ is None:
+                raise CliArgsParseException(arg_ref, "failed to parse selenium download strategy")
+            sds = sds_
+        apply(lambda co: co.selenium_download_strategy.set(sds, arg_ref))
     else:
         return False
     return True
@@ -157,7 +160,7 @@ def try_parse_as_transform(
 CLI_ARG_REGEX = re.compile("(?P<argname>[a-zA-Z_]+)(@(?P<label>[a-zA-Z_]+))?(?P<chainspec>[/0-9a-zA-Z-^]+)?(=(?P<value>.*))?")
 
 
-def parse(args: list[str]) -> tuple[chain_options.ChainOptions, list[document.Document], context_options.ContextOptions]:
+def parse(args: list[str]) -> tuple['chain_options.ChainOptions', list['document.Document'], 'context_options.ContextOptions']:
     root_chain = chain_options.ChainOptions()
     docs: list[document.Document] = []
     ctx_opts = context_options.ContextOptions()
@@ -185,8 +188,10 @@ def parse(args: list[str]) -> tuple[chain_options.ChainOptions, list[document.Do
             if succ_sum == 1:
                 continue
             if succ_sum > 1:
-                raise CliArgsParseException(arg_ref, f"ambiguous argument")
-            raise CliArgsParseException(arg_ref, f"unknown argument")
+                raise CliArgsParseException(arg_ref, "ambiguous argument")
+            raise CliArgsParseException(arg_ref, "unknown argument")
     except scr_option.ScrOptionReassignmentError as ex:
-        pass
+        arg_origin = ex.originating_cli_arg
+        assert arg_origin is not None
+        raise CliArgsParseException(arg_origin, *ex.args)
     return (root_chain, docs, ctx_opts)
