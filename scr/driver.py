@@ -3,7 +3,7 @@ import warnings
 import os
 import shlex
 from typing import Optional
-from scr import chain_options, context_options, context, document, result, cli_args, chain, process_documents
+from scr import chain_options, context_options, context, document, match, cli_args, chain, process_documents
 from scr.selenium import selenium_updater
 from scr.version import SCR_VERSION, SCR_NAME
 from scr.logger import SCR_LOG
@@ -28,7 +28,7 @@ def run_repl(
     rc: 'chain.Chain',
     docs: list['document.Document'],
     initial_args: Optional[list[str]]
-) -> list['result.Result']:
+) -> list['match.Match']:
     if sys.platform == 'win32':
         from pyreadline3 import Readline
         readline: Readline = Readline()
@@ -72,7 +72,7 @@ def run(
     docs: list['document.Document'],
     opts: Optional['context_options.ContextOptions'] = None,
     initial_args: Optional[list[str]] = None
-) -> list['result.Result']:
+) -> list['match.Match']:
     if opts is None:
         opts = context_options.DEFAULT_CONTEXT_OPTIONS
     perform_side_tasks(opts)
@@ -86,7 +86,7 @@ def run(
         ctx.finalize()
 
 
-def run_cli(args: list[str]) -> list['result.Result']:
+def run_cli(args: list[str]) -> list['match.Match']:
     (root_chain, docs, opts) = cli_args.parse(args)
     return run(root_chain, docs, opts)
 

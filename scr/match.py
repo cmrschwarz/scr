@@ -116,9 +116,14 @@ class MatchList(MatchEager):
     def resolved_type(self) -> Type[MatchEager]:
         return MatchList
 
+    def append(self, match: Match) -> None:
+        # we maintain the invariant that matchlists never contain matchlists
+        assert not isinstance(match, MatchList)
+        self.matches.append(match)
+
     def append_flatten(self, match: Match) -> None:
         if isinstance(match, MatchList):
-            self.extend_flatten(match.matches)
+            self.matches.extend(match.matches)
         else:
             self.matches.append(match)
 
@@ -161,8 +166,8 @@ class MultiMatchBuilder:
             self._res.matches.append(m)
         else:
             ml = MatchList(self._parent)
-            ml.matches.append(self._res)
-            ml.matches.append(m)
+            ml.append(self._res)
+            ml.append(m)
             self._res = ml
 
     def append_flatten(self, m: MatchEager) -> None:
@@ -172,7 +177,7 @@ class MultiMatchBuilder:
             self._res.append_flatten(m)
         else:
             ml = MatchList(self._parent)
-            ml.matches.append(self._res)
+            ml.append(self._res)
             ml.append_flatten(m)
             self._res = ml
 
@@ -229,7 +234,7 @@ class MatchFutureFuture(MatchFuture):
 
 class MatchFutureEager(Match):
     base: Match
-    fn: Callable[[MatchConcrete], MatchEager]
+    # fn: Callable[[MatchConcrete], MatchEager]
     executor: concurrent.futures.Executor
 
     def __init__(

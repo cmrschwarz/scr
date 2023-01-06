@@ -38,6 +38,30 @@ class ChainSpecCurrent(ChainSpec):
         yield base
 
 
+class ChainSpecSibling(ChainSpec):
+    relative_sibling_index: int
+
+    def __init__(self, relative_sibling_index: int):
+        self.relative_sibling_index = relative_sibling_index
+
+    def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
+        parent = base.parent
+        assert parent is not None
+        idx = parent.subchains.index(base)
+        tgt_index = idx + self.relative_sibling_index
+        if tgt_index >= len(parent.subchains):
+            parent.subchains.extend((chain_options.ChainOptions(parent=base) for _ in range(len(parent.subchains), tgt_index)))
+        yield parent.subchains[tgt_index]
+
+    def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
+        parent = base.parent
+        assert parent is not None
+        idx = parent.subchains.index(base)
+        tgt_index = idx + self.relative_sibling_index
+        assert tgt_index < len(parent.subchains)
+        yield parent.subchains[tgt_index]
+
+
 class ChainSpecRoot(ChainSpec):
     rhs: ChainSpec
 
