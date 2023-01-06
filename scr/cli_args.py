@@ -56,6 +56,8 @@ def try_parse_as_context_opt(
 
 
 def try_parse_as_doc(
+    root_chain: 'chain_options.ChainOptions',
+    curr_chain: 'chain_options.ChainOptions',
     docs: list['document.Document'],
     argname: str,
     label: Optional[str],
@@ -63,20 +65,26 @@ def try_parse_as_doc(
     chainspec: Optional['chain_spec.ChainSpec'],
     arg_ref: tuple[int, str]
 ) -> bool:
-    doc_type = document.DocumentType.try_parse(argname)
-    if doc_type is None:
+    doc_source = document.DocumentSource.try_parse_type(argname)
+    if doc_source is None:
         return False
     if label is not None:
         raise CliArgsParseException(arg_ref, "cannot specify label for document")
-    if doc_type == document.DocumentType.STDIN:
+    if doc_source == document.DocumentSourceStdin:
         if value is not None:
             raise CliArgsParseException(arg_ref, "cannot specify value for stdin document")
     else:
         if value is None:
-            if doc_type == document.DocumentType.STRING:
+            if doc_source == document.DocumentSourceString:
                 raise CliArgsParseException(arg_ref, "missing value for string document")
             raise CliArgsParseException(arg_ref, "missing source for document")
-    docs.append(document.Document())
+    cs = chainspec if chainspec is not None else chain_spec.ChainSpecCurrent()
+
+    docs.append(document.Document(
+        doc_source.from_str(value),
+        document.DocumentReferencePointNone(),
+        cs.rebase(curr_chain, root_chain))
+    )
     return True
 
 
@@ -181,7 +189,7 @@ def parse(args: list[str]) -> tuple['chain_options.ChainOptions', list['document
             chainspec = chain_spec.parse_chain_spec(chainspec) if chainspec is not None else None
             value = m.group("value")
             succ_ctx = try_parse_as_context_opt(ctx_opts, argname, label, value, chainspec, arg_ref)
-            succ_doc = try_parse_as_doc(docs, argname, label, value, chainspec, arg_ref)
+            succ_doc = try_parse_as_doc(root_chain, curr_chain, docs, argname, label, value, chainspec, arg_ref)
             succ_co = try_parse_as_chain_opt(root_chain, argname, label, value, chainspec, arg_ref)
             succ_tf, curr_chain = try_parse_as_transform(curr_chain, argname, label, value, chainspec, arg_ref)
             succ_sum = (succ_ctx + succ_doc + succ_co + succ_tf)

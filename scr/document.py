@@ -33,7 +33,7 @@ class DocumentReferencePointNone(DocumentReferencePoint):
 
 class DocumentSource(ABC):
     @staticmethod
-    def try_parse(val: str) -> Optional[Type['DocumentSource']]:
+    def try_parse_type(val: str) -> Optional[Type['DocumentSource']]:
         if "url".startswith(val):
             return DocumentSourceUrl
         if "file".startswith(val):
@@ -42,6 +42,7 @@ class DocumentSource(ABC):
             return DocumentSourceString
         if "stdin".startswith(val):
             return DocumentSourceStdin
+        return None
 
     @abstractmethod
     def display_path(self) -> str:
@@ -49,6 +50,11 @@ class DocumentSource(ABC):
 
     @abstractmethod
     def natural_reference_point(self) -> DocumentReferencePoint:
+        raise NotImplementedError
+
+    @staticmethod
+    @abstractmethod
+    def from_str(val: Optional[str]) -> 'DocumentSource':
         raise NotImplementedError
 
 
@@ -69,6 +75,11 @@ class DocumentSourceUrl(DocumentSource):
     def natural_reference_point(self) -> DocumentReferencePoint:
         raise NotImplementedError  # TODO
 
+    @staticmethod
+    def from_str(val: Optional[str]) -> 'DocumentSource':
+        assert val is not None
+        return DocumentSourceUrl(val)
+
 
 class DocumentSourceFile(DocumentSource):
     path: str
@@ -80,15 +91,30 @@ class DocumentSourceFile(DocumentSource):
         return self.path
 
     def natural_reference_point(self) -> DocumentReferencePoint:
-        return self.url_str
+        return DocumentReferencePointFolder(self.path)
+
+    @staticmethod
+    def from_str(val: Optional[str]) -> 'DocumentSource':
+        assert val is not None
+        return DocumentSourceFile(val)
 
 
 class DocumentSourceString(DocumentSource):
+    value: str
+
+    def __init__(self, val: str) -> None:
+        self.value = val
+
     def display_path(self) -> str:
         return "<string>"
 
     def natural_reference_point(self) -> DocumentReferencePoint:
         return DocumentReferencePointNone()
+
+    @staticmethod
+    def from_str(val: Optional[str]) -> 'DocumentSource':
+        assert val is not None
+        return DocumentSourceString(val)
 
 
 class DocumentSourceStdin(DocumentSource):
@@ -97,6 +123,11 @@ class DocumentSourceStdin(DocumentSource):
 
     def natural_reference_point(self) -> DocumentReferencePoint:
         return DocumentReferencePointNone()
+
+    @staticmethod
+    def from_str(val: Optional[str]) -> 'DocumentSource':
+        assert val is None
+        return DocumentSourceStdin()
 
 
 class Document:

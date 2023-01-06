@@ -1,5 +1,4 @@
 from scr import context, chain, document, result
-from collections import deque
 
 
 def fetch_doc(ctx: 'context.Context', doc: 'document.Document') -> str:
@@ -13,6 +12,7 @@ def process_documents(ctx: 'context.Context', rc: 'chain.Chain', docs: list['doc
     while ctx.documents:
         doc = ctx.documents.popleft()
         doc_text = fetch_doc(ctx, doc)
-        for c in doc.chains:
+        for c in doc.applied_chains.iter():
+            c = 1
 
     return []

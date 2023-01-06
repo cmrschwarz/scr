@@ -3,7 +3,7 @@ import warnings
 import os
 import shlex
 from typing import Optional
-from scr import chain_options, context_options, context, document, result, cli_args, chain
+from scr import chain_options, context_options, context, document, result, cli_args, chain, process_documents
 from scr.selenium import selenium_updater
 from scr.version import SCR_VERSION, SCR_NAME
 from scr.logger import SCR_LOG
@@ -61,7 +61,7 @@ def run_repl(
                 continue
             context_options.update_context(ctx, opts)
             chain_options.update_chain(rc, root_chain)
-            process_documents(ctx, rc, docs)
+            process_documents.process_documents(ctx, rc, docs)
         except KeyboardInterrupt:
             print("")
             continue
@@ -81,7 +81,7 @@ def run(
     try:
         if opts.repl.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.repl.get()):
             return run_repl(ctx, rc, docs, initial_args)
-        return process_documents(ctx, rc, docs)
+        return process_documents.process_documents(ctx, rc, docs)
     finally:
         ctx.finalize()
 
