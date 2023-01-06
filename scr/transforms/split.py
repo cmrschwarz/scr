@@ -1,9 +1,9 @@
 from scr.transforms import transform
-from scr import chain_spec, chain, chain_options, match
+from scr import chain_spec, chain, chain_options, match, range_spec
 from typing import Optional
 
 
-class Next(transform.Transform):
+class Split(transform.Transform):
     target: 'chain_spec.ChainSpec'
 
     @staticmethod
@@ -13,9 +13,9 @@ class Next(transform.Transform):
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
-            return Next(label, chain_spec.ChainSpecSibling(1))
+            return Split(label, chain_spec.ChainSpecSubrange(range_spec.RangeSpecBounds(None, None), chain_spec.ChainSpecCurrent()))
         try:
-            return Next(label, chain_spec.parse_chain_spec(value))
+            return Split(label, chain_spec.parse_chain_spec(value))
         except chain_spec.ChainSpecParseException as ex:
             raise transform.TransformValueError(f"invalid range for 'next': {ex}")
 

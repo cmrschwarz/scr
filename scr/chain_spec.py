@@ -2,6 +2,7 @@
 from typing import Iterable, Optional
 from abc import ABC, abstractmethod
 from scr import chain, range_spec, chain_options, chain_prototype
+import copy
 
 
 class ChainSpecParseException(Exception):
@@ -29,6 +30,16 @@ class ChainSpec(ABC):
         else:
             return ChainSpecParent(up_count, self)
 
+    def append(self, cs: 'ChainSpec') -> 'ChainSpec':
+        if isinstance(self, ChainSpecCurrent):
+            return cs
+        assert isinstance(self, ChainSpecNonTerminal)
+        self.rhs = self.rhs.append(cs)
+        return self
+
+    def clone(self) -> 'ChainSpec':
+        return copy.deepcopy(self)
+
 
 class ChainSpecCurrent(ChainSpec):
     def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
@@ -38,10 +49,18 @@ class ChainSpecCurrent(ChainSpec):
         yield base
 
 
-class ChainSpecSibling(ChainSpec):
+class ChainSpecNonTerminal(ChainSpec):
+    rhs: ChainSpec
+
+    def __init__(self, rhs: ChainSpec) -> None:
+        self.rhs = rhs
+
+
+class ChainSpecSibling(ChainSpecNonTerminal):
     relative_sibling_index: int
 
-    def __init__(self, relative_sibling_index: int):
+    def __init__(self, relative_sibling_index: int, rhs: ChainSpec):
+        super().__init__(rhs)
         self.relative_sibling_index = relative_sibling_index
 
     def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
@@ -51,7 +70,7 @@ class ChainSpecSibling(ChainSpec):
         tgt_index = idx + self.relative_sibling_index
         if tgt_index >= len(parent.subchains):
             parent.subchains.extend((chain_options.ChainOptions(parent=base) for _ in range(len(parent.subchains), tgt_index)))
-        yield parent.subchains[tgt_index]
+        yield from self.rhs.instantiate(parent.subchains[tgt_index])
 
     def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
         parent = base.parent
@@ -59,14 +78,14 @@ class ChainSpecSibling(ChainSpec):
         idx = parent.subchains.index(base)
         tgt_index = idx + self.relative_sibling_index
         assert tgt_index < len(parent.subchains)
-        yield parent.subchains[tgt_index]
+        yield from self.rhs.iter(parent.subchains[tgt_index])
 
 
-class ChainSpecRoot(ChainSpec):
+class ChainSpecRoot(ChainSpecNonTerminal):
     rhs: ChainSpec
 
     def __init__(self, rhs: ChainSpec):
-        self.rhs = rhs
+        super().__init__(rhs)
 
     def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
         while base.parent is not None:
@@ -79,12 +98,11 @@ class ChainSpecRoot(ChainSpec):
         yield base
 
 
-class ChainSpecParent(ChainSpec):
+class ChainSpecParent(ChainSpecNonTerminal):
     up_count: int
-    rhs: 'ChainSpec'
 
     def __init__(self, up_count: int, rhs: 'ChainSpec'):
-        super().__init__()
+        super().__init__(rhs)
         self.up_count = up_count
         self.rhs = rhs
 
@@ -101,14 +119,12 @@ class ChainSpecParent(ChainSpec):
         yield from self.rhs.iter(base)
 
 
-class ChainSpecSubrange(ChainSpec):
+class ChainSpecSubrange(ChainSpecNonTerminal):
     subchain_range: 'range_spec.RangeSpec'
-    rhs: ChainSpec
 
     def __init__(self, subchain_range: 'range_spec.RangeSpec', rhs: ChainSpec) -> None:
-        super().__init__()
+        super().__init__(rhs)
         self.subchain_range = subchain_range
-        self.rhs = rhs
 
     def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
         explicit_max = self.subchain_range.explicit_max()

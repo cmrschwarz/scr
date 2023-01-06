@@ -1,5 +1,5 @@
 from typing import Optional
-from scr.transforms import transform
+from scr.transforms import transform, transform_ref
 from scr.selenium import selenium_options, selenium_context
 from scr.scr_option import ScrOption
 from scr import chain, context, chain_prototype
@@ -15,6 +15,8 @@ class ChainOptions(chain_prototype.ChainPrototype):
 
     subchains: list['ChainOptions']
     transforms: list['transform.Transform']
+
+    cha: ScrOption['selenium_options.SeleniumVariant']
 
     parent: Optional['ChainOptions']
 
@@ -37,6 +39,7 @@ class ChainOptions(chain_prototype.ChainPrototype):
         self.selenium_variant = ScrOption(selenium_variant)
         self.selenium_download_strategy = ScrOption(selenium_download_strategy)
         self.parent = parent
+        self.aggregation_targets = ScrOption(None)
         self.subchains = subchains if subchains is not None else []
         for sc in self.subchains:
             sc.parent = self

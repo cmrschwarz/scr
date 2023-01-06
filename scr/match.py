@@ -3,6 +3,8 @@ from typing import BinaryIO, Optional, Type, Callable
 from abc import ABC, abstractmethod
 import concurrent.futures
 from concurrent.futures import Future
+from scr import chain
+from scr.transforms import transform_ref
 
 
 class Match(ABC):
@@ -117,8 +119,6 @@ class MatchList(MatchEager):
         return MatchList
 
     def append(self, match: Match) -> None:
-        # we maintain the invariant that matchlists never contain matchlists
-        assert not isinstance(match, MatchList)
         self.matches.append(match)
 
     def append_flatten(self, match: Match) -> None:
@@ -150,6 +150,57 @@ class MatchList(MatchEager):
         for m in self.matches:
             ml.matches.append(m.apply_lazy(executor, fn))
         return ml
+
+
+class MatchMultiChainAggregate(MatchEager):
+    results: dict['chain.Chain', Match]
+
+    def __init__(self, parent: Optional[Match]):
+        super().__init__(parent)
+        self.results = {}
+
+    def append(self, cn: 'chain.Chain', match: Match) -> None:
+        assert cn not in self.results
+        self.results[cn] = match
+
+    def apply_eager(
+        self,
+        executor: concurrent.futures.Executor,
+        fn: Callable[[MatchConcrete], MatchEager]
+    ) -> MatchEager:
+        raise ValueError("cannot apply on MatchMultiChainAggregate")
+
+    def apply_lazy(
+        self,
+        executor: concurrent.futures.Executor,
+        fn: Callable[[MatchConcrete], MatchEager]
+    ) -> Match:
+        raise ValueError("cannot apply on MatchMultiChainAggregate")
+
+
+class MatchControlFlowRedirect(MatchEager):
+    target: 'transform_ref.TransformRef'
+
+    def __init__(self, target: 'transform_ref.TransformRef', parent: Optional[Match]):
+        super().__init__(parent)
+        self.target = target
+
+    def resolved_type(self) -> Type[MatchEager]:
+        return MatchControlFlowRedirect
+
+    def apply_eager(
+        self,
+        executor: concurrent.futures.Executor,
+        fn: Callable[[MatchConcrete], MatchEager]
+    ) -> MatchEager:
+        raise ValueError("cannot apply on MatchControlFlowRedirect")
+
+    def apply_lazy(
+        self,
+        executor: concurrent.futures.Executor,
+        fn: Callable[[MatchConcrete], MatchEager]
+    ) -> Match:
+        raise ValueError("cannot apply on MatchControlFlowRedirect")
 
 
 class MultiMatchBuilder:

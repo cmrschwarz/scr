@@ -13,7 +13,7 @@ class Sleep(transform.TransformLazy):
         return "sleep".startswith(name)
 
     @staticmethod
-    def create(label: str, value: Optional[str]) -> 'transform.Transform':
+    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
             raise transform.TransformValueError("missing sleep time argument")
         try:

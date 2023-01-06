@@ -1,6 +1,6 @@
 from scr import context, chain, chain_prototype
 from scr.selenium import selenium_context, selenium_options
-from scr.transforms import transform
+from scr.transforms import transform, transform_ref
 from typing import Optional
 
 
@@ -17,6 +17,8 @@ class Chain(chain_prototype.ChainPrototype):
     transforms: list['transform.Transform']
 
     subchains: list['chain.Chain']
+
+    aggregation_targets: Optional['transform_ref.TransformRef']
 
     def __init__(
         self,

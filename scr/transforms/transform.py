@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from scr import chain, chain_options, chain, match
+from scr import chain, chain_options, chain, match, chain_spec
 from typing import Optional
 
 
@@ -15,7 +15,7 @@ class Transform(ABC):
 
     @staticmethod
     @abstractmethod
-    def create(label: str, value: Optional[str]) -> 'Transform':
+    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'Transform':
         raise NotImplementedError
 
     @staticmethod
