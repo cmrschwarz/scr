@@ -193,7 +193,7 @@ def parse_chain_spec(cs: str, parent_cs: Optional[str] = None) -> ChainSpec:
         if up_count > 0:
             return ChainSpecParent(up_count, rhs)
     try:
-        range = range_spec.parse_range_spec(cs, parent_cs)
+        rng = range_spec.parse_range_spec(cs, parent_cs)
     except range_spec.RangeSpecParseException as ex:
         raise ChainSpecParseException(*ex.args)
-    return ChainSpecSubrange(range, rhs)
+    return ChainSpecSubrange(rng, rhs)

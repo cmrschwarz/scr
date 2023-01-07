@@ -33,5 +33,7 @@ def process_documents(ctx: 'context.Context', rc: 'chain.Chain', docs: list['doc
                     results.append(m)
         if not match_queue and not ctx.documents:
             break
-
+    results_eager = []
+    for r in results:
+        results_eager.append(r.result())
     return results

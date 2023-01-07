@@ -1,5 +1,3 @@
-import os
-from types import TracebackType
 import lxml.html
 from typing import BinaryIO, Optional, Type, Callable
 from abc import ABC, abstractmethod
@@ -7,6 +5,7 @@ import concurrent.futures
 from concurrent.futures import Future
 from scr import chain
 from scr.transforms import transform_ref
+import threading
 import tempfile
 
 
@@ -29,7 +28,7 @@ class Match(ABC):
     @abstractmethod
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[['MatchConcrete'], 'MatchEager']
     ) -> 'Match':
         raise NotImplementedError
@@ -54,14 +53,14 @@ class Match(ABC):
 
 
 class MatchEager(Match):
-    def result(self, executor: concurrent.futures.Executor) -> 'MatchEager':
+    def result(self) -> 'MatchEager':
         return self
 
     # tighter bound on the return type: now MatchEager
     @abstractmethod
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[['MatchConcrete'], 'MatchEager']
     ) -> 'MatchEager':
         raise NotImplementedError
@@ -70,7 +69,7 @@ class MatchEager(Match):
 class MatchConcrete(MatchEager):
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[['MatchConcrete'], MatchEager]
     ) -> MatchEager:
         return fn(self)
@@ -175,7 +174,7 @@ class MatchDataStreamUnbacked(MatchDataStream):
     def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
         self.user_count += 1
         if self.user_count > 1:
-            return MatchFuture(self, MatchData, executor.submit(self.make_file_backed))
+            return MatchFutureSubmitted(self, MatchData, executor.submit(self.make_file_backed))
         return self
 
     def take_stream(self) -> BinaryIO:
@@ -216,7 +215,7 @@ class MatchList(MatchEager):
 
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> MatchEager:
         ml = MatchList(self)
@@ -256,7 +255,7 @@ class MatchMultiChainAggregate(MatchEager):
 
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> MatchEager:
         raise ValueError("cannot apply on MatchMultiChainAggregate")
@@ -281,7 +280,7 @@ class MatchControlFlowRedirect(MatchEager):
 
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> MatchEager:
         raise ValueError("cannot apply on MatchControlFlowRedirect")
@@ -341,17 +340,18 @@ class MatchFuture(Match, ABC):
 
     def apply_eager(
         self,
-        executor: concurrent.futures.Executor,
+        executor: Optional[concurrent.futures.Executor],
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> Match:
-        return MatchEagerOnFuture(self, self, fn)
+        assert executor is not None
+        return MatchEagerOnFuture(self, executor, fn)
 
     def apply_lazy(
         self,
         executor: concurrent.futures.Executor,
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> Match:
-        return MatchFutureOnFuture(self, self, executor, fn)
+        return MatchFutureOnFuture(self, executor, fn)
 
     @abstractmethod
     def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
@@ -374,39 +374,8 @@ class MatchFutureSubmitted(MatchFuture):
 
 class MatchEagerOnFuture(MatchFuture):
     parent: MatchFuture
+    res_lock: threading.Lock
     res: Optional[MatchEager] = None
-    fn: Callable[[MatchConcrete], MatchEager]
-    done_callbacks: list[Callable[[MatchEager], None]]
-
-    def __init__(
-        self,
-        parent: MatchFuture,
-        fn: Callable[[MatchConcrete], MatchEager]
-    ):
-        super().__init__(parent, parent.res_type())
-        self.fn = fn
-        self.parent.add_done_callback(self.run)
-
-    def run(self, parent_result: MatchEager) -> None:
-        self.res = parent_result.apply_eager(self.fn)
-        for dc in self.done_callbacks:
-            dc(self.res)
-
-    def result(self) -> MatchEager:
-        self.parent.result()
-        return self.res
-
-    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
-        # TODO: think about thread safety here?
-        if self.res is None:
-            self.done_callbacks.append(cb)
-        else:
-            cb(self.res)
-
-
-class MatchFutureOnFuture(MatchFuture):
-    parent: MatchFuture
-    future: Optional[Future[MatchEager]]
     fn: Callable[[MatchConcrete], MatchEager]
     done_callbacks: list[Callable[[MatchEager], None]]
 
@@ -416,23 +385,79 @@ class MatchFutureOnFuture(MatchFuture):
         executor: concurrent.futures.Executor,
         fn: Callable[[MatchConcrete], MatchEager]
     ):
-        super().__init__(parent, parent.res_type())
+        super().__init__(parent, parent.resolved_type())
         self.fn = fn
+        self.res_lock = threading.Lock()
+        self.done_callbacks = []
         self.parent.add_done_callback(lambda result: self.run(result, executor))
 
     def run(self, parent_result: MatchEager, executor: concurrent.futures.Executor) -> None:
-        self.future = executor.submit(self.fn, parent_result)
+        r = parent_result.apply_eager(executor, self.fn)
+        with self.res_lock:
+            self.res = r
         for dc in self.done_callbacks:
-            self.future.add_done_callback(dc)
+            dc(self.res)
 
     def result(self) -> MatchEager:
         self.parent.result()
-        assert self.future is not None
-        return self.future.result()
+        assert self.res is not None
+        return self.res
+
+    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
+        with self.res_lock:
+            r = self.res
+        if r is None:
+            self.done_callbacks.append(cb)
+        else:
+            cb(r)
+
+
+class MatchFutureOnFuture(MatchFuture):
+    parent: MatchFuture
+    future: Optional[Future[MatchEager]]
+    fn: Callable[[MatchConcrete], MatchEager]
+    future_lock: threading.Lock
+    done_cv: threading.Condition
+    done_callbacks: list[Callable[[MatchEager], None]]
+
+    def __init__(
+        self,
+        parent: MatchFuture,
+        executor: concurrent.futures.Executor,
+        fn: Callable[[MatchConcrete], MatchEager]
+    ):
+        super().__init__(parent, parent.resolved_type())
+        self.fn = fn
+        self.future = None
+        self.future_lock = threading.Lock()
+        self.done_cv = threading.Condition(lock=self.future_lock)
+        self.done_callbacks = []
+        self.parent.add_done_callback(lambda result: self.run(result, executor))
+
+    def run(self, parent_result: MatchEager, executor: concurrent.futures.Executor) -> None:
+        fut = executor.submit(lambda: parent_result.apply_eager(None, self.fn))
+        with self.future_lock:
+            self.future = fut
+
+        for dc in self.done_callbacks:
+            self.future.add_done_callback(lambda ft: dc(ft.result()))
+        self.done_callbacks.clear()
+
+    def result(self) -> MatchEager:
+        self.parent.result()
+        with self.done_cv:
+            self.done_cv.wait()
+        with self.future_lock:
+            fut = self.future
+        assert fut is not None
+        return fut.result()
 
     def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
         # TODO: think about thread safety here?
+        self.future_lock.acquire()
         if self.future is None:
             self.done_callbacks.append(cb)
+            self.future_lock.release()
         else:
-            self.future.add_done_callback(cb)
+            self.future_lock.release()
+            self.future.add_done_callback(lambda ft: cb(ft.result()))

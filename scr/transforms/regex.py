@@ -1,5 +1,5 @@
 from scr.transforms import transform
-from scr.match import MatchConcrete, MatchEager, MultiMatchBuilder, MatchText
+from scr import match, chain_spec
 import re
 from typing import Optional
 
@@ -25,16 +25,16 @@ class Regex(transform.TransformEager):
         super().__init__(label)
         self.regex = regex
 
-    def apply_concrete(self, m: MatchConcrete) -> MatchEager:
-        if not isinstance(m, MatchText):
+    def apply_concrete(self, m: 'match.MatchConcrete') -> 'match.MatchEager':
+        if not isinstance(m, match.MatchText):
             raise ValueError("the regex transform only works on text")
-        mmb = MultiMatchBuilder(m)
+        mmb = match.MultiMatchBuilder(m)
         for re_match in self.regex.finditer(m.text):
             text = re_match.group(0)
-            mres = MatchText(m, text if text is not None else "")
+            mres = match.MatchText(m, text if text is not None else "")
             for k, v in re_match.groupdict().items():
-                mres.args[k] = MatchText(m, v if v is not None else "")
+                mres.args[k] = match.MatchText(m, v if v is not None else "")
             for i, g in enumerate(re_match.groups()):
-                mres.args[self.label + str(i)] = MatchText(m, g if g is not None else "")
+                mres.args[self.label + str(i)] = match.MatchText(m, g if g is not None else "")
             mmb.append(mres)
         return mmb.result()

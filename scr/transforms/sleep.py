@@ -1,5 +1,5 @@
 from scr.transforms import transform
-from scr.match import MatchConcrete, MatchEager
+from scr import chain_spec, match
 from typing import Optional
 import time
 import math
@@ -26,7 +26,8 @@ class Sleep(transform.TransformLazy):
 
     def __init__(self, label: str, sleep_time_seconds: float) -> None:
         super().__init__(label)
+        self.sleep_time_seconds = sleep_time_seconds
 
-    def apply_concrete(self, m: MatchConcrete) -> MatchEager:
+    def apply_concrete(self, m: match.MatchConcrete) -> match.MatchEager:
         time.sleep(self.sleep_time_seconds)
         return m

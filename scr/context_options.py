@@ -37,7 +37,7 @@ class ContextOptions:
 
 
 DEFAULT_CONTEXT_OPTIONS = ContextOptions(
-    parallel_jobs=multiprocessing.cpu_count(),
+    parallel_jobs=2,  # multiprocessing.cpu_count(),
     progress_report=True,
     install_selenium_drivers=None,
     update_selenium_drivers=None,
