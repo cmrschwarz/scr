@@ -24,18 +24,11 @@ class ChainSpec(ABC):
             assert curr_base.parent is not None
             curr_base = curr_base.parent
             up_count += 1
-        if isinstance(self, ChainSpecParent):
-            self.up_count += up_count
-            return self
-        else:
-            return ChainSpecParent(up_count, self)
+        return ChainSpecParent(up_count, self)
 
+    @abstractmethod
     def append(self, cs: 'ChainSpec') -> 'ChainSpec':
-        if isinstance(self, ChainSpecCurrent):
-            return cs
-        assert isinstance(self, ChainSpecNonTerminal)
-        self.rhs = self.rhs.append(cs)
-        return self
+        raise NotImplementedError
 
     def clone(self) -> 'ChainSpec':
         return copy.deepcopy(self)
@@ -48,12 +41,39 @@ class ChainSpecCurrent(ChainSpec):
     def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
         yield base
 
+    def append(self, cs: 'ChainSpec') -> 'ChainSpec':
+        return cs
+
+
+class ChainSpecMult(ChainSpec):
+    rhs_mult: list[ChainSpec]
+
+    def __init__(self, rhs_mult: list[ChainSpec]) -> None:
+        self.rhs_mult = rhs_mult
+
+    def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
+        for cs in self.rhs_mult:
+            yield from cs.instantiate(base)
+
+    def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
+        for cs in self.rhs_mult:
+            yield from cs.iter(base)
+
+    def append(self, cs: 'ChainSpec') -> 'ChainSpec':
+        for cs in self.rhs_mult:
+            cs = cs.append(cs)
+        return self
+
 
 class ChainSpecNonTerminal(ChainSpec):
     rhs: ChainSpec
 
     def __init__(self, rhs: ChainSpec) -> None:
         self.rhs = rhs
+
+    def append(self, cs: 'ChainSpec') -> 'ChainSpec':
+        self.rhs = self.rhs.append(cs)
+        return self
 
 
 class ChainSpecSibling(ChainSpecNonTerminal):
@@ -117,6 +137,16 @@ class ChainSpecParent(ChainSpecNonTerminal):
             assert base.parent is not None
             base = base.parent
         yield from self.rhs.iter(base)
+
+    def rebase(self, curr_base: 'chain_prototype.ChainPrototype', new_base: 'chain_prototype.ChainPrototype') -> 'ChainSpec':
+        up_count = 0
+        while curr_base != new_base:
+            assert curr_base.parent is not None
+            curr_base = curr_base.parent
+            up_count += 1
+
+        self.up_count += up_count
+        return self
 
 
 class ChainSpecSubrange(ChainSpecNonTerminal):

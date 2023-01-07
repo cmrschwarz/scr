@@ -13,7 +13,7 @@ class Next(transform.Transform):
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
-            return Next(label, chain_spec.ChainSpecSibling(1))
+            return Next(label, chain_spec.ChainSpecSibling(1, chain_spec.ChainSpecCurrent()))
         try:
             return Next(label, chain_spec.parse_chain_spec(value))
         except chain_spec.ChainSpecParseException as ex:
@@ -21,6 +21,7 @@ class Next(transform.Transform):
 
     def __init__(self, label: str, target: 'chain_spec.ChainSpec') -> None:
         super().__init__(label)
+        self.target = target
 
     def apply(self, c: 'chain.Chain', m: 'match.Match') -> 'match.Match':
         return m

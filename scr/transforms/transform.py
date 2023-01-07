@@ -7,6 +7,24 @@ class TransformValueError(Exception):
     pass
 
 
+class TransformSetupError(Exception):
+    cn: 'chain.Chain'
+    tf: 'Transform'
+    tf_index: int
+
+    def __init__(
+        self,
+        cn: 'chain.Chain',
+        tf: 'Transform',
+        tf_index: int,
+        *args: object
+    ) -> None:
+        super().__init__(*args)
+        self.cn = cn
+        self.tf = tf
+        self.tf_index = tf_index
+
+
 class Transform(ABC):
     label: str
 
@@ -32,6 +50,9 @@ class Transform(ABC):
 
     def get_next_chain_context(self, current: 'chain_options.ChainOptions') -> 'chain_options.ChainOptions':
         return current
+
+    def setup(self, cn: 'chain.Chain', transform_index: int) -> 'Transform':
+        return self
 
 
 class TransformEager(Transform):

@@ -18,7 +18,7 @@ class Chain(chain_prototype.ChainPrototype):
 
     subchains: list['chain.Chain']
 
-    aggregation_targets: Optional['transform_ref.TransformRef']
+    aggregation_targets: list['transform_ref.TransformRef']
 
     def __init__(
         self,
@@ -41,6 +41,17 @@ class Chain(chain_prototype.ChainPrototype):
         self.selenium_ctx = selenium_ctx
         self.selenium_download_strategy = selenium_download_strategy
         self.transforms = transforms
+        self.aggregation_targets = []
 
     def set_subchains(self, subchains: list['Chain']) -> None:
         self.subchains = subchains
+
+    def root(self) -> 'Chain':
+        cn = self
+        while cn.parent is not None:
+            cn = cn.parent
+        return cn
+
+    def setup(self) -> None:
+        for i in range(0, len(self.transforms)):
+            self.transforms[i] = self.transforms[i].setup(self, i)
