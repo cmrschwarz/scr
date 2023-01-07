@@ -1,7 +1,7 @@
 from scr import context, chain, chain_prototype
 from scr.selenium import selenium_context, selenium_options
 from scr.transforms import transform, transform_ref
-from typing import Optional
+from typing import Optional, cast
 
 
 class Chain(chain_prototype.ChainPrototype):
@@ -47,10 +47,7 @@ class Chain(chain_prototype.ChainPrototype):
         self.subchains = subchains
 
     def root(self) -> 'Chain':
-        cn = self
-        while cn.parent is not None:
-            cn = cn.parent
-        return cn
+        return cast(Chain, super().root())
 
     def setup(self) -> None:
         for i in range(0, len(self.transforms)):

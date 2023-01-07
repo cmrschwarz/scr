@@ -43,14 +43,14 @@ class Match(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def result(self, executor: concurrent.futures.Executor) -> 'MatchEager':
+    def result(self) -> 'MatchEager':
         raise NotImplementedError
 
     def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
         return self
 
     def add_stream_user(self, executor: concurrent.futures.Executor) -> None:
-        self.apply_now(lambda m: m._add_user_if_stream())
+        self.apply_now(lambda m: m._add_user_if_stream(executor))
 
 
 class MatchEager(Match):
@@ -80,7 +80,7 @@ class MatchConcrete(MatchEager):
         executor: concurrent.futures.Executor,
         fn: Callable[['MatchConcrete'], MatchEager]
     ) -> Match:
-        return MatchFuture(self, self.resolved_type(), executor.submit(fn, self))
+        return MatchFutureSubmitted(self, self.resolved_type(), executor.submit(fn, self))
 
     def resolved_type(self) -> Type['MatchEager']:
         return self.__class__
@@ -138,18 +138,9 @@ class MatchDataStreamFileBacked(MatchDataStream):
     filename: str
     streams: list[BinaryIO] = []
 
-    def __init__(self, parent: Optional['Match'], data_stream: BinaryIO, user_count: int):
+    def __init__(self, parent: Optional['Match'], filename: str, user_count: int):
         super().__init__(parent)
-        # TODO: implement cleanup for this
-        # LEAK
-        file = tempfile.NamedTemporaryFile("wb", delete=False)
-        while True:
-            buf = data_stream.read(DATA_STREAM_BUFFER_SIZE)
-            file.write(buf)
-            if len(buf) < DATA_STREAM_BUFFER_SIZE:
-                break
-        file.close()
-        self.filename = file.name
+        self.filename = filename
         self.user_count = user_count
 
     def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
@@ -170,7 +161,16 @@ class MatchDataStreamUnbacked(MatchDataStream):
         self.data_stream = data_stream
 
     def make_file_backed(self) -> MatchDataStreamFileBacked:
-        return MatchDataStreamFileBacked(self, self.data_stream, self.user_count)
+        # TODO: implement cleanup for this
+        # LEAK
+        file = tempfile.NamedTemporaryFile("wb", delete=False)
+        while True:
+            buf = self.data_stream.read(DATA_STREAM_BUFFER_SIZE)
+            file.write(buf)
+            if len(buf) < DATA_STREAM_BUFFER_SIZE:
+                break
+        file.close()
+        return MatchDataStreamFileBacked(self, file.name, self.user_count)
 
     def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
         self.user_count += 1
@@ -270,11 +270,11 @@ class MatchMultiChainAggregate(MatchEager):
 
 
 class MatchControlFlowRedirect(MatchEager):
-    target: 'transform_ref.TransformRef'
+    matches: list[tuple['transform_ref.TransformRef', Match]]
 
-    def __init__(self, target: 'transform_ref.TransformRef', parent: Optional[Match]):
+    def __init__(self, parent: Optional[Match]):
         super().__init__(parent)
-        self.target = target
+        self.matches = []
 
     def resolved_type(self) -> Type[MatchEager]:
         return MatchControlFlowRedirect
@@ -331,12 +331,10 @@ class MultiMatchBuilder:
 
 class MatchFuture(Match, ABC):
     res_type: Type[MatchEager]
-    future: Future[MatchEager]
 
-    def __init__(self, parent: Optional['Match'], res_type: Type[MatchEager], future: Future[MatchEager]):
+    def __init__(self, parent: Optional['Match'], res_type: Type[MatchEager]):
         super().__init__(parent)
         self.res_type = res_type
-        self.future = future
 
     def resolved_type(self) -> Type[MatchEager]:
         return self.res_type
@@ -346,72 +344,95 @@ class MatchFuture(Match, ABC):
         executor: concurrent.futures.Executor,
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> Match:
-        return MatchFutureEager(self, self, fn)
+        return MatchEagerOnFuture(self, self, fn)
 
     def apply_lazy(
         self,
         executor: concurrent.futures.Executor,
         fn: Callable[[MatchConcrete], MatchEager]
     ) -> Match:
-        return MatchFutureFuture(self, self, executor, fn)
+        return MatchFutureOnFuture(self, self, executor, fn)
 
-    def result(self, executor: concurrent.futures.Executor) -> MatchEager:
+    @abstractmethod
+    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
+        raise NotImplementedError
+
+
+class MatchFutureSubmitted(MatchFuture):
+    future: Future[MatchEager]
+
+    def __init__(self, parent: Optional['Match'], res_type: Type[MatchEager], future: Future[MatchEager]):
+        super().__init__(parent, res_type)
+        self.future = future
+
+    def result(self) -> MatchEager:
         return self.future.result()
 
-
-class MatchFutureFuture(MatchFuture):
-    def __init__(
-        self,
-        parent: Optional[Match],
-        base: MatchFuture,
-        executor: concurrent.futures.Executor,
-        fn: Callable[[MatchConcrete], MatchEager]
-    ):
-        super().__init__(parent, base.res_type, base.future)
-        self.future = executor.submit(lambda: base.result(executor).apply_eager(executor, fn))
-
-    def result(self, executor: concurrent.futures.Executor) -> MatchEager:
-        return self.future.result()
+    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
+        self.future.add_done_callback(lambda fut: cb(fut.result()))
 
 
-class MatchFutureEager(Match):
-    base: Match
-    # fn: Callable[[MatchConcrete], MatchEager]
-    executor: concurrent.futures.Executor
+class MatchEagerOnFuture(MatchFuture):
+    parent: MatchFuture
+    res: Optional[MatchEager] = None
+    fn: Callable[[MatchConcrete], MatchEager]
+    done_callbacks: list[Callable[[MatchEager], None]]
 
     def __init__(
         self,
-        parent: Optional[Match],
-        base: Match,
+        parent: MatchFuture,
         fn: Callable[[MatchConcrete], MatchEager]
     ):
-        super().__init__(parent)
-        self.base = base
+        super().__init__(parent, parent.res_type())
         self.fn = fn
+        self.parent.add_done_callback(self.run)
 
-    def resolved_type(self) -> Type['MatchEager']:
-        return self.base.resolved_type()
+    def run(self, parent_result: MatchEager) -> None:
+        self.res = parent_result.apply_eager(self.fn)
+        for dc in self.done_callbacks:
+            dc(self.res)
 
-    def set_result(self, result: MatchEager) -> None:
-        self.res = result
+    def result(self) -> MatchEager:
+        self.parent.result()
+        return self.res
 
-    def apply_eager(
+    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
+        # TODO: think about thread safety here?
+        if self.res is None:
+            self.done_callbacks.append(cb)
+        else:
+            cb(self.res)
+
+
+class MatchFutureOnFuture(MatchFuture):
+    parent: MatchFuture
+    future: Optional[Future[MatchEager]]
+    fn: Callable[[MatchConcrete], MatchEager]
+    done_callbacks: list[Callable[[MatchEager], None]]
+
+    def __init__(
         self,
+        parent: MatchFuture,
         executor: concurrent.futures.Executor,
         fn: Callable[[MatchConcrete], MatchEager]
-    ) -> Match:
-        return MatchFutureEager(self, self, fn)
+    ):
+        super().__init__(parent, parent.res_type())
+        self.fn = fn
+        self.parent.add_done_callback(lambda result: self.run(result, executor))
 
-    def apply_lazy(
-        self,
-        executor: concurrent.futures.Executor,
-        fn: Callable[[MatchConcrete], MatchEager]
-    ) -> Match:
-        return MatchFuture(
-            self,
-            self.resolved_type(),
-            executor.submit(lambda: self.base.result(executor).apply_eager(executor, fn))
-        )
+    def run(self, parent_result: MatchEager, executor: concurrent.futures.Executor) -> None:
+        self.future = executor.submit(self.fn, parent_result)
+        for dc in self.done_callbacks:
+            self.future.add_done_callback(dc)
 
-    def result(self, executor: concurrent.futures.Executor) -> MatchEager:
-        return self.base.result(executor).apply_eager(executor, self.fn)
+    def result(self) -> MatchEager:
+        self.parent.result()
+        assert self.future is not None
+        return self.future.result()
+
+    def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
+        # TODO: think about thread safety here?
+        if self.future is None:
+            self.done_callbacks.append(cb)
+        else:
+            self.future.add_done_callback(cb)

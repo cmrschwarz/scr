@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, cast
 from scr.transforms import transform, transform_ref
 from scr.selenium import selenium_options, selenium_context
 from scr.scr_option import ScrOption
@@ -43,6 +43,9 @@ class ChainOptions(chain_prototype.ChainPrototype):
         for sc in self.subchains:
             sc.parent = self
         self.transforms = transforms if transforms is not None else []
+
+    def root(self) -> 'ChainOptions':
+        return cast(ChainOptions, super().root())
 
 
 DEFAULT_CHAIN_OPTIONS = ChainOptions(

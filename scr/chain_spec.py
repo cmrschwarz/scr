@@ -89,7 +89,7 @@ class ChainSpecSibling(ChainSpecNonTerminal):
         idx = parent.subchains.index(base)
         tgt_index = idx + self.relative_sibling_index
         if tgt_index >= len(parent.subchains):
-            parent.subchains.extend((chain_options.ChainOptions(parent=base) for _ in range(len(parent.subchains), tgt_index)))
+            parent.subchains.extend((chain_options.ChainOptions(parent=base) for _ in range(len(parent.subchains), tgt_index + 1)))
         yield from self.rhs.instantiate(parent.subchains[tgt_index])
 
     def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:

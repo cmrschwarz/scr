@@ -1,5 +1,6 @@
+import sys
 from typing import Optional, Type
-from scr import chain_spec
+from scr import chain_spec, context, match
 from abc import ABC, abstractmethod
 import urllib.parse
 
@@ -57,6 +58,10 @@ class DocumentSource(ABC):
     def from_str(val: Optional[str]) -> 'DocumentSource':
         raise NotImplementedError
 
+    @abstractmethod
+    def get_content(self, ctx: 'context.Context') -> 'match.Match':
+        raise NotImplementedError
+
 
 class DocumentSourceUrl(DocumentSource):
     url_str: str
@@ -80,6 +85,9 @@ class DocumentSourceUrl(DocumentSource):
         assert val is not None
         return DocumentSourceUrl(val)
 
+    def get_content(self, ctx: 'context.Context') -> 'match.Match':
+        raise NotImplementedError
+
 
 class DocumentSourceFile(DocumentSource):
     path: str
@@ -98,6 +106,9 @@ class DocumentSourceFile(DocumentSource):
         assert val is not None
         return DocumentSourceFile(val)
 
+    def get_content(self, ctx: 'context.Context') -> 'match.Match':
+        return match.MatchDataStreamFileBacked(None, self.path, 0)
+
 
 class DocumentSourceString(DocumentSource):
     value: str
@@ -111,10 +122,13 @@ class DocumentSourceString(DocumentSource):
     def natural_reference_point(self) -> DocumentReferencePoint:
         return DocumentReferencePointNone()
 
-    @staticmethod
+    @ staticmethod
     def from_str(val: Optional[str]) -> 'DocumentSource':
         assert val is not None
         return DocumentSourceString(val)
+
+    def get_content(self, ctx: 'context.Context') -> 'match.Match':
+        return match.MatchText(None, self.value)
 
 
 class DocumentSourceStdin(DocumentSource):
@@ -124,10 +138,13 @@ class DocumentSourceStdin(DocumentSource):
     def natural_reference_point(self) -> DocumentReferencePoint:
         return DocumentReferencePointNone()
 
-    @staticmethod
+    @ staticmethod
     def from_str(val: Optional[str]) -> 'DocumentSource':
         assert val is None
         return DocumentSourceStdin()
+
+    def get_content(self, ctx: 'context.Context') -> 'match.Match':
+        return match.MatchDataStreamUnbacked(None, sys.stdin.buffer)
 
 
 class Document:

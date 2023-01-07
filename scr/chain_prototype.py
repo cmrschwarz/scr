@@ -12,3 +12,9 @@ class ChainPrototype:
     parent: Optional['ChainPrototype']
     subchains: Sequence['ChainPrototype']  # can't use list since it's not covariant
     transforms: list['transform.Transform']
+
+    def root(self) -> 'ChainPrototype':
+        c = self
+        while c.parent is not None:
+            c = c.parent
+        return c
