@@ -1,3 +1,5 @@
+import os
+from types import TracebackType
 import lxml.html
 from typing import BinaryIO, Optional, Type, Callable
 from abc import ABC, abstractmethod
@@ -5,6 +7,7 @@ import concurrent.futures
 from concurrent.futures import Future
 from scr import chain
 from scr.transforms import transform_ref
+import tempfile
 
 
 class Match(ABC):
@@ -19,6 +22,9 @@ class Match(ABC):
     @abstractmethod
     def resolved_type(self) -> Type['MatchEager']:
         raise NotImplementedError
+
+    def apply_now(self, fn: Callable[['Match'], 'Match']) -> 'Match':
+        return fn(self)
 
     @abstractmethod
     def apply_eager(
@@ -39,6 +45,12 @@ class Match(ABC):
     @abstractmethod
     def result(self, executor: concurrent.futures.Executor) -> 'MatchEager':
         raise NotImplementedError
+
+    def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
+        return self
+
+    def add_stream_user(self, executor: concurrent.futures.Executor) -> None:
+        self.apply_now(lambda m: m._add_user_if_stream())
 
 
 class MatchEager(Match):
@@ -108,6 +120,69 @@ class MatchImage(MatchData):
         self.data = data
 
 
+class MatchDataStream(MatchConcrete):
+    user_count: int = 0
+
+    def resolved_type(self) -> Type[MatchEager]:
+        return MatchData
+
+    @abstractmethod
+    def take_stream(self) -> BinaryIO:
+        raise NotImplementedError
+
+
+DATA_STREAM_BUFFER_SIZE = 8192
+
+
+class MatchDataStreamFileBacked(MatchDataStream):
+    filename: str
+    streams: list[BinaryIO] = []
+
+    def __init__(self, parent: Optional['Match'], data_stream: BinaryIO, user_count: int):
+        super().__init__(parent)
+        # TODO: implement cleanup for this
+        # LEAK
+        file = tempfile.NamedTemporaryFile("wb", delete=False)
+        while True:
+            buf = data_stream.read(DATA_STREAM_BUFFER_SIZE)
+            file.write(buf)
+            if len(buf) < DATA_STREAM_BUFFER_SIZE:
+                break
+        file.close()
+        self.filename = file.name
+        self.user_count = user_count
+
+    def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
+        self.user_count += 1
+        return self
+
+    def take_stream(self) -> BinaryIO:
+        assert self.user_count > 0
+        self.user_count -= 1
+        return open(self.filename, "rb")
+
+
+class MatchDataStreamUnbacked(MatchDataStream):
+    data_stream: BinaryIO
+
+    def __init__(self, parent: Optional['Match'], data_stream: BinaryIO):
+        super().__init__(parent)
+        self.data_stream = data_stream
+
+    def make_file_backed(self) -> MatchDataStreamFileBacked:
+        return MatchDataStreamFileBacked(self, self.data_stream, self.user_count)
+
+    def _add_user_if_stream(self, executor: concurrent.futures.Executor) -> 'Match':
+        self.user_count += 1
+        if self.user_count > 1:
+            return MatchFuture(self, MatchData, executor.submit(self.make_file_backed))
+        return self
+
+    def take_stream(self) -> BinaryIO:
+        assert self.user_count == 1
+        return self.data_stream
+
+
 class MatchList(MatchEager):
     matches: list[Match]
 
@@ -130,6 +205,14 @@ class MatchList(MatchEager):
     def extend_flatten(self, matches: list[Match]) -> None:
         for m in matches:
             self.append_flatten(m)
+
+    def apply_now(
+        self,
+        fn: Callable[['Match'], Match]
+    ) -> Match:
+        for i in range(0, len(self.matches)):
+            self.matches[i] = self.matches[i].apply_now(fn)
+        return self
 
     def apply_eager(
         self,
@@ -162,6 +245,14 @@ class MatchMultiChainAggregate(MatchEager):
     def append(self, cn: 'chain.Chain', match: Match) -> None:
         assert cn not in self.results
         self.results[cn] = match
+
+    def apply_now(
+        self,
+        fn: Callable[['Match'], Match]
+    ) -> Match:
+        for k in self.results.keys():
+            self.results[k] = self.results[k].apply_now(fn)
+        return self
 
     def apply_eager(
         self,
@@ -324,30 +415,3 @@ class MatchFutureEager(Match):
 
     def result(self, executor: concurrent.futures.Executor) -> MatchEager:
         return self.base.result(executor).apply_eager(executor, self.fn)
-
-
-class MatchDataStream(Match):
-    data_stream: BinaryIO
-
-    def __init__(self, data_stream: BinaryIO, parent: Optional['Match'] = None):
-        super().__init__(parent)
-        self.data_stream = data_stream
-
-    def resolved_type(self) -> Type[MatchEager]:
-        return MatchData
-
-    def apply_eager(
-        self,
-        executor: concurrent.futures.Executor,
-        fn: Callable[[MatchConcrete], MatchEager]
-    ) -> Match:
-        return MatchFuture(self, MatchData, executor.submit(
-            lambda: fn(MatchData(self, self.data_stream.read()))
-        ))
-
-    def apply_lazy(
-        self,
-        executor: concurrent.futures.Executor,
-        fn: Callable[[MatchConcrete], MatchEager]
-    ) -> Match:
-        return self.apply_eager(executor, fn)

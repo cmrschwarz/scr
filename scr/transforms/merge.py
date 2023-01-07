@@ -49,7 +49,7 @@ class Merge(transform.Transform):
         all_lists = None
         length: Optional[int] = None
         for cn in self.sources:
-            mtch = m.results[c]
+            mtch = m.results[cn]
             if isinstance(mtch, match.MatchList):
                 if all_lists is None:
                     all_lists = True
@@ -65,10 +65,10 @@ class Merge(transform.Transform):
                     length = 1
                 elif all_lists:
                     raise ValueError("subchains for merge must have same number of argument")
-        length_ = cast(int, length)
+        match_count = cast(int, length)
         mmb = match.MultiMatchBuilder(m)
         i = 0
-        for i in range(0, length_):
+        for i in range(0, match_count):
             mn = match.MatchNone(m)
             for cn in self.sources:
                 if all_lists:

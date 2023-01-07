@@ -10,8 +10,8 @@ class ChainOptions(chain_prototype.ChainPrototype):
     prefer_parent_text_encoding: ScrOption[bool]
     force_text_encoding: ScrOption[bool]
 
-    selenium_variant: ScrOption[selenium_options.SeleniumVariant]
-    selenium_download_strategy: ScrOption[selenium_options.SeleniumDownloadStrategy]
+    selenium_variant: ScrOption['selenium_options.SeleniumVariant']
+    selenium_download_strategy: ScrOption['selenium_options.SeleniumDownloadStrategy']
 
     subchains: list['ChainOptions']
     transforms: list['transform.Transform']
@@ -26,11 +26,11 @@ class ChainOptions(chain_prototype.ChainPrototype):
         prefer_parent_text_encoding: Optional[bool] = None,
         force_text_encoding: Optional[bool] = None,
 
-        selenium_variant: Optional[selenium_options.SeleniumVariant] = None,
-        selenium_download_strategy: Optional[selenium_options.SeleniumDownloadStrategy] = None,
+        selenium_variant: Optional['selenium_options.SeleniumVariant'] = None,
+        selenium_download_strategy: Optional['selenium_options.SeleniumDownloadStrategy'] = None,
 
         subchains: Optional[list['ChainOptions']] = None,
-        transforms: Optional[list[transform.Transform]] = None,
+        transforms: Optional[list['transform.Transform']] = None,
         parent: Optional['ChainOptions'] = None
     ) -> None:
         self.default_text_encoding = ScrOption(default_text_encoding)
@@ -39,7 +39,6 @@ class ChainOptions(chain_prototype.ChainPrototype):
         self.selenium_variant = ScrOption(selenium_variant)
         self.selenium_download_strategy = ScrOption(selenium_download_strategy)
         self.parent = parent
-        self.aggregation_targets = ScrOption(None)
         self.subchains = subchains if subchains is not None else []
         for sc in self.subchains:
             sc.parent = self
@@ -60,13 +59,13 @@ def get_selenium_context(co: ChainOptions, parent: Optional['chain.Chain']) -> O
         sv = co.selenium_variant.get()
         if (
             parent is not None
-            and parent.selelenium_context is not None
-            and parent.selelenium_context.variant == sv
+            and parent.selenium_ctx is not None
+            and parent.selenium_ctx.variant == sv
         ):
-            return parent.selelenium_context
+            return parent.selenium_ctx
     else:
         if parent is not None:
-            return parent.selelenium_context
+            return parent.selenium_ctx
         else:
             sv = DEFAULT_CHAIN_OPTIONS.selenium_variant.get()
     if sv == selenium_options.SeleniumVariant.DISABLED:
@@ -119,15 +118,15 @@ def update_chain(c: 'chain.Chain', co: ChainOptions) -> None:
     c.prefer_parent_text_encoding = co.prefer_parent_text_encoding.get_or_default(c.prefer_parent_text_encoding)
     c.force_text_encoding = co.force_text_encoding.get_or_default(c.force_text_encoding)
 
-    curr_sc = c.selelenium_context
+    curr_sc = c.selenium_ctx
     if curr_sc is not None:
         sv = co.selenium_variant.get_or_default(DEFAULT_CHAIN_OPTIONS.selenium_variant.get())
         if curr_sc.variant != sv:
-            if c.parent is None or c.parent.selelenium_context is not curr_sc:
+            if c.parent is None or c.parent.selenium_ctx is not curr_sc:
                 curr_sc.destroy()
-            c.selelenium_context = get_selenium_context(co, c.parent)
+            c.selenium_ctx = get_selenium_context(co, c.parent)
     else:
-        c.selelenium_context = get_selenium_context(co, c.parent)
+        c.selenium_ctx = get_selenium_context(co, c.parent)
 
     c.selenium_download_strategy = co.selenium_download_strategy.get_or_default(c.selenium_download_strategy)
     c.transforms = co.transforms

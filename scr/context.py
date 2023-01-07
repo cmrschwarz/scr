@@ -3,12 +3,12 @@ from typing import Optional
 from scr import chain, document
 import scr.progress_report
 from collections import deque
-from scr import result
 
 
 class Context:
     parallel_jobs: int = -1
     executor: concurrent.futures.Executor
+    print_executor: concurrent.futures.Executor
     progress_reporter: Optional['scr.progress_report.ProgressReporter'] = None
     documents: deque['document.Document']
     root_chain: 'chain.Chain'
@@ -22,6 +22,7 @@ class Context:
         self.set_parallel_job_count(parallel_jobs)
         if progress_report:
             self.progress_reporter = scr.progress_report.ProgressReporter()
+        self.print_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.documents = deque()
 
     def set_parallel_job_count(self, parallel_jobs: int) -> None:
