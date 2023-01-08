@@ -374,9 +374,9 @@ class MatchFutureSubmitted(MatchFuture):
 
 class MatchEagerOnFuture(MatchFuture):
     parent: MatchFuture
-    res_lock: threading.Lock
     res: Optional[MatchEager] = None
     fn: Callable[[MatchConcrete], MatchEager]
+    done_sem: threading.Semaphore
     done_callbacks: list[Callable[[MatchEager], None]]
 
     def __init__(
@@ -387,6 +387,7 @@ class MatchEagerOnFuture(MatchFuture):
     ):
         super().__init__(parent, parent.resolved_type())
         self.fn = fn
+        self.done_sem = threading.Semaphore(0)
         self.res_lock = threading.Lock()
         self.done_callbacks = []
         self.parent.add_done_callback(lambda result: self.run(result, executor))
@@ -395,20 +396,24 @@ class MatchEagerOnFuture(MatchFuture):
         r = parent_result.apply_eager(executor, self.fn)
         with self.res_lock:
             self.res = r
-        for dc in self.done_callbacks:
+            dcs = self.done_callbacks
+            self.done_callbacks = []
+        for dc in dcs:
             dc(self.res)
+        self.done_sem.release()
 
     def result(self) -> MatchEager:
         self.parent.result()
+        self.done_sem.acquire()
         assert self.res is not None
         return self.res
 
     def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
         with self.res_lock:
             r = self.res
-        if r is None:
-            self.done_callbacks.append(cb)
-        else:
+            if r is None:
+                self.done_callbacks.append(cb)
+        if r is not None:
             cb(r)
 
 
@@ -416,8 +421,8 @@ class MatchFutureOnFuture(MatchFuture):
     parent: MatchFuture
     future: Optional[Future[MatchEager]]
     fn: Callable[[MatchConcrete], MatchEager]
+    done_sem: threading.Semaphore
     future_lock: threading.Lock
-    done_cv: threading.Condition
     done_callbacks: list[Callable[[MatchEager], None]]
 
     def __init__(
@@ -430,7 +435,7 @@ class MatchFutureOnFuture(MatchFuture):
         self.fn = fn
         self.future = None
         self.future_lock = threading.Lock()
-        self.done_cv = threading.Condition(lock=self.future_lock)
+        self.done_sem = threading.Semaphore(0)
         self.done_callbacks = []
         self.parent.add_done_callback(lambda result: self.run(result, executor))
 
@@ -438,22 +443,20 @@ class MatchFutureOnFuture(MatchFuture):
         fut = executor.submit(lambda: parent_result.apply_eager(None, self.fn))
         with self.future_lock:
             self.future = fut
+            dcs = self.done_callbacks
+            self.done_callbacks = []
 
-        for dc in self.done_callbacks:
+        for dc in dcs:
             self.future.add_done_callback(lambda ft: dc(ft.result()))
-        self.done_callbacks.clear()
+        self.done_sem.release()
 
     def result(self) -> MatchEager:
         self.parent.result()
-        with self.done_cv:
-            self.done_cv.wait()
-        with self.future_lock:
-            fut = self.future
-        assert fut is not None
-        return fut.result()
+        self.done_sem.acquire()
+        assert self.future is not None
+        return self.future.result()
 
     def add_done_callback(self, cb: Callable[[MatchEager], None]) -> None:
-        # TODO: think about thread safety here?
         self.future_lock.acquire()
         if self.future is None:
             self.done_callbacks.append(cb)
