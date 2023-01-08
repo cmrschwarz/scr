@@ -2,13 +2,14 @@ from scr import chain_options, context_options, document, chain_spec, scr_option
 from scr.transforms import transform, transform_catalog
 from scr.selenium import selenium_options
 from typing import Callable, Optional, Any
+from scr.scr_option import CliArgRef
 import re
 
 
 class CliArgsParseException(Exception):
-    arg_ref: tuple[int, str]
+    arg_ref: CliArgRef
 
-    def __init__(self, arg_ref: tuple[int, str], *args: Any) -> None:
+    def __init__(self, arg_ref: CliArgRef, *args: Any) -> None:
         super().__init__(*args)
         self.arg_ref = arg_ref
 
@@ -17,7 +18,7 @@ def print_help() -> None:
     print(f"{version.SCR_NAME} [OPTIONS]")  # TODO
 
 
-def try_parse_bool_arg_or_default(val: Optional[str], default: bool, arg_ref: tuple[int, str]) -> bool:
+def try_parse_bool_arg_or_default(val: Optional[str], default: bool, arg_ref: CliArgRef) -> bool:
     if val is None:
         return default
     res = utils.try_parse_bool(val)
@@ -32,7 +33,7 @@ def try_parse_as_context_opt(
     label: Optional[str],
     value: Optional[str],
     chainspec: Optional['chain_spec.ChainSpec'],
-    arg_ref: tuple[int, str]
+    arg_ref: CliArgRef
 ) -> bool:
     matched = False
     if argname in ["--help", "-h"]:
@@ -63,7 +64,7 @@ def try_parse_as_doc(
     label: Optional[str],
     value: Optional[str],
     chainspec: Optional['chain_spec.ChainSpec'],
-    arg_ref: tuple[int, str]
+    arg_ref: CliArgRef
 ) -> bool:
     doc_source = document.DocumentSource.try_parse_type(argname)
     if doc_source is None:
@@ -94,7 +95,7 @@ def try_parse_as_chain_opt(
     label: Optional[str],
     value: Optional[str],
     chainspec: Optional['chain_spec.ChainSpec'],
-    arg_ref: tuple[int, str]
+    arg_ref: CliArgRef
 ) -> bool:
     def apply(fn: Callable[['chain_options.ChainOptions'], None]) -> None:
         if chainspec is None:
@@ -144,7 +145,7 @@ def try_parse_as_transform(
     label: Optional[str],
     value: Optional[str],
     chainspec: Optional['chain_spec.ChainSpec'],
-    arg_ref: tuple[int, str]
+    arg_ref: CliArgRef
 ) -> tuple[bool, 'chain_options.ChainOptions']:
     for tf in transform_catalog.TRANSFORM_CATALOG:
         if tf.name_matches(argname):
@@ -177,7 +178,7 @@ def parse(args: list[str]) -> tuple['chain_options.ChainOptions', list['document
 
     try:
         for i, arg in enumerate(args[1:]):
-            arg_ref = (i + 1, arg)
+            arg_ref = CliArgRef(arg, i + 1)
             if arg.startswith("-"):
                 if try_parse_as_context_opt(ctx_opts, arg, None, None, None, arg_ref):
                     continue
@@ -197,8 +198,12 @@ def parse(args: list[str]) -> tuple['chain_options.ChainOptions', list['document
             if succ_sum == 1:
                 continue
             if succ_sum > 1:
-                raise CliArgsParseException(arg_ref, "ambiguous argument")
-            raise CliArgsParseException(arg_ref, "unknown argument")
+                message = "ambiguous argument name"
+            else:
+                message = "unknown argument name"
+            if argname != arg_ref.arg:
+                message += f" '{argname}'"
+            raise CliArgsParseException(arg_ref, message)
     except scr_option.ScrOptionReassignmentError as ex:
         arg_origin = ex.originating_cli_arg
         assert arg_origin is not None

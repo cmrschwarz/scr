@@ -97,7 +97,10 @@ def main() -> None:
         warnings.filterwarnings(
             "ignore", module=".*selenium.*", category=DeprecationWarning
         )
-        run_cli(sys.argv)
+        try:
+            run_cli(sys.argv)
+        except cli_args.CliArgsParseException as clape:
+            SCR_LOG.error(f"in argument {clape.arg_ref.arg_idx} '{clape.arg_ref.arg}': {clape}")
         sys.exit(0)
     except BrokenPipeError:
         # Python flushes standard streams on exit; redirect remaining output

@@ -1,27 +1,32 @@
+from dataclasses import dataclass
 from typing import Generic, TypeVar, Optional, Union, Any
 T = TypeVar("T")
 D = TypeVar("D")
 
 
-class ScrOptionReassignmentError(Exception):
-    originating_cli_arg: Optional[tuple[int, str]]
+@dataclass(slots=True)
+class CliArgRef:
+    arg: str
+    arg_idx: int
 
-    def __init__(self, originating_cli_arg: Optional[tuple[int, str]], *args: Any) -> None:
+
+class ScrOptionReassignmentError(Exception):
+    originating_cli_arg: Optional[CliArgRef]
+
+    def __init__(self, originating_cli_arg: Optional[CliArgRef], *args: Any) -> None:
         super().__init__(*args)
         self.originating_cli_arg = originating_cli_arg
 
 
 class ScrOption(Generic[T]):
-    # since 'None' is a valid value for an option, we need a separate indicator
-    # for whether or not this has been given a value
     value: Optional[T]
-    originating_cli_arg: Optional[tuple[int, str]]
+    originating_cli_arg: Optional[CliArgRef]
 
     def __init__(self, value: Optional[T] = None) -> None:
         self.value = value
         self.originating_cli_arg = None
 
-    def set(self, value: T, cli_arg: Optional[tuple[int, str]]) -> None:
+    def set(self, value: T, cli_arg: Optional[CliArgRef] = None) -> None:
         if self.value is not None:
             raise ScrOptionReassignmentError(self.originating_cli_arg, "attempted to reassign value of option")
         self.value = value
@@ -36,27 +41,20 @@ class ScrOption(Generic[T]):
         return self.value
 
     def get_or_default(self, default: D) -> Union[T, D]:
-        if self.value is None:
-            return default
-        return self.value
+        if self.value is not None:
+            return self.value
+        return default
 
-    def get_cli_arg(self) -> Optional[str]:
+    def get_cli_arg_ref(self) -> Optional[CliArgRef]:
         if self.value is None:
             raise ValueError("attempted to get cli argument of unassigned option")
         if self.originating_cli_arg is None:
             return None
-        return self.originating_cli_arg[1]
-
-    def get_cli_arg_index(self) -> Optional[int]:
-        if self.value is None:
-            raise ValueError("attempted to get cli argument index of unassigned option")
-        if self.originating_cli_arg is None:
-            return None
-        return self.originating_cli_arg[0]
+        return self.originating_cli_arg
 
 
 class ScrOptionSet(Generic[T]):
-    values: dict[T, Optional[tuple[int, str]]]
+    values: dict[T, Optional[CliArgRef]]
 
     def __init__(self, values: Optional[set[T]] = None) -> None:
         if values is not None:
@@ -65,7 +63,7 @@ class ScrOptionSet(Generic[T]):
         else:
             self.values = {}
 
-    def add(self, value: T, cli_arg: Optional[tuple[int, str]]) -> None:
+    def add(self, value: T, cli_arg: Optional[CliArgRef]) -> None:
         if value in self.values:
             raise ScrOptionReassignmentError(self.values[value], "attempted to reassign value in option set")
 
@@ -74,3 +72,6 @@ class ScrOptionSet(Generic[T]):
 
     def get_all(self) -> set[T]:
         return set(self.values.keys())
+
+    def get_cli_arg(self, key: T) -> Optional[CliArgRef]:
+        return self.values[key]
