@@ -1,6 +1,6 @@
 from scr.transforms import transform, transform_ref
 from scr import chain_spec, chain, match, range_spec
-from typing import Optional, cast
+from typing import Optional, Type, cast
 
 
 class Merge(transform.Transform):
@@ -11,6 +11,12 @@ class Merge(transform.Transform):
     @staticmethod
     def name_matches(name: str) -> bool:
         return "merge".startswith(name)
+
+    def input_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return None
+
+    def output_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return set([match.MatchMultiChainAggregate])
 
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
@@ -27,7 +33,7 @@ class Merge(transform.Transform):
         try:
             return Merge(label, chain_spec.parse_chain_spec(value))
         except chain_spec.ChainSpecParseException as ex:
-            raise transform.TransformValueError(f"invalid range for 'next': {ex}")
+            raise transform.TransformCreationError(f"invalid range for 'next': {ex}")
 
     def __init__(self, label: str, sources: 'chain_spec.ChainSpec') -> None:
         super().__init__(label)

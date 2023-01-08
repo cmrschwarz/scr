@@ -1,28 +1,23 @@
 from abc import ABC, abstractmethod
 from scr import chain, chain_options, chain, match, chain_spec
-from typing import Optional
+from typing import Any, Optional, Type
 
 
-class TransformValueError(Exception):
+class TransformCreationError(Exception):
     pass
 
 
-class TransformSetupError(Exception):
-    cn: 'chain.Chain'
+class TransformApplicationError(Exception):
     tf: 'Transform'
-    tf_index: int
 
-    def __init__(
-        self,
-        cn: 'chain.Chain',
-        tf: 'Transform',
-        tf_index: int,
-        *args: object
-    ) -> None:
-        super().__init__(*args)
+    def __init__(self, cn: 'chain.Chain', tf: 'Transform', *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.cn = cn
         self.tf = tf
-        self.tf_index = tf_index
+
+    def __str__(self) -> str:
+        cns = str(self.cn)
+        return f"in chain {cns}, transform '{self.tf.label}': {super().__str__()}"
 
 
 class Transform(ABC):
@@ -41,7 +36,15 @@ class Transform(ABC):
     def name_matches(name: str) -> bool:
         raise NotImplementedError
 
-    def is_accepting(self) -> bool:
+    # should return None if any are accepted e.g. for next or sleep
+    @abstractmethod
+    def input_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        raise NotImplementedError
+
+    # should return None if the transform does not affect the type of the
+    # given match at all, e.g. for next or sleep
+    @abstractmethod
+    def output_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
         raise NotImplementedError
 
     @abstractmethod

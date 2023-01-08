@@ -18,3 +18,10 @@ class ChainPrototype:
         while c.parent is not None:
             c = c.parent
         return c
+
+    def __str__(self) -> str:
+        if self.parent is None:
+            return "/"
+        elif self.parent.parent is None:
+            return f"/{self.parent.subchains.index(self)}"
+        return f"{self.parent}/{self.parent.subchains.index(self)}"

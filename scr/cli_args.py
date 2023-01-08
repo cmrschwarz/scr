@@ -13,6 +13,9 @@ class CliArgsParseException(Exception):
         super().__init__(*args)
         self.arg_ref = arg_ref
 
+    def __str__(self) -> str:
+        return f"in argument {self.arg_ref.arg_idx} '{self.arg_ref.arg}': {super().__str__()}"
+
 
 def print_help() -> None:
     print(f"{version.SCR_NAME} [OPTIONS]")  # TODO
@@ -154,7 +157,7 @@ def try_parse_as_transform(
             try:
                 cs = chainspec if chainspec is not None else chain_spec.ChainSpecCurrent().rebase(curr_chain, curr_chain.root())
                 tf_inst = tf.create(label, value, cs)
-            except transform.TransformValueError as ex:
+            except transform.TransformCreationError as ex:
                 raise CliArgsParseException(arg_ref, *ex.args)
             if chainspec is None:
                 curr_chain.transforms.append(tf_inst)
@@ -201,8 +204,7 @@ def parse(args: list[str]) -> tuple['chain_options.ChainOptions', list['document
                 message = "ambiguous argument name"
             else:
                 message = "unknown argument name"
-            if argname != arg_ref.arg:
-                message += f" '{argname}'"
+            message += f" '{argname}'"
             raise CliArgsParseException(arg_ref, message)
     except scr_option.ScrOptionReassignmentError as ex:
         arg_origin = ex.originating_cli_arg

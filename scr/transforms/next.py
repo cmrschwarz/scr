@@ -1,6 +1,6 @@
 from scr.transforms import transform
 from scr import chain_spec, chain, chain_options, match
-from typing import Optional
+from typing import Optional, Type
 
 
 class Next(transform.Transform):
@@ -10,6 +10,12 @@ class Next(transform.Transform):
     def name_matches(name: str) -> bool:
         return "next".startswith(name)
 
+    def input_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return None
+
+    def output_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return None
+
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
@@ -17,7 +23,7 @@ class Next(transform.Transform):
         try:
             return Next(label, chain_spec.parse_chain_spec(value))
         except chain_spec.ChainSpecParseException as ex:
-            raise transform.TransformValueError(f"invalid range for 'next': {ex}")
+            raise transform.TransformCreationError(f"invalid range for 'next': {ex}")
 
     def __init__(self, label: str, target: 'chain_spec.ChainSpec') -> None:
         super().__init__(label)

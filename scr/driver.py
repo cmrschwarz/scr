@@ -7,6 +7,7 @@ from scr import chain_options, context_options, context, document, match, cli_ar
 from scr.selenium import selenium_updater
 from scr.version import SCR_VERSION, SCR_NAME
 from scr.logger import SCR_LOG
+from scr.transforms import transform
 
 
 def perform_side_tasks(opts: 'context_options.ContextOptions') -> None:
@@ -88,6 +89,7 @@ def run(
 
 def run_cli(args: list[str]) -> list['match.Match']:
     (root_chain, docs, opts) = cli_args.parse(args)
+    chain_options.validate_chain_tree(root_chain)
     return run(root_chain, docs, opts)
 
 
@@ -99,8 +101,8 @@ def main() -> None:
         )
         try:
             run_cli(sys.argv)
-        except cli_args.CliArgsParseException as clape:
-            SCR_LOG.error(f"in argument {clape.arg_ref.arg_idx} '{clape.arg_ref.arg}': {clape}")
+        except (cli_args.CliArgsParseException, chain_options.ChainValidationException, transform.TransformApplicationError) as ex:
+            SCR_LOG.error(str(ex))
         sys.exit(0)
     except BrokenPipeError:
         # Python flushes standard streams on exit; redirect remaining output

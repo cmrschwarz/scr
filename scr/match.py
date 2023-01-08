@@ -81,12 +81,19 @@ class MatchConcrete(MatchEager):
     ) -> Match:
         return MatchFutureSubmitted(self, self.resolved_type(), executor.submit(fn, self))
 
+    @staticmethod
+    @abstractmethod
+    def name() -> str:
+        raise NotImplementedError
+
     def resolved_type(self) -> Type['MatchEager']:
         return self.__class__
 
 
 class MatchNone(MatchConcrete):
-    pass
+    @staticmethod
+    def name() -> str:
+        return "none"
 
 
 class MatchHtml(MatchConcrete):
@@ -96,6 +103,10 @@ class MatchHtml(MatchConcrete):
         super().__init__(parent)
         self.html = html
 
+    @staticmethod
+    def name() -> str:
+        return "html"
+
 
 class MatchText(MatchConcrete):
     text: str
@@ -103,6 +114,10 @@ class MatchText(MatchConcrete):
     def __init__(self, parent: Optional[Match], text: str):
         super().__init__(parent)
         self.text = text
+
+    @staticmethod
+    def name() -> str:
+        return "text"
 
 
 class MatchData(MatchConcrete):
@@ -112,11 +127,21 @@ class MatchData(MatchConcrete):
         super().__init__(parent)
         self.data = data
 
+    @staticmethod
+    def name() -> str:
+        return "data"
 
-class MatchImage(MatchData):
+
+class MatchImage(MatchConcrete):
+    data: bytes
+
     def __init__(self,  parent: Optional[Match], data: bytes):
-        super().__init__(parent, data)
+        super().__init__(parent)
         self.data = data
+
+    @staticmethod
+    def name() -> str:
+        return "image"
 
 
 class MatchDataStream(MatchConcrete):
@@ -128,6 +153,10 @@ class MatchDataStream(MatchConcrete):
     @abstractmethod
     def take_stream(self) -> BinaryIO:
         raise NotImplementedError
+
+    @staticmethod
+    def name() -> str:
+        return "datastream"
 
 
 DATA_STREAM_BUFFER_SIZE = 8192
@@ -234,7 +263,7 @@ class MatchList(MatchEager):
         return ml
 
 
-class MatchMultiChainAggregate(MatchEager):
+class MatchMultiChainAggregate(MatchConcrete):
     results: dict['chain.Chain', Match]
 
     def __init__(self, parent: Optional[Match]):

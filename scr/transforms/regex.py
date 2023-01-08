@@ -1,7 +1,7 @@
 from scr.transforms import transform
 from scr import match, chain_spec
 import re
-from typing import Optional
+from typing import Optional, Type
 
 
 class Regex(transform.TransformEager):
@@ -11,15 +11,21 @@ class Regex(transform.TransformEager):
     def name_matches(name: str) -> bool:
         return "regex".startswith(name)
 
+    def input_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return set([match.MatchText])
+
+    def output_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return set([match.MatchText])
+
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
-            raise transform.TransformValueError("missing regex argument")
+            raise transform.TransformCreationError("missing regex argument")
         try:
             regex = re.compile(value, re.DOTALL | re.MULTILINE)
             return Regex(label, regex)
         except re.error as err:
-            raise transform.TransformValueError(f"invalid regex: {err.msg}")
+            raise transform.TransformCreationError(f"invalid regex: {err.msg}")
 
     def __init__(self, label: str, regex: re.Pattern[str]) -> None:
         super().__init__(label)

@@ -1,6 +1,6 @@
 from scr.transforms import transform
 from scr import chain_spec, match
-from typing import Optional
+from typing import Optional, Type
 import time
 import math
 
@@ -12,17 +12,23 @@ class Sleep(transform.TransformLazy):
     def name_matches(name: str) -> bool:
         return "sleep".startswith(name)
 
+    def input_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return None
+
+    def output_match_types(self) -> Optional[set[Type[match.MatchConcrete]]]:
+        return None
+
     @staticmethod
     def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
-            raise transform.TransformValueError("missing sleep time argument")
+            raise transform.TransformCreationError("missing sleep time argument")
         try:
             sts = float(value)
             if math.isnan(sts) or math.isinf(sts) or sts < 0:
-                raise transform.TransformValueError("invalid sleep time {arg}")
+                raise transform.TransformCreationError("invalid sleep time {arg}")
             return Sleep(label, sts)
-        except (FloatingPointError, transform.TransformValueError, TypeError, OverflowError):
-            raise transform.TransformValueError("invalid sleep time {arg}")
+        except (FloatingPointError, TypeError, OverflowError):
+            raise transform.TransformCreationError("invalid sleep time {arg}")
 
     def __init__(self, label: str, sleep_time_seconds: float) -> None:
         super().__init__(label)
