@@ -1,6 +1,6 @@
 from scr.transforms import transform
 from scr.match import MatchConcrete, MatchEager
-from scr import chain_spec, chain, match, utils
+from scr import chain_spec, chain, match, utils, chain_prototype
 from typing import Optional, Type
 import io
 import sys
@@ -23,7 +23,7 @@ class Print(transform.Transform):
         return set([match.MatchNone])
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is not None:
             newline = utils.try_parse_bool(value)
             if newline is None:

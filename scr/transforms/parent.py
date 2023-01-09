@@ -1,5 +1,5 @@
 from scr.transforms import transform
-from scr import chain_spec, match, chain
+from scr import chain_spec, match, chain, chain_prototype
 from typing import Optional, Type
 
 
@@ -17,7 +17,7 @@ class Parent(transform.Transform):
         return None
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is not None:
             try:
                 skip_num = int(value)

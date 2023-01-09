@@ -1,5 +1,5 @@
 from scr.transforms import transform
-from scr import chain_spec, match
+from scr import chain_spec, match, chain_prototype
 from typing import Optional, Type
 import time
 import math
@@ -19,7 +19,7 @@ class Sleep(transform.TransformLazy):
         return None
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
             raise transform.TransformCreationError("missing sleep time argument")
         try:

@@ -1,5 +1,5 @@
 from scr.transforms import transform, transform_ref
-from scr import chain_spec, chain, chain_options, match, range_spec
+from scr import chain_spec, chain, chain_options, match, range_spec, chain_prototype
 from typing import Optional, Type
 
 
@@ -18,7 +18,7 @@ class Split(transform.Transform):
         return None
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
             return Split(label)
         try:

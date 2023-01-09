@@ -1,5 +1,5 @@
 from scr.transforms import transform, transform_ref
-from scr import chain_spec, chain, match, range_spec
+from scr import chain_spec, chain, match, range_spec, chain_prototype
 from typing import Optional, Type, cast
 
 
@@ -19,7 +19,7 @@ class Merge(transform.Transform):
         return set([match.MatchMultiChainAggregate])
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
             return Merge(
                 label,

@@ -155,17 +155,17 @@ def try_parse_as_transform(
             if label is None:
                 label = argname
             try:
-                cs = chainspec if chainspec is not None else chain_spec.ChainSpecCurrent().rebase(curr_chain, curr_chain.root())
-                tf_inst = tf.create(label, value, cs)
+                cs = chainspec if chainspec is not None else chain_spec.ChainSpecCurrent()
+                tf_inst = tf.create(label, value, curr_chain, cs)
+                if chainspec is None:
+                    curr_chain.transforms.append(tf_inst)
+                else:
+                    for c in chainspec.instantiate(curr_chain):
+                        c.transforms.append(tf_inst)
+                next_chain = tf_inst.get_next_chain_context(curr_chain)
+                assert isinstance(next_chain, chain_options.ChainOptions)
             except transform.TransformCreationError as ex:
                 raise CliArgsParseException(arg_ref, *ex.args)
-            if chainspec is None:
-                curr_chain.transforms.append(tf_inst)
-            else:
-                for c in chainspec.instantiate(curr_chain):
-                    c.transforms.append(tf_inst)
-            next_chain = tf_inst.get_next_chain_context(curr_chain)
-            assert isinstance(next_chain, chain_options.ChainOptions)
             return True, next_chain
     return False, curr_chain
 

@@ -1,5 +1,5 @@
 from scr.transforms import transform
-from scr import chain_spec, chain, chain_options, match
+from scr import chain_spec, chain, chain_options, match, chain_prototype
 from typing import Optional, Type
 
 
@@ -17,7 +17,7 @@ class Next(transform.Transform):
         return None
 
     @staticmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'transform.Transform':
         if value is None:
             return Next(label, chain_spec.ChainSpecSibling(1, chain_spec.ChainSpecCurrent()))
         try:

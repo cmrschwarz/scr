@@ -1,6 +1,6 @@
 from typing import Type
 
-from scr.transforms import transform, regex, sleep, next, merge, print, split
+from scr.transforms import transform, regex, sleep, next, merge, print, split, up
 from scr.transforms import parent
 
 TRANSFORM_CATALOG: list[Type['transform.Transform']] = [
@@ -11,4 +11,5 @@ TRANSFORM_CATALOG: list[Type['transform.Transform']] = [
     next.Next,
     split.Split,
     parent.Parent,
+    up.Up
 ]

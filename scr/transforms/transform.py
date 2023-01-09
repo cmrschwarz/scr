@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from scr import chain, chain_options, chain, match, chain_spec
+from scr import chain, chain_options, match, chain_spec, chain_prototype
 from typing import Any, Optional, Type
 
 
@@ -16,8 +16,7 @@ class TransformApplicationError(Exception):
         self.tf = tf
 
     def __str__(self) -> str:
-        cns = str(self.cn)
-        return f"in chain {cns}, transform '{self.tf.label}': {super().__str__()}"
+        return f"in chain {self.cn}, transform '{self.tf.label}': {super().__str__()}"
 
 
 class Transform(ABC):
@@ -28,7 +27,7 @@ class Transform(ABC):
 
     @staticmethod
     @abstractmethod
-    def create(label: str, value: Optional[str], chainspec: 'chain_spec.ChainSpec') -> 'Transform':
+    def create(label: str, value: Optional[str], current: 'chain_prototype.ChainPrototype', chainspec: 'chain_spec.ChainSpec') -> 'Transform':
         raise NotImplementedError
 
     @staticmethod

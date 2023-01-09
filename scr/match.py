@@ -270,6 +270,10 @@ class MatchMultiChainAggregate(MatchConcrete):
         super().__init__(parent)
         self.results = {}
 
+    @staticmethod
+    def name() -> str:
+        return "chain aggregate"
+
     def append(self, cn: 'chain.Chain', match: Match) -> None:
         assert cn not in self.results
         self.results[cn] = match

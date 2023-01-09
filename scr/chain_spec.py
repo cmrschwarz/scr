@@ -19,12 +19,10 @@ class ChainSpec(ABC):
         raise NotImplementedError
 
     def rebase(self, curr_base: 'chain_prototype.ChainPrototype', new_base: 'chain_prototype.ChainPrototype') -> 'ChainSpec':
-        up_count = 0
-        while curr_base != new_base:
-            assert curr_base.parent is not None
-            curr_base = curr_base.parent
-            up_count += 1
-        return ChainSpecParent(up_count, self)
+        if isinstance(self, ChainSpecRoot) or curr_base == new_base:
+            return self
+
+        return ChainSpecAbsRef(new_base, curr_base, self)
 
     @abstractmethod
     def append(self, cs: 'ChainSpec') -> 'ChainSpec':
@@ -89,7 +87,7 @@ class ChainSpecSibling(ChainSpecNonTerminal):
         idx = parent.subchains.index(base)
         tgt_index = idx + self.relative_sibling_index
         if tgt_index >= len(parent.subchains):
-            parent.subchains.extend((chain_options.ChainOptions(parent=base) for _ in range(len(parent.subchains), tgt_index + 1)))
+            parent.subchains.extend((chain_options.ChainOptions(parent=parent) for _ in range(len(parent.subchains), tgt_index + 1)))
         yield from self.rhs.instantiate(parent.subchains[tgt_index])
 
     def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
@@ -102,10 +100,31 @@ class ChainSpecSibling(ChainSpecNonTerminal):
 
 
 class ChainSpecRoot(ChainSpecNonTerminal):
-    rhs: ChainSpec
-
     def __init__(self, rhs: ChainSpec):
         super().__init__(rhs)
+
+    def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
+        while base.parent is not None:
+            base = base.parent
+        yield base
+
+    def iter(self, base: 'chain.Chain') -> Iterable['chain.Chain']:
+        while base.parent is not None:
+            base = base.parent
+        yield base
+
+
+class ChainSpecAbsRef(ChainSpecNonTerminal):
+    indices: list[int]
+
+    def __init__(self, base: 'chain_prototype.ChainPrototype', target: 'chain_prototype.ChainPrototype', rhs: ChainSpec):
+        super().__init__(rhs)
+        self.indices = []
+        while target != base:
+            p = target.parent
+            assert p is not None
+            self.indices.append(p.subchains.index(target))
+            target = p
 
     def instantiate(self, base: 'chain_options.ChainOptions') -> Iterable['chain_options.ChainOptions']:
         while base.parent is not None:
