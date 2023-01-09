@@ -39,7 +39,7 @@ class Split(transform.Transform):
     def apply(self, c: 'chain.Chain', m: 'match.Match') -> 'match.Match':
         cfr = match.MatchControlFlowRedirect(m)
         for i in range(self.min, self.max if self.max is not None else len(c.subchains)):
-            cfr.matches.append((transform_ref.TransformRef(c.subchains[i], 0), m))
+            cfr.matches.append(match.MatchRedirectionTarget(transform_ref.TransformRef(c.subchains[i], 0), m))
         return cfr
 
     def get_next_chain_context(self, current: 'chain_options.ChainOptions') -> 'chain_options.ChainOptions':

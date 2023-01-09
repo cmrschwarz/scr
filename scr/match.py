@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import lxml.html
 from typing import BinaryIO, Optional, Type, Callable
 from abc import ABC, abstractmethod
@@ -301,8 +302,14 @@ class MatchMultiChainAggregate(MatchConcrete):
         raise ValueError("cannot apply on MatchMultiChainAggregate")
 
 
+@dataclass(init=True, frozen=True, slots=True)
+class MatchRedirectionTarget:
+    tf_ref: transform_ref.TransformRef
+    mt: Match
+
+
 class MatchControlFlowRedirect(MatchEager):
-    matches: list[tuple['transform_ref.TransformRef', Match]]
+    matches: list[MatchRedirectionTarget]
 
     def __init__(self, parent: Optional[Match]):
         super().__init__(parent)

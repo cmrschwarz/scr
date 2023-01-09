@@ -113,6 +113,7 @@ def create_root_chain(co: ChainOptions, ctx: 'context.Context') -> 'chain.Chain'
     for sc in co.subchains:
         subchains.append(create_subchain(sc, ctx, c))
     c.set_subchains(subchains)
+    c.setup()
     return c
 
 
@@ -142,30 +143,3 @@ def update_chain(c: 'chain.Chain', co: ChainOptions) -> None:
 
     for i in range(retained_chain_count, len(co.subchains)):
         c.subchains.append(create_subchain(co.subchains[i], c.ctx, c))
-
-
-class ChainValidationException(Exception):
-    cn: 'ChainOptions'
-
-    def __init__(self, cn: 'ChainOptions', *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.cn = cn
-
-
-def validate_single_chain(cn: ChainOptions) -> None:
-    if len(cn.transforms) == 0:
-        raise ChainValidationException(cn, f"chain {cn} is unneeded since it has no transforms")
-
-    res = None
-    for tf in reversed(cn.transforms):
-        res = tf.output_match_types()
-        if res is not None:
-            break
-    if res is None or res != set([match.MatchNone]):
-        raise ChainValidationException(cn, f"output of chain {cn} is unused")
-
-
-def validate_chain_tree(root_chain: ChainOptions) -> None:
-    validate_single_chain(root_chain)
-    for sc in root_chain.subchains:
-        validate_chain_tree(sc)

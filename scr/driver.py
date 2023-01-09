@@ -79,6 +79,7 @@ def run(
     perform_side_tasks(opts)
     ctx = context_options.create_context(opts)
     rc = chain_options.create_root_chain(root_chain, ctx)
+    chain.validate_chain_tree(rc)
     try:
         if opts.repl.get_or_default(context_options.DEFAULT_CONTEXT_OPTIONS.repl.get()):
             return run_repl(ctx, rc, docs, initial_args)
@@ -89,7 +90,6 @@ def run(
 
 def run_cli(args: list[str]) -> list['match.Match']:
     (root_chain, docs, opts) = cli_args.parse(args)
-    chain_options.validate_chain_tree(root_chain)
     return run(root_chain, docs, opts)
 
 
@@ -101,7 +101,7 @@ def main() -> None:
         )
         try:
             run_cli(sys.argv)
-        except (cli_args.CliArgsParseException, chain_options.ChainValidationException, transform.TransformApplicationError) as ex:
+        except (cli_args.CliArgsParseException, chain.ChainValidationException, transform.TransformApplicationError) as ex:
             SCR_LOG.error(str(ex))
         sys.exit(0)
     except BrokenPipeError:

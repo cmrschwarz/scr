@@ -49,9 +49,9 @@ class Merge(transform.Transform):
         self.targets.append(tr)
         return self
 
-    def apply(self, c: 'chain.Chain', m: 'match.Match') -> 'match.Match':
+    def apply(self, cn: 'chain.Chain', m: 'match.Match') -> 'match.Match':
         if not isinstance(m, match.MatchMultiChainAggregate):
-            raise ValueError("the merge transform only works on multi chain aggregates")
+            raise transform.TransformApplicationError(cn, self, "the merge transform only works on multi chain aggregates")
         all_lists = None
         length: Optional[int] = None
         for cn in self.sources:
@@ -60,17 +60,17 @@ class Merge(transform.Transform):
                 if all_lists is None:
                     all_lists = True
                 elif not all_lists:
-                    raise ValueError("subchains for merge must have same number of argument")
+                    raise transform.TransformApplicationError(cn, self, "subchains for merge must have same number of argument")
                 if length is None:
                     length = len(mtch.matches)
                 elif length != len(mtch.matches):
-                    raise ValueError("subchains for merge must have same number of argument")
+                    raise transform.TransformApplicationError(cn, self, "subchains for merge must have same number of argument")
             else:
                 if all_lists is None:
                     all_lists = False
                     length = 1
                 elif all_lists:
-                    raise ValueError("subchains for merge must have same number of argument")
+                    raise transform.TransformApplicationError(cn, self, "subchains for merge must have same number of argument")
         match_count = cast(int, length)
         mmb = match.MultiMatchBuilder(m)
         i = 0
@@ -78,9 +78,9 @@ class Merge(transform.Transform):
             mn = match.MatchNone(m)
             for cn in self.sources:
                 if all_lists:
-                    mtch = cast(match.MatchList, m.results[c]).matches[i]
+                    mtch = cast(match.MatchList, m.results[cn]).matches[i]
                 else:
-                    mtch = m.results[c]
+                    mtch = m.results[cn]
                 mn.args.update(mtch.args.items())
             mmb.append(mn)
         return mmb.result()

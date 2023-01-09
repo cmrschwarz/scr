@@ -1,7 +1,7 @@
-from scr import context, chain, chain_prototype
+from scr import context, chain, chain_prototype, match
 from scr.selenium import selenium_context, selenium_options
 from scr.transforms import transform, transform_ref
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 
 class Chain(chain_prototype.ChainPrototype):
@@ -52,3 +52,33 @@ class Chain(chain_prototype.ChainPrototype):
     def setup(self) -> None:
         for i in range(0, len(self.transforms)):
             self.transforms[i] = self.transforms[i].setup(self, i)
+        for sc in self.subchains:
+            sc.setup()
+
+
+class ChainValidationException(Exception):
+    cn: 'Chain'
+
+    def __init__(self, cn: 'Chain', *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.cn = cn
+
+
+def validate_single_chain(cn: Chain) -> None:
+    if len(cn.transforms) == 0:
+        raise ChainValidationException(cn, f"chain {cn} is unneeded since it has no transforms")
+
+    res = None
+    for tf in reversed(cn.transforms):
+        res = tf.output_match_types()
+        if res is not None:
+            break
+    out_empty = (res is None or res != set([match.MatchNone]))
+    if cn.aggregation_targets and not out_empty:
+        raise ChainValidationException(cn, f"output of chain {cn} is unused")
+
+
+def validate_chain_tree(root_chain: Chain) -> None:
+    validate_single_chain(root_chain)
+    for sc in root_chain.subchains:
+        validate_chain_tree(sc)
